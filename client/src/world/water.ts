@@ -96,11 +96,11 @@ export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (
         float spec = pow(max(dot(R, uSunDir), 0.0), 90.0);
         col += vec3(1.0, 0.85, 0.62) * spec * 1.2;
 
-        // 海岸泡沫：贴着地形 0.55 等高线的一条发光带
-        float shoreline = 1.0 - smoothstep_(0.0, 0.5, abs(th - 0.55));
-        float band = 0.5 + 0.5 * sin(depth * 26.0 - uTime * 2.2);
-        float foam = shoreline * (0.55 + 0.45 * band);
-        col = mix(col, vec3(1.0, 0.96, 0.88), foam * 0.75);
+        // 海岸泡沫：贴着等高线的一条柔和亮带
+        float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));
+        float band = 0.5 + 0.5 * sin(depth * 20.0 - uTime * 1.8);
+        float foam = shoreline * (0.42 + 0.38 * band);
+        col = mix(col, vec3(1.0, 0.97, 0.9), foam * 0.6);
 
         // 与场景一致的指数雾
         float dist = length(uCamPos - vWorld);

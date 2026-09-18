@@ -34,19 +34,19 @@ export function createWorld(container: HTMLElement): World {
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0xeecfa4, 0.0042);
+  scene.fog = new THREE.FogExp2(0xeecfa4, 0.0046);
 
   const camera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.1, 1200);
   camera.position.set(0, 6, 14);
 
-  // ---- 光照：永恒黄昏 ----
-  const hemi = new THREE.HemisphereLight(0xffd9b0, 0x5e7d8a, 0.85);
+  // ---- 光照：永恒黄昏（暖阳 + 紫罗兰补光，冷暖对比是光遇配色的一半） ----
+  const hemi = new THREE.HemisphereLight(0xffe2c0, 0x6a8fa0, 0.82);
   scene.add(hemi);
 
-  const ambient = new THREE.AmbientLight(0x8a7bd0, 0.3); // 阴影里的紫罗兰补光
+  const ambient = new THREE.AmbientLight(0x8a7bd0, 0.36);
   scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight(0xffd9a8, 1.5);
+  const sun = new THREE.DirectionalLight(0xffd6a0, 1.65);
   sun.position.set(-37, 16, -25);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -84,14 +84,38 @@ export function createWorld(container: HTMLElement): World {
   const embers = createEmbers();
   scene.add(embers.points);
 
+  // ---- 从太阳方向斜射下来的柔光柱（丁达尔） ----
+  const sunDir = new THREE.Vector3(-0.62, 0.3, -0.42).normalize();
+  const shafts = new THREE.Group();
+  const shaftMat = new THREE.MeshBasicMaterial({
+    color: "#ffedc4",
+    transparent: true,
+    opacity: 0.05,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    fog: false,
+  });
+  const shaftGeo = new THREE.PlaneGeometry(3.2, 60);
+  for (let i = 0; i < 9; i++) {
+    const m = new THREE.Mesh(shaftGeo, shaftMat);
+    const along = -14 + Math.random() * 40;
+    m.position.set(-30 + along * -0.62 + (Math.random() - 0.5) * 26, 16 + Math.random() * 6, -20 + along * -0.42 + (Math.random() - 0.5) * 26);
+    m.lookAt(m.position.clone().sub(sunDir.clone().multiplyScalar(30)));
+    m.rotateX(Math.PI / 2);
+    m.scale.set(0.6 + Math.random(), 1, 1);
+    shafts.add(m);
+  }
+  scene.add(shafts);
+
   // ---- 后期：柔光 Bloom，让火焰/灯塔/光尘发出光遇式的柔辉 ----
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(container.clientWidth, container.clientHeight),
-    0.5, // strength
-    0.85, // radius
-    0.74 // threshold
+    0.58, // strength
+    0.9, // radius
+    0.72 // threshold
   );
   composer.addPass(bloom);
   composer.addPass(new OutputPass());

@@ -6,6 +6,7 @@ import * as THREE from "three";
  */
 export interface ToonKit {
   mat: (color: string, vertexColors?: boolean) => THREE.Material;
+  gradient: THREE.DataTexture;
   dispose: () => void;
 }
 
@@ -19,6 +20,7 @@ export function createToonKit(): ToonKit {
 
   const cache = new Map<string, THREE.Material>();
   return {
+    gradient: gradientMap,
     mat(color, vertexColors = false) {
       const key = `${color}|${vertexColors}`;
       let m = cache.get(key);
