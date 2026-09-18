@@ -17,6 +17,7 @@ interface PlayerLike {
   sit: boolean;
   trackId: number;
   startedAt: number;
+  songName: string;
   hue: number;
 }
 
@@ -25,7 +26,7 @@ export interface NetHandle {
   /** 服务器时间 - 本地时间（把别人的 startedAt 换算到本地时钟） */
   clockOffset: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
-  sendTrack: (trackId: number) => void;
+  sendTrack: (trackId: number, name?: string) => void;
   close: () => void;
 }
 
@@ -98,8 +99,8 @@ export async function connectIsland(name: string, remotes: RemotePlayers): Promi
       lastSent = now;
       room.send("pos", p);
     },
-    sendTrack(trackId) {
-      room.send("track", { trackId });
+    sendTrack(trackId, name) {
+      room.send("track", { trackId, name });
     },
     close() {
       room.leave(true);

@@ -3,7 +3,7 @@ import { createWorld } from "./world/scene";
 import { PlayerControls } from "./controls";
 import { createAvatar, type Avatar } from "./avatar";
 import { MusicEngine, AUDIBLE_R } from "./audio/engine";
-import { trackById } from "./audio/tracks";
+import { trackById, trackMeta } from "./audio/tracks";
 import { RemotePlayers } from "./remote";
 import { connectIsland, type NetHandle } from "./net";
 import { NpcDriver } from "./npcs";
@@ -38,10 +38,10 @@ let entered = false;
 
 const ui = createUI({
   onEnter: handleEnter,
-  onPickTrack: (id) => {
-    music.setOwnTrack(id);
-    net?.sendTrack(id);
-    ui.setNowPlaying(trackById(id) ?? null);
+  onPickTrack: (id, name) => {
+    music.setOwnTrack(id, name ?? "");
+    net?.sendTrack(id, name);
+    ui.setNowPlaying(id, name ?? "");
     music.sfxChime();
   },
 });
@@ -72,7 +72,7 @@ async function handleEnter(name: string) {
   const first = Math.floor(Math.random() * 6);
   music.setOwnTrack(first);
   net?.sendTrack(first);
-  ui.setNowPlaying(trackById(first) ?? null);
+  ui.setNowPlaying(first);
 
   controls.setEnabled(true);
   ui.entered();
@@ -86,10 +86,7 @@ function spawnSelf() {
   selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true });
   world.addToScene(selfAvatar.group);
   // 光遇式的动作反馈：动作 → 音效 + 瞬态光效
-  const ringColor = () => {
-    const def = trackById(music.ownTrackId);
-    return new THREE.Color(def?.color ?? "#ffb45e");
-  };
+  const ringColor = () => new THREE.Color(trackMeta(music.ownTrackId, ui.currentSongName).color);
   controls.onLand = () => {
     selfAvatar?.land();
     music.sfxLand();
@@ -169,9 +166,13 @@ function loop() {
       startedAt: remotes.startedAtOf(i.key),
       dist: i.dist,
       clockOffset,
+      songName: remotes.songNameOf(i.key),
     }))
   );
-  remotes.animate(dt, t, clarity);
+  // 光环节拍能量（文件源用实时频谱，生成式用相位）
+  const beatMap = new Map<string, number>();
+  for (const i of infos) if (i.dist < AUDIBLE_R) beatMap.set(i.key, music.beatEnv(i.key));
+  remotes.animate(dt, t, clarity, beatMap);
   music.ambient(
     t,
     Math.hypot(controls.state.pos.x, controls.state.pos.z),
@@ -184,9 +185,9 @@ function loop() {
 
   // 自己的光环（永远亮着）
   if (selfAvatar) {
-    const def = trackById(music.ownTrackId);
     const beat = music.beatEnv("self");
-    selfAvatar.setRing(def ? new THREE.Color(def.color) : null, def ? 0.5 + 0.4 * beat : 0);
+    const meta = trackMeta(music.ownTrackId, ui.currentSongName);
+    selfAvatar.setRing(music.ownTrackId >= 0 ? new THREE.Color(meta.color) : null, music.ownTrackId >= 0 ? 0.5 + 0.4 * beat : 0);
   }
 
   // UI 低频刷新 + 靠近提示 + 翼能

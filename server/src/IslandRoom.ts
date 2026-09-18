@@ -78,8 +78,12 @@ export class IslandRoom extends Room {
     track: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
-      p.trackId = clamp(m?.trackId | 0, -1, 15);
+      p.trackId = clamp(m?.trackId | 0, -1, 9999);
       p.startedAt = p.trackId >= 0 ? Date.now() : 0;
+      p.songName =
+        p.trackId >= 100 && typeof m?.name === "string"
+          ? m.name.trim().slice(0, 40).replace(/[\\/:*?"<>|]/g, "_")
+          : "";
     },
 
     time: (client: Client) => {

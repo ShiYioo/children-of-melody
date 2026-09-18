@@ -12,8 +12,9 @@ export class Player extends Schema {
   @type("number") ry: number = 0; // 朝向
   @type("uint8") mov: number = 0; // 0 静止 / 1 行走 / 2 奔跑
   @type("boolean") sit: boolean = false;
-  @type("int8") trackId: number = -1; // 曲库编号，-1 = 没在听
+  @type("int16") trackId: number = -1; // -1 没在听；0-5 生成式曲库；100+ 自定义曲目(100+songId)
   @type("number") startedAt: number = 0; // 服务器纪元的开始播放时间(ms)
+  @type("string") songName: string = ""; // 自定义曲目的显示名
   @type("uint8") hue: number = 0; // 披风色相 0-359
 }
 

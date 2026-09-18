@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { createAvatar, type Avatar } from "./avatar";
-import { trackById } from "./audio/tracks";
+import { trackMeta } from "./audio/tracks";
 import { terrainHeight } from "./heightfield";
 
 /**
@@ -16,7 +16,6 @@ export interface RemoteInfo {
   dist: number;
   clarity: number;
 }
-
 interface Entry {
   key: string;
   avatar: Avatar;
@@ -25,6 +24,7 @@ interface Entry {
   hue: number;
   trackId: number;
   startedAt: number;
+  songName: string;
   speed: number; // 推算的移动速度（用于动画）
   lastPos: THREE.Vector3;
   clarity: number;
@@ -42,7 +42,7 @@ export class RemotePlayers {
     this.fx = fx;
   }
 
-  spawn(key: string, data: { name: string; hue: number; trackId?: number; startedAt?: number; x: number; y: number; z: number; ry?: number }) {
+  spawn(key: string, data: { name: string; hue: number; trackId?: number; startedAt?: number; songName?: string; x: number; y: number; z: number; ry?: number }) {
     if (this.entries.has(key)) return;
     const avatar = createAvatar({ name: data.name, hue: data.hue });
     avatar.group.position.set(data.x, data.y, data.z);
@@ -56,6 +56,7 @@ export class RemotePlayers {
       hue: data.hue,
       trackId: data.trackId ?? -1,
       startedAt: data.startedAt ?? 0,
+      songName: data.songName ?? "",
       speed: 0,
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
       clarity: 0,
@@ -81,8 +82,12 @@ export class RemotePlayers {
     return this.entries.get(key)?.startedAt ?? 0;
   }
 
+  songNameOf(key: string): string {
+    return this.entries.get(key)?.songName ?? "";
+  }
+
   /** 网络状态写入目标值 */
-  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number }>) {
+  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number; songName: string }>) {
     const e = this.entries.get(key);
     if (!e) return false;
     Object.assign(e.target, {
@@ -99,6 +104,7 @@ export class RemotePlayers {
     }
     if (data.trackId !== undefined) e.trackId = data.trackId;
     if (data.startedAt !== undefined) e.startedAt = data.startedAt;
+    if (data.songName !== undefined) e.songName = data.songName;
     return true;
   }
 
@@ -114,13 +120,13 @@ export class RemotePlayers {
     const out: RemoteInfo[] = [];
     for (const e of this.entries.values()) {
       const dist = e.avatar.group.position.distanceTo(selfPos);
-      const def = trackById(e.trackId);
+      const meta = trackMeta(e.trackId, e.songName);
       out.push({
         key: e.key,
         name: e.name,
         trackId: e.trackId,
-        trackName: def?.name ?? "",
-        color: new THREE.Color(def?.color ?? "#ffb45e"),
+        trackName: meta.name,
+        color: new THREE.Color(meta.color),
         dist,
         clarity: e.clarity,
       });
@@ -128,8 +134,8 @@ export class RemotePlayers {
     return out;
   }
 
-  /** 每帧：插值 + 动画 + 光环 */
-  animate(dt: number, t: number, clarityMap: Map<string, number>): RemoteInfo[] {
+  /** 每帧：插值 + 动画 + 光环（beatMap 提供每个 key 的实时节拍能量） */
+  animate(dt: number, t: number, clarityMap: Map<string, number>, beatMap?: Map<string, number>): RemoteInfo[] {
     const k = Math.min(1, dt * 10);
     for (const e of this.entries.values()) {
       const g = e.avatar.group;
@@ -152,8 +158,7 @@ export class RemotePlayers {
       if (e.wasAir > 0 && air === 0) {
         e.avatar.land(); // 落地缓冲
         if (this.fx && selfDist < 60) {
-          const def = trackById(e.trackId);
-          this.fx.burst(g.position.clone(), new THREE.Color(def?.color ?? "#ffb45e"), "land");
+          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName).color), "land");
           if (selfDist < 22) this.fx.sfxLand();
         }
       }
@@ -161,8 +166,7 @@ export class RemotePlayers {
         e.avatar.flap();
         if (this.fx && selfDist < 22) this.fx.sfxFlap();
         if (this.fx && selfDist < 60) {
-          const def = trackById(e.trackId);
-          this.fx.burst(g.position.clone(), new THREE.Color(def?.color ?? "#fff2cf"), "flap");
+          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName).color), "flap");
         }
       }
       e.wasMov = e.target.mov;
@@ -170,9 +174,9 @@ export class RemotePlayers {
 
       const clarity = clarityMap.get(e.key) ?? 0;
       e.clarity = clarity;
-      const def = trackById(e.trackId);
-      const beat = def ? beatEnvelope(e.trackId, e.startedAt, t) : 0;
-      e.avatar.setRing(def ? new THREE.Color(def.color) : null, clarity * (0.45 + 0.55 * beat));
+      const meta = trackMeta(e.trackId, e.songName);
+      const beat = beatMap?.get(e.key) ?? 0.35;
+      e.avatar.setRing(e.trackId >= 0 ? new THREE.Color(meta.color) : null, clarity * (0.45 + 0.55 * beat));
       e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4));
     }
     return [];
@@ -198,10 +202,4 @@ export class RemotePlayers {
 }
 
 /** 从墙钟时间推算节拍包络（光环用，不依赖音频引擎） */
-function beatEnvelope(trackId: number, startedAt: number, t: number): number {
-  const def = trackById(trackId);
-  if (!def || !startedAt) return 0;
-  const beatSec = 60 / def.bpm;
-  const phase = (((t * 1000 - startedAt) / 1000 / beatSec) % 1 + 1) % 1;
-  return Math.pow(1 - phase, 2.2);
-}
+

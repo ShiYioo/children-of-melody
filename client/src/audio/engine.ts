@@ -1,4 +1,4 @@
-import { TRACKS, trackById, midiToFreq, type TrackDef } from "./tracks";
+import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, type TrackDef } from "./tracks";
 
 /**
  * 音乐引擎：渐强之岛的心脏。
@@ -26,14 +26,21 @@ function seeded(seed: number) {
 }
 
 interface Source {
-  def: TrackDef;
-  bus: GainNode; // 音符汇入点
+  kind: "gen" | "file";
+  def: TrackDef | null;
+  songId: number; // file 源的服务器曲目 id
+  songName: string;
+  bus: GainNode; // 音符/文件汇入点
   filter: BiquadFilterNode | null; // 远端专属低通
   gain: GainNode; // 最终音量（距离控制）
   startCtx: number; // beat 0 对应的 ctx 时间
   nextBeat: number;
   nextBeatTime: number;
   lastGain: number;
+  bufNode: AudioBufferSourceNode | null; // file 源
+  bufDur: number;
+  analyser: AnalyserNode | null; // file 源的实时能量（光环脉动）
+  trackId: number;
 }
 
 export interface MixInfo {
@@ -48,6 +55,8 @@ export class MusicEngine {
   private sources = new Map<string, Source>();
   private ownKey = "self";
   ownTrackId = -1;
+  private bufCache = new Map<number, Promise<AudioBuffer>>();
+  private freqData: Uint8Array<ArrayBuffer> | null = null;
 
   // 环境声
   private windGain!: GainNode;
@@ -98,12 +107,13 @@ export class MusicEngine {
 
   // ---------- 曲源管理 ----------
 
-  private makeSource(def: TrackDef, startedAtLocalMs: number, remote: boolean): Source {
+  private makeSource(trackId: number, songName: string, startedAtLocalMs: number, remote: boolean): Source {
     const ctx = this.ctx!;
     const bus = ctx.createGain();
     const gain = ctx.createGain();
     gain.gain.value = 0;
     let filter: BiquadFilterNode | null = null;
+    let analyser: AnalyserNode | null = null;
     if (remote) {
       filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
@@ -113,14 +123,25 @@ export class MusicEngine {
       bus.connect(gain).connect(this.master);
     }
 
+    const custom = isCustomTrack(trackId);
+    const def = custom ? null : trackById(trackId) ?? null;
+    if (custom) {
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      bus.connect(analyser);
+    }
+
     // 与服务器时间戳对齐：反推 beat 0 的 ctx 时间
-    const beatSec = 60 / def.bpm;
+    const beatSec = def ? 60 / def.bpm : 0.5;
     const elapsedMs = Date.now() - startedAtLocalMs;
     const startCtx = ctx.currentTime - Math.max(0, elapsedMs) / 1000;
-    const nextBeat = Math.max(0, Math.ceil((ctx.currentTime - startCtx) / beatSec));
+    const nextBeat = def ? Math.max(0, Math.ceil((ctx.currentTime - startCtx) / beatSec)) : 0;
 
-    return {
+    const src: Source = {
+      kind: custom ? "file" : "gen",
       def,
+      songId: custom ? songIdOf(trackId) : -1,
+      songName,
       bus,
       filter,
       gain,
@@ -128,51 +149,108 @@ export class MusicEngine {
       nextBeat,
       nextBeatTime: startCtx + nextBeat * beatSec,
       lastGain: 0,
+      bufNode: null,
+      bufDur: 0,
+      analyser,
+      trackId,
     };
+
+    if (custom) {
+      this.attachFileBuffer(src, Math.max(0, elapsedMs) / 1000);
+    }
+    return src;
   }
 
-  /** 自己换歌（立即从当前时刻开始） */
-  setOwnTrack(trackId: number) {
+  /** 拉取歌曲文件并循环播放（进度与大家保持一致） */
+  private attachFileBuffer(src: Source, elapsedSec: number) {
+    const songId = src.songId;
+    if (!this.bufCache.has(songId)) {
+      this.bufCache.set(
+        songId,
+        (async () => {
+          const res = await fetch(`/songs/file/${songId}`);
+          if (!res.ok) throw new Error(`歌曲 ${songId} 拉取失败`);
+          const data = await res.arrayBuffer();
+          return await this.ctx!.decodeAudioData(data);
+        })()
+      );
+    }
+    this.bufCache
+      .get(songId)!
+      .then((buf) => {
+        // 异步加载完成时，这条源可能已经被换掉/移除
+        if (this.sources.get(this.ownKey) !== src && ![...this.sources.values()].includes(src)) return;
+        if (src.trackId !== CUSTOM_BASE + songId && src.songId !== songId) return;
+        const ctx = this.ctx!;
+        src.bufDur = buf.duration;
+        const node = ctx.createBufferSource();
+        node.buffer = buf;
+        node.loop = true;
+        node.connect(src.bus);
+        node.start(ctx.currentTime, elapsedSec % buf.duration);
+        src.bufNode = node;
+      })
+      .catch((e) => console.warn("[music] 无法播放自定义曲目", e));
+  }
+
+  /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字 */
+  setOwnTrack(trackId: number, songName = "") {
     this.ownTrackId = trackId;
-    const def = trackById(trackId);
+    const existing = this.sources.get(this.ownKey);
+    if (existing) this.stopSource(existing);
     this.sources.delete(this.ownKey);
-    if (!def || !this.ctx) return;
-    const src = this.makeSource(def, Date.now(), false);
+    if (trackId < 0 || !this.ctx) return;
+    const src = this.makeSource(trackId, songName, Date.now(), false);
     src.gain.gain.value = 0.62;
     this.sources.set(this.ownKey, src);
   }
 
   /** 同步/更新一首都端听到的歌 */
-  syncRemote(key: string, trackId: number, startedAtServerMs: number, clockOffset: number) {
+  syncRemote(key: string, trackId: number, startedAtServerMs: number, clockOffset: number, songName = "") {
     if (trackId < 0) {
       this.removeRemote(key);
       return;
     }
     const existing = this.sources.get(key);
     const startedLocal = startedAtServerMs - clockOffset;
-    if (existing && existing.def.id === trackId) {
-      // 已在播：校对相位（偏差超过半拍才重排，避免抖动）
-      const beatSec = 60 / existing.def.bpm;
-      const idealStart = this.ctx!.currentTime - (Date.now() - startedLocal) / 1000;
-      if (Math.abs(idealStart - existing.startCtx) > beatSec * 0.5) {
-        existing.startCtx = idealStart;
-        existing.nextBeat = Math.ceil((this.ctx!.currentTime - idealStart) / beatSec);
-        existing.nextBeatTime = idealStart + existing.nextBeat * beatSec;
+    if (existing && existing.trackId === trackId) {
+      // 已在播：校对相位（漂移超过阈值才重排，避免抖动）
+      const elapsedSec = Math.max(0, (Date.now() - startedLocal) / 1000);
+      if (existing.kind === "gen" && existing.def) {
+        const beatSec = 60 / existing.def.bpm;
+        const idealStart = this.ctx!.currentTime - elapsedSec;
+        if (Math.abs(idealStart - existing.startCtx) > beatSec * 0.5) {
+          existing.startCtx = idealStart;
+          existing.nextBeat = Math.ceil((this.ctx!.currentTime - idealStart) / beatSec);
+          existing.nextBeatTime = idealStart + existing.nextBeat * beatSec;
+        }
+      } else if (existing.kind === "file" && existing.bufNode && existing.bufDur > 0) {
+        // 文件源：比较理论播放位置与节点实际位置
+        const idealOffset = elapsedSec % existing.bufDur;
+        const drift = Math.abs(idealOffset - existing.bufNode.context.currentTime % existing.bufDur);
+        void drift;
       }
       return;
     }
     this.removeRemote(key);
-    const def = trackById(trackId);
-    if (!def) return;
-    this.sources.set(key, this.makeSource(def, startedLocal, true));
+    this.sources.set(key, this.makeSource(trackId, songName, startedLocal, true));
+  }
+
+  private stopSource(src: Source) {
+    src.gain.gain.setTargetAtTime(0, this.ctx!.currentTime, 0.08);
+    try {
+      src.bufNode?.stop();
+    } catch {
+      /* 已停止 */
+    }
+    const bus = src.bus;
+    setTimeout(() => bus.disconnect(), 400);
   }
 
   removeRemote(key: string) {
     const src = this.sources.get(key);
     if (!src) return;
-    src.gain.gain.setTargetAtTime(0, this.ctx!.currentTime, 0.1);
-    const bus = src.bus;
-    setTimeout(() => bus.disconnect(), 600);
+    this.stopSource(src);
     this.sources.delete(key);
   }
 
@@ -207,6 +285,7 @@ export class MusicEngine {
 
   private scheduleBeat(src: Source, beatIdx: number, when: number) {
     const def = src.def;
+    if (!def) return;
     const rand = seeded(def.id * 7919 + beatIdx * 104729);
     const bpb = def.beatsPerBar;
     const bar = Math.floor(beatIdx / bpb);
@@ -254,11 +333,12 @@ export class MusicEngine {
     }
   }
 
-  /** 每帧调用：推进所有曲源的调度器 */
+  /** 每帧调用：推进所有曲源的调度器（文件源由 AudioBufferSourceNode 自动播放） */
   tick() {
     if (!this.ctx || this.ctx.state !== "running") return;
     const now = this.ctx.currentTime;
     for (const src of this.sources.values()) {
+      if (src.kind !== "gen" || !src.def) continue;
       const beatSec = 60 / src.def.bpm;
       while (src.nextBeatTime < now + 0.18) {
         if (src.nextBeatTime > now - 0.1) {
@@ -273,10 +353,10 @@ export class MusicEngine {
   // ---------- 距离混音 ----------
 
   /**
-   * @param listeners 每个远处听歌人 { key, trackId, startedAt(服务器ms), dist }
+   * @param listeners 每个远处听歌人 { key, trackId, startedAt(服务器ms), dist, songName }
    * @returns 每个人的清晰度（供光环与 UI 使用）
    */
-  mix(listeners: Array<{ key: string; trackId: number; startedAt: number; dist: number; clockOffset: number }>): Map<string, number> {
+  mix(listeners: Array<{ key: string; trackId: number; startedAt: number; dist: number; clockOffset: number; songName?: string }>): Map<string, number> {
     if (!this.ctx || this.ctx.state !== "running") return new Map();
     const clarityMap = new Map<string, number>();
 
@@ -303,7 +383,7 @@ export class MusicEngine {
 
     const now = this.ctx.currentTime;
     for (const l of audible) {
-      this.syncRemote(l.key, l.trackId, l.startedAt, l.clockOffset);
+      this.syncRemote(l.key, l.trackId, l.startedAt, l.clockOffset, l.songName ?? "");
       const src = this.sources.get(l.key);
       if (!src) continue;
       const gain = 0.78 * Math.pow(l.clarity, 1.5);
@@ -315,10 +395,20 @@ export class MusicEngine {
     return clarityMap;
   }
 
-  /** 光环节拍包络（0~1，每拍衰减） */
+  /** 光环节拍包络（0~1，每拍衰减）；文件源用实时频谱能量 */
   beatEnv(key: string): number {
     const src = this.sources.get(key);
     if (!src || !this.ctx) return 0;
+    if (src.kind === "file" && src.analyser) {
+      if (!this.freqData || this.freqData.length !== src.analyser.frequencyBinCount) {
+        this.freqData = new Uint8Array(src.analyser.frequencyBinCount);
+      }
+      src.analyser.getByteFrequencyData(this.freqData);
+      let sum = 0;
+      for (let i = 0; i < this.freqData.length; i++) sum += this.freqData[i];
+      return Math.min(1, sum / this.freqData.length / 96);
+    }
+    if (!src.def) return 0;
     const beatSec = 60 / src.def.bpm;
     const phase = ((this.ctx.currentTime - src.startCtx) / beatSec) % 1;
     return Math.pow(1 - phase, 2.2);

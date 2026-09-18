@@ -64,8 +64,14 @@ export class PlayerControls {
   private flapTimer = 0; // mov=4 的显示时长
   private flapRegen = 0;
   private enabled = false;
+  private mouseLocked = false;
   private dom: HTMLElement;
   private baseFov = 55;
+
+  /** 鼠标是否锁定在游戏内（供 UI 提示） */
+  get isMouseLocked() {
+    return this.mouseLocked;
+  }
 
   constructor(private camera: THREE.PerspectiveCamera, dom: HTMLElement) {
     this.dom = dom;
@@ -88,8 +94,18 @@ export class PlayerControls {
       this.lastX = e.clientX;
       this.lastY = e.clientY;
       dom.setPointerCapture(e.pointerId);
+      // 光遇端游手感：点击画面即锁定鼠标，移动直接转视角；Esc 释放
+      if (this.enabled && document.pointerLockElement !== dom) {
+        (dom.requestPointerLock as () => Promise<void> | void)?.call(dom)?.catch?.(() => {});
+      }
     });
+    // 锁定状态下用 movementX/Y 连续转视角
     dom.addEventListener("pointermove", (e) => {
+      if (document.pointerLockElement === dom) {
+        this.camYaw -= e.movementX * 0.0026;
+        this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, 0.05, 1.15);
+        return;
+      }
       if (!this.dragging) return;
       this.camYaw -= (e.clientX - this.lastX) * 0.005;
       this.camPitch = THREE.MathUtils.clamp(this.camPitch + (e.clientY - this.lastY) * 0.004, 0.05, 1.15);
@@ -97,6 +113,9 @@ export class PlayerControls {
       this.lastY = e.clientY;
     });
     dom.addEventListener("pointerup", () => (this.dragging = false));
+    document.addEventListener("pointerlockchange", () => {
+      this.mouseLocked = document.pointerLockElement === dom;
+    });
     dom.addEventListener(
       "wheel",
       (e) => {

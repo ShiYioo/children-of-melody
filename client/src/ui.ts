@@ -1,4 +1,4 @@
-import { TRACKS, type TrackDef } from "./audio/tracks";
+import { TRACKS, trackMeta, CUSTOM_BASE, type TrackDef } from "./audio/tracks";
 import type { RemoteInfo } from "./remote";
 
 /**
@@ -7,7 +7,7 @@ import type { RemoteInfo } from "./remote";
  */
 export function createUI(handlers: {
   onEnter: (name: string) => void;
-  onPickTrack: (id: number) => void;
+  onPickTrack: (id: number, name?: string) => void;
 }) {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -22,11 +22,25 @@ export function createUI(handlers: {
   const npBtn = $("npBtn");
   const nearby = $("nearby");
   const toasts = $("toasts");
+  const showToast = (text: string, ms = 2600) => {
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = text;
+    toasts.appendChild(el);
+    setTimeout(() => {
+      el.classList.add("out");
+      setTimeout(() => el.remove(), 650);
+    }, ms);
+  };
   const trackModal = $("trackModal");
   const trackGrid = $("trackGrid");
+  const songGrid = $("songGrid");
+  const uploadCard = $("uploadCard");
+  const songFile = $("songFile") as HTMLInputElement;
 
   // ---- 换歌面板 ----
-  let currentTrack: TrackDef | null = null;
+  let currentTrackId = -1;
+  let currentSongName = "";
   TRACKS.forEach((t) => {
     const card = document.createElement("button");
     card.className = "track-card";
@@ -40,7 +54,72 @@ export function createUI(handlers: {
     trackGrid.appendChild(card);
   });
 
-  const openPicker = () => trackModal.classList.add("open");
+  // ---- 岛上的歌（共享曲库） ----
+  async function loadSongs() {
+    try {
+      const res = await fetch("/songs/list");
+      const songs: { id: string; name: string }[] = await res.json();
+      songGrid.innerHTML = "";
+      if (songs.length === 0) {
+        songGrid.innerHTML = `<div class="songs-empty">还没有人上传过歌，来当第一个吧</div>`;
+        return;
+      }
+      for (const s of songs.slice(0, 30)) {
+        const displayName = decodeURIComponent(s.name).replace(/\.[a-z0-9]+$/i, "");
+        const trackId = CUSTOM_BASE + Number(s.id);
+        const meta = trackMeta(trackId, displayName);
+        const card = document.createElement("button");
+        card.className = "track-card";
+        card.dataset.song = s.id;
+        card.dataset.trackId = String(trackId);
+        card.dataset.name = displayName;
+        card.innerHTML = `<div class="dot" style="background:${meta.color};box-shadow:0 0 10px ${meta.color}"></div>
+          <div class="nm">${escapeHtml(displayName.slice(0, 18))}</div><div class="ds">旅人上传</div>`;
+        card.addEventListener("click", () => {
+          handlers.onPickTrack(trackId, displayName);
+          trackModal.classList.remove("open");
+        });
+        songGrid.appendChild(card);
+      }
+    } catch {
+      songGrid.innerHTML = `<div class="songs-empty">曲库暂不可用</div>`;
+    }
+  }
+
+  // 上传自己的歌
+  uploadCard.addEventListener("click", () => songFile.click());
+  songFile.addEventListener("change", async () => {
+    const file = songFile.files?.[0];
+    if (!file) return;
+    uploadCard.classList.add("uploading");
+    uploadCard.textContent = `正在上传「${file.name.slice(0, 16)}」…`;
+    try {
+      const res = await fetch(`/songs/upload?name=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "上传失败");
+      const { id } = await res.json();
+      const displayName = file.name.replace(/\.[a-z0-9]+$/i, "");
+      const trackId = CUSTOM_BASE + Number(id);
+      showToast(`「${displayName.slice(0, 14)}」已加入岛上的歌`);
+      await loadSongs();
+      handlers.onPickTrack(trackId, displayName);
+      trackModal.classList.remove("open");
+    } catch (e) {
+      showToast("上传失败：" + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      uploadCard.classList.remove("uploading");
+      uploadCard.textContent = "＋ 上传我的歌（mp3 / ogg / wav / m4a / flac）";
+      songFile.value = "";
+    }
+  });
+
+  const openPicker = () => {
+    trackModal.classList.add("open");
+    loadSongs();
+  };
   trackModal.addEventListener("click", (e) => {
     if (e.target === trackModal) trackModal.classList.remove("open");
   });
@@ -68,15 +147,20 @@ export function createUI(handlers: {
       statusDot.className = mode === "online" ? "" : mode === "solo" ? "solo" : "off";
       statusText.textContent = mode === "online" ? "渐强之岛 · 在线" : mode === "solo" ? "独自漫游中" : "连接中断";
     },
-    setNowPlaying(def: TrackDef | null) {
-      currentTrack = def;
-      if (def) {
-        npDot.style.background = def.color;
-        npDot.style.boxShadow = `0 0 12px ${def.color}`;
-        npName.textContent = def.name;
-        npSub.textContent = "走近谁，就听见谁的世界";
+    setNowPlaying(trackId: number, songName = "") {
+      currentTrackId = trackId;
+      currentSongName = songName;
+      const meta = trackMeta(trackId, songName);
+      if (trackId >= 0 && meta.name) {
+        npDot.style.background = meta.color;
+        npDot.style.boxShadow = `0 0 12px ${meta.color}`;
+        npName.textContent = meta.name;
+        npSub.textContent = trackId >= CUSTOM_BASE ? "旅人上传 · 你的歌，也是岛的歌" : "走近谁，就听见谁的世界";
         trackGrid.querySelectorAll(".track-card").forEach((c) => {
-          c.classList.toggle("active", Number((c as HTMLElement).dataset.id) === def.id);
+          c.classList.toggle("active", Number((c as HTMLElement).dataset.id) === trackId);
+        });
+        songGrid.querySelectorAll(".track-card").forEach((c) => {
+          c.classList.toggle("active", Number((c as HTMLElement).dataset.trackId) === trackId);
         });
       } else {
         npDot.style.background = "var(--ink-dim)";
@@ -84,8 +168,11 @@ export function createUI(handlers: {
         npName.textContent = "还没选歌";
       }
     },
-    get currentTrack() {
-      return currentTrack;
+    get currentTrackId() {
+      return currentTrackId;
+    },
+    get currentSongName() {
+      return currentSongName;
     },
     setFlaps(n: number) {
       const wrap = $("flaps");
@@ -119,14 +206,7 @@ export function createUI(handlers: {
       }
     },
     toast(text: string, ms = 2600) {
-      const el = document.createElement("div");
-      el.className = "toast";
-      el.textContent = text;
-      toasts.appendChild(el);
-      setTimeout(() => {
-        el.classList.add("out");
-        setTimeout(() => el.remove(), 650);
-      }, ms);
+      showToast(text, ms);
     },
     focusName() {
       enterName.focus();

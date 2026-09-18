@@ -117,6 +117,34 @@ export function trackById(id: number): TrackDef | undefined {
   return TRACKS.find((t) => t.id === id);
 }
 
+/** 自定义曲目编号从 100 起：trackId - 100 = 服务器上的 songId */
+export const CUSTOM_BASE = 100;
+export const isCustomTrack = (id: number) => id >= CUSTOM_BASE;
+export const songIdOf = (id: number) => id - CUSTOM_BASE;
+
+/** 任何曲目（生成式/自定义）的显示名与光环颜色 */
+export function trackMeta(trackId: number, songName = ""): { name: string; color: string } {
+  const def = trackById(trackId);
+  if (def) return { name: def.name, color: def.color };
+  if (isCustomTrack(trackId)) {
+    const hue = ((songIdOf(trackId) * 47) % 360 + 360) % 360;
+    return { name: songName || "旅人的歌", color: hslToHex(hue / 360, 0.5, 0.66) };
+  }
+  return { name: "", color: "#ffb45e" };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * v)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return "#" + f(0) + f(8) + f(4);
+}
+
 /** 音高 → 频率 */
 export function midiToFreq(m: number): number {
   return 440 * Math.pow(2, (m - 69) / 12);
