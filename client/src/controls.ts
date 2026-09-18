@@ -99,14 +99,15 @@ export class PlayerControls {
         (dom.requestPointerLock as () => Promise<void> | void)?.call(dom)?.catch?.(() => {});
       }
     });
-    // 锁定状态下用 movementX/Y 连续转视角
+    // 锁定状态下用 movementX/Y 连续转视角（鼠标右移=视角向右转）
     dom.addEventListener("pointermove", (e) => {
       if (document.pointerLockElement === dom) {
-        this.camYaw -= e.movementX * 0.0026;
+        this.camYaw += e.movementX * 0.0026;
         this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, 0.05, 1.15);
         return;
       }
       if (!this.dragging) return;
+      // 拖拽语义：抓住画面拖动（右移=画面右移=视角左转）
       this.camYaw -= (e.clientX - this.lastX) * 0.005;
       this.camPitch = THREE.MathUtils.clamp(this.camPitch + (e.clientY - this.lastY) * 0.004, 0.05, 1.15);
       this.lastX = e.clientX;
@@ -175,10 +176,12 @@ export class PlayerControls {
         dx = Math.sin(s.yaw);
         dz = Math.cos(s.yaw);
       }
+      // 相机相对方向（对任意 camYaw 都成立）：
+      // 前向 = -(sin,cos)，右向 = (cos,-sin)
       const cos = Math.cos(this.camYaw);
       const sin = Math.sin(this.camYaw);
-      tx = (dx * cos - dz * sin) * targetSpeed;
-      tz = (dx * sin + dz * cos) * targetSpeed;
+      tx = (dx * cos + dz * sin) * targetSpeed;
+      tz = (-dx * sin + dz * cos) * targetSpeed;
     }
     const accel = s.airborne ? 2.2 : 10;
     this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
