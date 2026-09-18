@@ -70,7 +70,7 @@ export class IslandRoom extends Room {
       p.y = clamp(m.y, 0, 40);
       p.z = m.z;
       p.ry = m.ry ?? 0;
-      p.mov = clamp(m.mov | 0, 0, 2);
+      p.mov = clamp(m.mov | 0, 0, 4); // 0静 1走 2跑 3滑翔 4扑翼
       p.sit = !!m.sit;
     },
 

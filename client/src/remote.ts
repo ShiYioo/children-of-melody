@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { createAvatar, type Avatar } from "./avatar";
 import { trackById } from "./audio/tracks";
+import { terrainHeight } from "./heightfield";
 
 /**
  * 岛上的其他人（网络玩家与演示 NPC 共用同一套管线）：
@@ -28,6 +29,8 @@ interface Entry {
   lastPos: THREE.Vector3;
   clarity: number;
   wasNear: boolean;
+  wasAir: number; // 上一帧的空中状态（0/1/2）
+  wasMov: number; // 上一帧 mov（检测扑翼沿）
 }
 
 export class RemotePlayers {
@@ -51,6 +54,8 @@ export class RemotePlayers {
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
       clarity: 0,
       wasNear: false,
+      wasAir: 0,
+      wasMov: 0,
     });
   }
 
@@ -129,17 +134,25 @@ export class RemotePlayers {
       let dy = e.target.ry - g.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
-      g.rotation.y += dy * k;
+      const yawStep = dy * k;
+      g.rotation.y += yawStep;
 
       e.speed = g.position.distanceTo(e.lastPos) / Math.max(dt, 1e-4);
       e.lastPos.copy(g.position);
+
+      // mov → 空中状态: 3 滑翔 / 4 扑翼(按滑翔处理)；离地高度也作为空中判据
+      const air = e.target.mov >= 3 ? 2 : g.position.y - terrainHeight(g.position.x, g.position.z) > 0.6 ? 1 : 0;
+      if (e.wasAir > 0 && air === 0) e.avatar.land(); // 落地缓冲
+      if (e.target.mov === 4 && e.wasMov !== 4) e.avatar.flap();
+      e.wasMov = e.target.mov;
+      e.wasAir = air;
 
       const clarity = clarityMap.get(e.key) ?? 0;
       e.clarity = clarity;
       const def = trackById(e.trackId);
       const beat = def ? beatEnvelope(e.trackId, e.startedAt, t) : 0;
       e.avatar.setRing(def ? new THREE.Color(def.color) : null, clarity * (0.45 + 0.55 * beat));
-      e.avatar.animate(dt, t, e.speed, e.target.sit);
+      e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4));
     }
     return [];
   }

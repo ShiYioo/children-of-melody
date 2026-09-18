@@ -79,6 +79,9 @@ function spawnSelf() {
   const z = Math.sin(a) * 8;
   selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true });
   world.addToScene(selfAvatar.group);
+  // 光遇式落地缓冲与扑翼抖动
+  controls.onLand = () => selfAvatar?.land();
+  controls.onFlap = () => selfAvatar?.flap();
   controls.spawnAt(x, z);
 }
 
@@ -120,8 +123,9 @@ function loop() {
     const s = controls.state;
     selfAvatar.group.position.copy(s.pos);
     selfAvatar.group.rotation.y = s.yaw;
-    const speed = s.mov === 2 ? 7.2 : s.mov === 1 ? 3.6 : 0;
-    selfAvatar.animate(dt, t, speed, s.sit);
+    const speed = controls.horizSpeed;
+    const air = s.mov === 3 || s.mov === 4 ? 2 : s.airborne ? 1 : 0;
+    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel);
     net?.sendPos({ x: s.pos.x, y: s.pos.y, z: s.pos.z, ry: s.yaw, mov: s.mov, sit: s.sit });
   }
 
@@ -152,11 +156,12 @@ function loop() {
     selfAvatar.setRing(def ? new THREE.Color(def.color) : null, def ? 0.5 + 0.4 * beat : 0);
   }
 
-  // UI 低频刷新 + 靠近提示
+  // UI 低频刷新 + 靠近提示 + 翼能
   uiTimer += dt;
   if (uiTimer > 0.25) {
     uiTimer = 0;
     ui.setNearby(infos);
+    ui.setFlaps(controls.state.flaps);
     for (const i of infos) {
       const near = i.dist < AUDIBLE_R;
       const before = nearBefore.get(i.key) ?? false;

@@ -2,44 +2,72 @@ import * as THREE from "three";
 import { terrainHeight, ISLAND_RADIUS, WATER_LEVEL } from "./heightfield";
 
 /**
- * 第三人称操控：WASD 相对相机方向移动、Shift 奔跑、E 坐下、
- * 拖拽环顾、滚轮拉近。角色贴合地形，小跳一下也是允许的。
+ * 光遇式操控 · 二代
+ *
+ * - 动量移动：加速/减速有惯性，转弯时身体侧倾
+ * - 跳跃 → 按住空格滑翔（缓降 + 前冲，披风展开）
+ * - 腾空再按空格 = 扑翼（3 翼能，落地充能）
+ * - 篝火与灯塔山丘有上升暖气流
+ * - 滑翔时相机 FOV 微宽，速度感更足
+ *
+ * mov 状态码: 0 静止 / 1 行走 / 2 奔跑 / 3 滑翔 / 4 扑翼(瞬时)
  */
 export interface ControlsState {
   pos: THREE.Vector3;
-  yaw: number; // 角色朝向
-  mov: number; // 0/1/2
+  yaw: number; // 朝向
+  yawVel: number; // 转向角速度（供侧倾）
+  mov: number;
   sit: boolean;
+  airborne: boolean;
+  flaps: number; // 剩余扑翼 0-3
 }
+
+export const MAX_FLAPS = 3;
 
 export class PlayerControls {
   readonly state: ControlsState = {
     pos: new THREE.Vector3(0, 3, 8),
     yaw: 0,
+    yawVel: 0,
     mov: 0,
     sit: false,
+    airborne: false,
+    flaps: MAX_FLAPS,
   };
 
-  camYaw = Math.PI; // 相机绕角色的方位角
+  camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
 
+  onLand: (() => void) | null = null;
+  onFlap: (() => void) | null = null;
+
+  /** 当前水平速度（米/秒，供动画使用） */
+  get horizSpeed(): number {
+    return Math.hypot(this.vel.x, this.vel.z);
+  }
+
   private keys = new Set<string>();
+  private vel = new THREE.Vector3(); // 水平速度
+  private vy = 0;
   private dragging = false;
   private lastX = 0;
   private lastY = 0;
-  private vy = 0;
-  private jumping = false;
+  private jumpQueued = false;
+  private flapTimer = 0; // mov=4 的显示时长
+  private flapRegen = 0;
   private enabled = false;
   private dom: HTMLElement;
+  private baseFov = 55;
 
   constructor(private camera: THREE.PerspectiveCamera, dom: HTMLElement) {
     this.dom = dom;
     window.addEventListener("keydown", (e) => {
-      if (!this.enabled) return;
       const k = e.key.toLowerCase();
-      if (k === "e") this.state.sit = !this.state.sit;
-      if (k === " ") this.jump();
+      if (k === " " || k.startsWith("arrow")) e.preventDefault();
+      if (!this.enabled) return;
+      if (k === "e" && !e.repeat) this.state.sit = !this.state.sit;
+      if (k === " " && !e.repeat) this.jumpQueued = true;
       this.keys.add(k);
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
@@ -73,75 +101,142 @@ export class PlayerControls {
     if (!v) this.keys.clear();
   }
 
-  /** 出生点 */
   spawnAt(x: number, z: number) {
     this.state.pos.set(x, terrainHeight(x, z), z);
+    this.vel.set(0, 0, 0);
+    this.vy = 0;
+    this.state.airborne = false;
   }
 
-  private jump() {
-    if (this.jumping || this.state.sit) return;
-    this.jumping = true;
-    this.vy = 5.2;
+  /** 暖气流：篝火广场与灯塔山丘上空有柔和的上升气流 */
+  private updraftAt(x: number, z: number, y: number): number {
+    let u = 0;
+    const dFire = Math.hypot(x, z);
+    if (dFire < 7 && y < 10) u += 3.4 * (1 - dFire / 7);
+    const dHill = Math.hypot(x - 26, z + 28);
+    if (dHill < 6 && y < 16) u += 2.8 * (1 - dHill / 6);
+    return u;
   }
 
   update(dt: number) {
     const s = this.state;
-    let mx = 0;
-    let mz = 0;
+    let ix = 0;
+    let iz = 0;
     if (this.enabled) {
-      if (this.keys.has("w") || this.keys.has("arrowup")) mz -= 1;
-      if (this.keys.has("s") || this.keys.has("arrowdown")) mz += 1;
-      if (this.keys.has("a") || this.keys.has("arrowleft")) mx -= 1;
-      if (this.keys.has("d") || this.keys.has("arrowright")) mx += 1;
+      if (this.keys.has("w") || this.keys.has("arrowup")) iz -= 1;
+      if (this.keys.has("s") || this.keys.has("arrowdown")) iz += 1;
+      if (this.keys.has("a") || this.keys.has("arrowleft")) ix -= 1;
+      if (this.keys.has("d") || this.keys.has("arrowright")) ix += 1;
     }
-    const moving = (mx !== 0 || mz !== 0) && !s.sit;
-    const running = moving && (this.keys.has("shift") || this.keys.has("shiftleft"));
+    const inputLen = Math.hypot(ix, iz);
+    const moving = inputLen > 0.01 && !s.sit;
+    const running = moving && this.keys.has("shift");
 
-    if (moving) {
-      if (s.sit) s.sit = false;
-      const len = Math.hypot(mx, mz);
-      const dirX = mx / len;
-      const dirZ = mz / len;
-      // 相机朝向转世界方向
+    // ---- 水平动量（腾空时转向收敛，像布一样飘） ----
+    const targetSpeed = s.airborne ? (this.keys.has(" ") ? 9.2 : 6.0) : running ? 7.2 : 3.6;
+    let tx = 0;
+    let tz = 0;
+    if (moving || s.airborne) {
+      let dx: number, dz: number;
+      if (moving) {
+        dx = ix / inputLen;
+        dz = iz / inputLen;
+      } else {
+        // 腾空无输入：维持当前朝向的前冲
+        dx = Math.sin(s.yaw);
+        dz = Math.cos(s.yaw);
+      }
       const cos = Math.cos(this.camYaw);
       const sin = Math.sin(this.camYaw);
-      const wx = dirX * cos - dirZ * sin;
-      const wz = dirX * sin + dirZ * cos;
-      const speed = running ? 7.2 : 3.6;
-      s.pos.x += wx * speed * dt;
-      s.pos.z += wz * speed * dt;
+      tx = (dx * cos - dz * sin) * targetSpeed;
+      tz = (dx * sin + dz * cos) * targetSpeed;
+    }
+    const accel = s.airborne ? 2.2 : 10;
+    this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
+    this.vel.z = THREE.MathUtils.lerp(this.vel.z, tz, Math.min(1, accel * dt));
+    s.pos.x += this.vel.x * dt;
+    s.pos.z += this.vel.z * dt;
 
-      // 朝向平滑转向移动方向
-      const targetYaw = Math.atan2(wx, wz);
+    // ---- 朝向与侧倾 ----
+    const speedH = Math.hypot(this.vel.x, this.vel.z);
+    if (moving && speedH > 0.3) {
+      const targetYaw = Math.atan2(this.vel.x, this.vel.z);
       let diff = targetYaw - s.yaw;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      s.yaw += diff * Math.min(1, dt * 10);
+      const step = diff * Math.min(1, dt * 9);
+      s.yaw += step;
+      s.yawVel = THREE.MathUtils.lerp(s.yawVel, step / Math.max(dt, 1e-4), Math.min(1, dt * 8));
+    } else {
+      s.yawVel = THREE.MathUtils.lerp(s.yawVel, 0, Math.min(1, dt * 6));
     }
-    s.mov = !moving ? 0 : running ? 2 : 1;
+    if (moving && s.sit) s.sit = false;
 
-    // 岛界约束
+    // ---- 岛界（空中也留在岛上空） ----
     const r = Math.hypot(s.pos.x, s.pos.z);
     if (r > ISLAND_RADIUS - 1) {
       s.pos.x *= (ISLAND_RADIUS - 1) / r;
       s.pos.z *= (ISLAND_RADIUS - 1) / r;
     }
 
-    // 贴地 + 小跳
+    // ---- 垂直：跳跃 / 滑翔 / 扑翼 / 暖气流 ----
     const ground = Math.max(terrainHeight(s.pos.x, s.pos.z), WATER_LEVEL - 0.25);
-    if (this.jumping) {
-      this.vy -= 14 * dt;
+    const glideHeld = this.keys.has(" ");
+
+    if (this.jumpQueued) {
+      this.jumpQueued = false;
+      if (!s.airborne) {
+        this.vy = 6.6;
+        s.airborne = true;
+        s.sit = false;
+      } else if (s.flaps > 0) {
+        this.vy = 7.0;
+        s.flaps--;
+        this.flapTimer = 0.28;
+        this.onFlap?.();
+      }
+    }
+
+    if (s.airborne) {
+      const up = this.updraftAt(s.pos.x, s.pos.z, s.pos.y);
+      if (glideHeld && this.vy < 0.6) {
+        // 滑翔：柔和缓降；暖气流直接抬升缓降下限，篝火上方会被稳稳托起
+        this.vy = Math.max(this.vy - 5 * dt, -1.7 + up);
+      } else {
+        this.vy -= 22 * dt;
+        this.vy += up * 0.45 * dt; // 自由落体时暖流只轻微上托
+      }
+      this.vy = Math.min(this.vy, 12);
       s.pos.y += this.vy * dt;
       if (s.pos.y <= ground) {
         s.pos.y = ground;
-        this.jumping = false;
+        s.airborne = false;
         this.vy = 0;
+        this.onLand?.();
       }
     } else {
-      s.pos.y = THREE.MathUtils.lerp(s.pos.y, ground, Math.min(1, dt * 12));
+      s.pos.y = THREE.MathUtils.lerp(s.pos.y, ground, Math.min(1, dt * 14));
+      // 翼能恢复
+      if (s.flaps < MAX_FLAPS) {
+        this.flapRegen += dt;
+        if (this.flapRegen > 1.1) {
+          this.flapRegen = 0;
+          s.flaps++;
+        }
+      }
     }
 
-    // 相机跟随
+    // ---- mov 状态码 ----
+    if (this.flapTimer > 0) {
+      this.flapTimer -= dt;
+      s.mov = 4;
+    } else if (s.airborne) {
+      s.mov = 3;
+    } else {
+      s.mov = speedH < 0.4 ? 0 : running ? 2 : 1;
+    }
+
+    // ---- 相机：跟随 + 速度感 FOV ----
     const focus = new THREE.Vector3(s.pos.x, s.pos.y + 1.7, s.pos.z);
     const cx = focus.x + Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const cz = focus.z + Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);
@@ -150,6 +245,12 @@ export class PlayerControls {
     const target = new THREE.Vector3(cx, Math.max(cy, camGround), cz);
     this.camera.position.lerp(target, Math.min(1, dt * 7));
     this.camera.lookAt(focus);
+
+    const fovTarget = this.baseFov + Math.min(1, speedH / 9.2) * 5 + (s.airborne && glideHeld ? 3 : 0);
+    if (Math.abs(this.camera.fov - fovTarget) > 0.05) {
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, fovTarget, Math.min(1, dt * 4));
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   /** 入场前的环岛慢镜头 */

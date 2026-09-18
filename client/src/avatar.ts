@@ -14,7 +14,12 @@ import { createToonKit } from "./world/toon";
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
-  animate: (dt: number, t: number, speed: number, sit: boolean) => void;
+  /** air: 0 地面 / 1 腾空上升 / 2 滑翔 */
+  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number) => void;
+  /** 落地缓冲（着地瞬间调用） */
+  land: () => void;
+  /** 扑翼脉冲（腾空按跳时调用，披风向后上方一抖） */
+  flap: () => void;
   setRing: (color: THREE.Color | null, energy: number) => void;
   setName: (name: string) => void;
   dispose: () => void;
@@ -234,36 +239,72 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
   let sitLerp = 0;
   let walkPhase = 0;
   let ringEnergy = 0;
+  let jumpBlend = 0;
+  let glideBlend = 0;
+  let squash = 0; // 落地缓冲
+  let flapPulse = 0; // 扑翼脉冲
 
   return {
     group,
-    animate(dt, t, speed, sit) {
+    land() {
+      squash = 1;
+    },
+    flap() {
+      flapPulse = 1;
+    },
+    animate(dt, t, speed, sit, air = 0, yawVel = 0) {
       const speedN = Math.min(1, speed / 7.2);
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
       walkPhase += dt * (3.2 + speed * 2.2);
+      jumpBlend = THREE.MathUtils.lerp(jumpBlend, air === 1 ? 1 : 0, Math.min(1, dt * 6));
+      glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
+      squash = Math.max(0, squash - dt * 4);
+      flapPulse = Math.max(0, flapPulse - dt * 3.2);
+      const airN = Math.max(jumpBlend, glideBlend);
 
-      // 坐下：整体后仰下沉
-      bodyGroup.rotation.x = -1.05 * sitLerp + 0.14 * speedN;
-      bodyGroup.position.y = -0.38 * sitLerp + (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.05 * (0.4 + speedN) : Math.sin(t * 1.5) * 0.012);
+      // 落地缓冲的压扁恢复
+      const sq = 1 - squash * 0.16;
+      bodyGroup.scale.set(1 + squash * 0.1, sq, 1 + squash * 0.1);
 
-      // 四肢摆动
+      // 坐下后仰 / 跑动前倾 / 滑翔大幅前倾
+      bodyGroup.rotation.x =
+        -1.05 * sitLerp + 0.14 * speedN + 0.62 * glideBlend + 0.18 * jumpBlend * (1 - glideBlend);
+      // 转弯侧倾（压弯）
+      group.rotation.z = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * (1 - airN);
+
+      bodyGroup.position.y =
+        -0.38 * sitLerp +
+        (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.05 * (0.4 + speedN) : Math.sin(t * 1.5) * 0.012) -
+        airN * 0.06;
+
+      // 四肢：走路摆动 → 腾空收腿 → 滑翔张臂
       const swing = Math.sin(walkPhase) * (0.15 + speedN * 0.55);
-      armL.rotation.x = swing;
-      armR.rotation.x = -swing;
-      legL.rotation.x = -swing * 0.9 + sitLerp * -1.2;
-      legR.rotation.x = swing * 0.9 + sitLerp * -1.2;
+      const armOut = 1.15 * glideBlend; // 张臂
+      armL.rotation.x = swing * (1 - airN);
+      armR.rotation.x = -swing * (1 - airN);
+      armL.rotation.z = 0.18 + armOut - flapPulse * 0.5;
+      armR.rotation.z = -0.18 - armOut + flapPulse * 0.5;
+      legL.rotation.x = -swing * 0.9 * (1 - airN) + (0.45 * jumpBlend + 0.3 * glideBlend) - sitLerp * 1.2;
+      legR.rotation.x = swing * 0.9 * (1 - airN) + (0.45 * jumpBlend + 0.3 * glideBlend) - sitLerp * 1.2;
 
-      // 头部呼吸与轻微摆动
-      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035;
-      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1;
+      // 头部呼吸与轻微摆动（滑翔时抬头看前方）
+      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * (1 - airN);
+      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
 
-      // 披风：风感 + 速度拖尾
+      // 披风：风感 + 速度拖尾 + 滑翔展开（加宽+向后上方扬起）+ 扑翼抖动
       capeUni.uTime.value = t;
-      capeUni.uAmp.value = 0.35 + speedN * 1.1;
-      capeUni.uFlow.value = THREE.MathUtils.lerp(capeUni.uFlow.value, speedN * (0.5 + 0.5), Math.min(1, dt * 6)) + (1 - sitLerp) * 0;
-      const flowRot = 0.1 + speedN * 0.5 + sitLerp * 0.75;
+      capeUni.uAmp.value = 0.35 + speedN * 1.1 + glideBlend * 0.8 + flapPulse * 1.6;
+      capeUni.uFlow.value = THREE.MathUtils.lerp(
+        capeUni.uFlow.value,
+        Math.max(speedN * 1.0, glideBlend * 1.3) + flapPulse * 0.8,
+        Math.min(1, dt * 6)
+      );
+      const flowRot = 0.1 + speedN * 0.5 + sitLerp * 0.75 - glideBlend * 0.42 - flapPulse * 0.3;
       outerCape.rotation.x = THREE.MathUtils.lerp(outerCape.rotation.x, flowRot, Math.min(1, dt * 8));
       innerCape.rotation.x = outerCape.rotation.x * 0.7;
+      const spread = 1 + glideBlend * 0.22 + flapPulse * 0.12;
+      outerCape.scale.x = THREE.MathUtils.lerp(outerCape.scale.x, spread, Math.min(1, dt * 7));
+      innerCape.scale.x = outerCape.scale.x;
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;
@@ -277,6 +318,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
       const pulse = 1 + 0.075 * Math.sin(t * 6.2) * ringEnergy;
       ring.scale.setScalar(pulse);
       disc.scale.setScalar(pulse);
+      ring.position.y = 0.06 + airN * 0.9; // 腾空时光环随身
+      disc.position.y = ring.position.y - 0.01;
 
       // 音符微光上升
       const arr = moteGeo.attributes.position.array as Float32Array;
@@ -286,7 +329,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
         const p = motePh[i];
         const a = (i / moteCount) * Math.PI * 2 + t * 0.4;
         arr[i * 3] = Math.cos(a) * (0.55 + p * 0.35);
-        arr[i * 3 + 1] = 0.15 + p * 1.7;
+        arr[i * 3 + 1] = ring.position.y + 0.1 + p * 1.7;
         arr[i * 3 + 2] = Math.sin(a) * (0.55 + p * 0.35);
       }
       moteGeo.attributes.position.needsUpdate = true;

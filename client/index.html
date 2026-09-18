@@ -113,6 +113,19 @@
     #hints { right: 22px; top: 20px; padding: 10px 16px; font-size: 11.5px; color: var(--ink-dim); letter-spacing: 1.5px; }
     #hints b { color: var(--ink); font-weight: 500; background: rgba(255, 244, 230, 0.1); border-radius: 5px; padding: 1px 6px; margin-right: 2px; }
 
+    #flaps {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      z-index: 21; display: flex; gap: 8px; padding: 8px 14px;
+    }
+    #flaps i {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: rgba(255, 244, 230, 0.14); transition: all 0.35s;
+    }
+    #flaps i.on {
+      background: radial-gradient(circle at 35% 35%, #fff2cf, #ffb45e 70%);
+      box-shadow: 0 0 10px rgba(255, 180, 94, 0.9);
+    }
+
     /* ---------- 换歌面板 ---------- */
     #trackModal {
       position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
@@ -192,9 +205,12 @@
     <div id="nearby"><div class="nb-empty">还空着呢，四处走走吧</div></div>
   </div>
 
+  <div id="flaps" class="hud panel"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+
   <div id="hints" class="hud panel">
-    <div><b>W A S D</b> 移动 &nbsp; <b>Shift</b> 奔跑</div>
-    <div style="margin-top:6px"><b>E</b> 坐下 &nbsp; <b>拖动</b> 环顾 &nbsp; <b>滚轮</b> 拉近</div>
+    <div><b>W A S D</b> 移动 &nbsp; <b>Shift</b> 奔跑 &nbsp; <b>E</b> 坐下</div>
+    <div style="margin-top:6px"><b>空格</b> 跳跃 · 腾空按住 <b>滑翔</b> · 再按 <b>扑翼</b></div>
+    <div style="margin-top:6px;font-size:10.5px;color:rgba(255,244,230,0.35)">篝火与灯塔山丘上空有上升的暖流</div>
   </div>
 
   <div id="toasts"></div>

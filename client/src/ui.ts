@@ -87,6 +87,15 @@ export function createUI(handlers: {
     get currentTrack() {
       return currentTrack;
     },
+    setFlaps(n: number) {
+      const wrap = $("flaps");
+      if (!wrap) return;
+      const pips = wrap.querySelectorAll("i");
+      pips.forEach((p, i) => {
+        (p as HTMLElement).classList.toggle("on", i < n);
+      });
+      wrap.classList.toggle("full", n >= 3);
+    },
     setNearby(infos: RemoteInfo[]) {
       const audible = infos.filter((i) => i.trackId >= 0 && i.dist < 38).slice(0, 4);
       if (audible.length === 0) {
