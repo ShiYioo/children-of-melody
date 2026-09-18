@@ -41,10 +41,17 @@ export class PlayerControls {
 
   onLand: (() => void) | null = null;
   onFlap: (() => void) | null = null;
+  onJump: (() => void) | null = null;
+  onSit: ((sitting: boolean) => void) | null = null;
 
   /** 当前水平速度（米/秒，供动画使用） */
   get horizSpeed(): number {
     return Math.hypot(this.vel.x, this.vel.z);
+  }
+
+  /** 水平速度向量（风线等特效使用） */
+  get horizVel(): THREE.Vector3 {
+    return this.vel;
   }
 
   private keys = new Set<string>();
@@ -66,7 +73,10 @@ export class PlayerControls {
       const k = e.key.toLowerCase();
       if (k === " " || k.startsWith("arrow")) e.preventDefault();
       if (!this.enabled) return;
-      if (k === "e" && !e.repeat) this.state.sit = !this.state.sit;
+      if (k === "e" && !e.repeat) {
+        this.state.sit = !this.state.sit;
+        this.onSit?.(this.state.sit);
+      }
       if (k === " " && !e.repeat) this.jumpQueued = true;
       this.keys.add(k);
     });
@@ -189,6 +199,7 @@ export class PlayerControls {
         this.vy = 6.6;
         s.airborne = true;
         s.sit = false;
+        this.onJump?.();
       } else if (s.flaps > 0) {
         this.vy = 7.0;
         s.flaps--;

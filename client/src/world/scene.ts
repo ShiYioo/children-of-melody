@@ -10,12 +10,16 @@ import { createClouds } from "./clouds";
 import { createProps, type Campfire } from "./props";
 import { createToonKit } from "./toon";
 import { createMotes, createFireflies, createEmbers } from "./particles";
+import { createWindLines } from "./windlines";
+import { createBursts } from "./bursts";
 
 export interface World {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   composer: EffectComposer;
   campfire: Campfire;
+  wind: ReturnType<typeof createWindLines>;
+  bursts: ReturnType<typeof createBursts>;
   addToScene: (obj: THREE.Object3D) => void;
   render: (dt: number, t: number) => void;
   resize: () => void;
@@ -84,6 +88,12 @@ export function createWorld(container: HTMLElement): World {
   const embers = createEmbers();
   scene.add(embers.points);
 
+  // ---- 滑翔风线 + 瞬态光效 ----
+  const wind = createWindLines();
+  scene.add(wind.lines);
+  const bursts = createBursts();
+  scene.add(bursts.group);
+
   // ---- 从太阳方向斜射下来的柔光柱（丁达尔） ----
   const sunDir = new THREE.Vector3(-0.62, 0.3, -0.42).normalize();
   const shafts = new THREE.Group();
@@ -135,6 +145,8 @@ export function createWorld(container: HTMLElement): World {
     camera,
     composer,
     campfire: props.campfire,
+    wind,
+    bursts,
     addToScene: (obj) => scene.add(obj),
     render(dt, t) {
       sky.update(t);

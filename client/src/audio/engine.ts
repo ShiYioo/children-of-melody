@@ -53,6 +53,7 @@ export class MusicEngine {
   private windGain!: GainNode;
   private waveGain!: GainNode;
   private fireGain!: GainNode;
+  private noiseBuf!: AudioBuffer;
 
   /** 必须在用户手势里调用（浏览器自动播放策略）。
    *  不阻塞等待 resume——即使音频暂时被策略挂起，入场流程也能继续，
@@ -69,10 +70,11 @@ export class MusicEngine {
     this.master.gain.value = 0.9;
     this.master.connect(ctx.destination);
 
-    // 白噪声底料
+    // 白噪声底料（环境声与动作音效共用）
     const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const data = noiseBuf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    this.noiseBuf = noiseBuf;
 
     const mkNoise = (filterType: BiquadFilterType, freq: number, q: number) => {
       const src = ctx.createBufferSource();
@@ -322,14 +324,81 @@ export class MusicEngine {
     return Math.pow(1 - phase, 2.2);
   }
 
-  /** 环境声：风、浪、篝火 */
-  ambient(t: number, playerR: number, fireDist: number) {
+  /** 环境声：风、浪、篝火；滑翔速度会自然加大风声 */
+  ambient(t: number, playerR: number, fireDist: number, glideSpeed = 0) {
     if (!this.ctx || this.ctx.state !== "running") return;
     const shore = smoothstep(30, 52, playerR); // 越靠近岸浪声越大
     this.waveGain.gain.value = (0.05 + 0.045 * (0.5 + 0.5 * Math.sin(t * 0.4))) * (0.25 + shore);
-    this.windGain.gain.value = 0.028 + 0.014 * Math.sin(t * 0.23) + shore * 0.01;
+    this.windGain.gain.value = 0.028 + 0.014 * Math.sin(t * 0.23) + shore * 0.01 + Math.min(0.11, glideSpeed * 0.012);
     const fireProx = Math.max(0, 1 - fireDist / 13);
     this.fireGain.gain.value = fireProx * (0.014 + Math.random() * 0.012);
+  }
+
+  // ---------- 动作音效（合成，零素材） ----------
+
+  private noiseHit(opts: { freq0: number; freq1: number; dur: number; vol: number; type: BiquadFilterType; q?: number; delay?: number }) {
+    if (!this.ctx || this.ctx.state !== "running") return;
+    const ctx = this.ctx;
+    const when = ctx.currentTime + (opts.delay ?? 0);
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = opts.type;
+    f.Q.value = opts.q ?? 1;
+    f.frequency.setValueAtTime(opts.freq0, when);
+    f.frequency.exponentialRampToValueAtTime(opts.freq1, when + opts.dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(opts.vol, when + opts.dur * 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + opts.dur);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(when);
+    src.stop(when + opts.dur + 0.05);
+  }
+
+  private tone(freq: number, dur: number, vol: number, type: OscillatorType = "sine", delay = 0) {
+    if (!this.ctx || this.ctx.state !== "running") return;
+    const ctx = this.ctx;
+    const when = ctx.currentTime + delay;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, when);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(vol, when + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(g).connect(this.master);
+    osc.start(when);
+    osc.stop(when + dur + 0.05);
+  }
+
+  /** 起跳：柔和的向上风声 */
+  sfxJump() {
+    this.noiseHit({ freq0: 300, freq1: 1400, dur: 0.28, vol: 0.1, type: "bandpass", q: 0.8 });
+  }
+
+  /** 扑翼：布料展翅的呼啸（两层） */
+  sfxFlap() {
+    this.noiseHit({ freq0: 500, freq1: 1600, dur: 0.22, vol: 0.16, type: "bandpass", q: 0.7 });
+    this.noiseHit({ freq0: 900, freq1: 420, dur: 0.3, vol: 0.09, type: "bandpass", q: 1.2, delay: 0.05 });
+  }
+
+  /** 落地：低沉的噗 + 轻尘 */
+  sfxLand() {
+    this.tone(90, 0.16, 0.2);
+    this.noiseHit({ freq0: 2200, freq1: 500, dur: 0.14, vol: 0.05, type: "lowpass" });
+  }
+
+  /** 坐下：布料窸窣 */
+  sfxSit() {
+    this.noiseHit({ freq0: 2400, freq1: 3600, dur: 0.18, vol: 0.035, type: "highpass" });
+  }
+
+  /** 换歌：一次温柔的钟声过门 */
+  sfxChime() {
+    this.tone(880, 0.9, 0.06);
+    this.tone(1320, 1.1, 0.035, "sine", 0.07);
   }
 }
 

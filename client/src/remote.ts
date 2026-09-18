@@ -35,6 +35,12 @@ interface Entry {
 
 export class RemotePlayers {
   private entries = new Map<string, Entry>();
+  private fx: { burst: (pos: THREE.Vector3, color: THREE.Color, kind: "flap" | "land") => void; sfxFlap: () => void; sfxLand: () => void } | null = null;
+
+  /** 注入光效与音效（由主循环提供） */
+  bindFX(fx: { burst: (pos: THREE.Vector3, color: THREE.Color, kind: "flap" | "land") => void; sfxFlap: () => void; sfxLand: () => void }) {
+    this.fx = fx;
+  }
 
   spawn(key: string, data: { name: string; hue: number; trackId?: number; startedAt?: number; x: number; y: number; z: number; ry?: number }) {
     if (this.entries.has(key)) return;
@@ -142,8 +148,23 @@ export class RemotePlayers {
 
       // mov → 空中状态: 3 滑翔 / 4 扑翼(按滑翔处理)；离地高度也作为空中判据
       const air = e.target.mov >= 3 ? 2 : g.position.y - terrainHeight(g.position.x, g.position.z) > 0.6 ? 1 : 0;
-      if (e.wasAir > 0 && air === 0) e.avatar.land(); // 落地缓冲
-      if (e.target.mov === 4 && e.wasMov !== 4) e.avatar.flap();
+      const selfDist = this.selfPos ? g.position.distanceTo(this.selfPos) : 999;
+      if (e.wasAir > 0 && air === 0) {
+        e.avatar.land(); // 落地缓冲
+        if (this.fx && selfDist < 60) {
+          const def = trackById(e.trackId);
+          this.fx.burst(g.position.clone(), new THREE.Color(def?.color ?? "#ffb45e"), "land");
+          if (selfDist < 22) this.fx.sfxLand();
+        }
+      }
+      if (e.target.mov === 4 && e.wasMov !== 4) {
+        e.avatar.flap();
+        if (this.fx && selfDist < 22) this.fx.sfxFlap();
+        if (this.fx && selfDist < 60) {
+          const def = trackById(e.trackId);
+          this.fx.burst(g.position.clone(), new THREE.Color(def?.color ?? "#fff2cf"), "flap");
+        }
+      }
       e.wasMov = e.target.mov;
       e.wasAir = air;
 
@@ -159,6 +180,12 @@ export class RemotePlayers {
 
   private sceneAdd: (o: THREE.Object3D) => void = () => {};
   private sceneRemove: (o: THREE.Object3D) => void = () => {};
+  private selfPos: THREE.Vector3 | null = null;
+
+  /** 每帧由主循环更新自己位置（供距离判断） */
+  setSelfPos(p: THREE.Vector3) {
+    this.selfPos = p;
+  }
 
   bindScene(add: (o: THREE.Object3D) => void, remove: (o: THREE.Object3D) => void) {
     this.sceneAdd = add;

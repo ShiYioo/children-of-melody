@@ -23,6 +23,11 @@ remotes.bindScene(
   (o) => world.addToScene(o),
   (o) => world.scene.remove(o)
 );
+remotes.bindFX({
+  burst: (pos, color, kind) => world.bursts.burst(pos, color, kind),
+  sfxFlap: () => music.sfxFlap(),
+  sfxLand: () => music.sfxLand(),
+});
 
 let selfAvatar: Avatar | null = null;
 let net: NetHandle | null = null;
@@ -37,6 +42,7 @@ const ui = createUI({
     music.setOwnTrack(id);
     net?.sendTrack(id);
     ui.setNowPlaying(trackById(id) ?? null);
+    music.sfxChime();
   },
 });
 ui.focusName();
@@ -79,9 +85,27 @@ function spawnSelf() {
   const z = Math.sin(a) * 8;
   selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true });
   world.addToScene(selfAvatar.group);
-  // 光遇式落地缓冲与扑翼抖动
-  controls.onLand = () => selfAvatar?.land();
-  controls.onFlap = () => selfAvatar?.flap();
+  // 光遇式的动作反馈：动作 → 音效 + 瞬态光效
+  const ringColor = () => {
+    const def = trackById(music.ownTrackId);
+    return new THREE.Color(def?.color ?? "#ffb45e");
+  };
+  controls.onLand = () => {
+    selfAvatar?.land();
+    music.sfxLand();
+    world.bursts.burst(controls.state.pos, ringColor(), "land");
+  };
+  controls.onFlap = () => {
+    selfAvatar?.flap();
+    music.sfxFlap();
+    world.bursts.burst(controls.state.pos, ringColor(), "flap");
+  };
+  controls.onJump = () => {
+    music.sfxJump();
+  };
+  controls.onSit = (sitting) => {
+    if (sitting) music.sfxSit();
+  };
   controls.spawnAt(x, z);
 }
 
@@ -133,6 +157,7 @@ function loop() {
   npcs?.update(dt);
 
   // 距离混音：只让最近的几首清晰起来
+  remotes.setSelfPos(controls.state.pos);
   const infos = remotes.infos(controls.state.pos);
   const clockOffset = net?.clockOffset ?? 0;
 
@@ -147,7 +172,15 @@ function loop() {
     }))
   );
   remotes.animate(dt, t, clarity);
-  music.ambient(t, Math.hypot(controls.state.pos.x, controls.state.pos.z), world.campfire.position.distanceTo(controls.state.pos));
+  music.ambient(
+    t,
+    Math.hypot(controls.state.pos.x, controls.state.pos.z),
+    world.campfire.position.distanceTo(controls.state.pos),
+    controls.state.airborne ? controls.horizSpeed : 0
+  );
+  // 滑翔风线与瞬态光效
+  world.wind.update(dt, t, controls.state.pos, controls.horizVel);
+  world.bursts.update(dt);
 
   // 自己的光环（永远亮着）
   if (selfAvatar) {
