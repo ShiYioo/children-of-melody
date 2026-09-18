@@ -8,6 +8,7 @@ import type { RemoteInfo } from "./remote";
 export function createUI(handlers: {
   onEnter: (name: string) => void;
   onPickTrack: (id: number, name?: string) => void;
+  onTogglePlay: () => void;
 }) {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -20,6 +21,7 @@ export function createUI(handlers: {
   const npName = $("npName");
   const npSub = $("npSub");
   const npBtn = $("npBtn");
+  const npPlay = $("npPlay");
   const nearby = $("nearby");
   const toasts = $("toasts");
   const showToast = (text: string, ms = 2600) => {
@@ -150,8 +152,10 @@ export function createUI(handlers: {
     if (e.target === trackModal) trackModal.classList.remove("open");
   });
   npBtn.addEventListener("click", openPicker);
+  npPlay.addEventListener("click", () => handlers.onTogglePlay());
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") trackModal.classList.remove("open");
+    if (e.key.toLowerCase() === "p" && !e.repeat) handlers.onTogglePlay();
   });
 
   // ---- 入场 ----
@@ -165,6 +169,8 @@ export function createUI(handlers: {
   });
 
   return {
+    /** 直接打开换歌面板 */
+    openPicker,
     entered() {
       enter.classList.add("hidden");
       document.body.classList.add("playing");
@@ -172,6 +178,20 @@ export function createUI(handlers: {
     setStatus(mode: "online" | "solo" | "off") {
       statusDot.className = mode === "online" ? "" : mode === "solo" ? "solo" : "off";
       statusText.textContent = mode === "online" ? "渐强之岛 · 在线" : mode === "solo" ? "独自漫游中" : "连接中断";
+    },
+    /** 刷新播放/暂停按钮与状态文案：mode "none" | "playing" | "paused" */
+    setPlayState(mode: "none" | "playing" | "paused") {
+      if (mode === "none") {
+        npPlay.textContent = "▶";
+        npName.textContent = "还没选歌";
+        npSub.textContent = "静默漫游中——点「换歌」选一首，或去听身边人的";
+      } else if (mode === "paused") {
+        npPlay.textContent = "▶";
+        npSub.textContent = "已暂停——再按 ▶ 或 P 键从断点继续";
+      } else {
+        npPlay.textContent = "❚❚";
+        npSub.textContent = "正在播——按 ❚❚ 或 P 键暂停自己";
+      }
     },
     setNowPlaying(trackId: number, songName = "") {
       currentTrackId = trackId;
@@ -191,7 +211,6 @@ export function createUI(handlers: {
       } else {
         npDot.style.background = "var(--ink-dim)";
         npDot.style.boxShadow = "none";
-        npName.textContent = "还没选歌";
       }
     },
     get currentTrackId() {

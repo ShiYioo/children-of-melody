@@ -74,12 +74,14 @@ export class IslandRoom extends Room {
       p.sit = !!m.sit;
     },
 
-    // 换歌：记录曲目与服务器时间，附近的人据此本地同步播放
+    // 换歌：记录曲目与服务器时间，附近的人据此本地同步播放。
+    // resumeMs: 从暂停恢复时带上已播进度，断点续播。
     track: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
       p.trackId = clamp(m?.trackId | 0, -1, 9999);
-      p.startedAt = p.trackId >= 0 ? Date.now() : 0;
+      const resumeMs = clamp(m?.resumeMs | 0, 0, 24 * 3600 * 1000);
+      p.startedAt = p.trackId >= 0 ? Date.now() - resumeMs : 0;
       p.songName =
         p.trackId >= 100 && typeof m?.name === "string"
           ? m.name.trim().slice(0, 40).replace(/[\\/:*?"<>|]/g, "_")

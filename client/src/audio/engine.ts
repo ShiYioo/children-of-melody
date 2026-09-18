@@ -57,6 +57,14 @@ export class MusicEngine {
   ownTrackId = -1;
   private bufCache = new Map<number, Promise<AudioBuffer>>();
   private freqData: Uint8Array<ArrayBuffer> | null = null;
+  private ownStartWall = 0; // 自己当前曲目开始时的墙钟时间
+  private ownPaused = false;
+  private ownElapsedMs = 0; // 暂停时保存的进度
+
+  /** 自己是否处于暂停态 */
+  get isOwnPaused() {
+    return this.ownPaused;
+  }
 
   // 环境声
   private windGain!: GainNode;
@@ -201,6 +209,9 @@ export class MusicEngine {
   /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字 */
   setOwnTrack(trackId: number, songName = "") {
     this.ownTrackId = trackId;
+    this.ownPaused = false;
+    this.ownElapsedMs = 0;
+    this.ownStartWall = Date.now();
     const existing = this.sources.get(this.ownKey);
     if (existing) this.stopSource(existing);
     this.sources.delete(this.ownKey);
@@ -208,6 +219,29 @@ export class MusicEngine {
     const src = this.makeSource(trackId, songName, Date.now(), false);
     src.gain.gain.value = 0.62;
     this.sources.set(this.ownKey, src);
+  }
+
+  /** 暂停自己的音乐（保留进度），返回已播放的毫秒数 */
+  pauseOwn(): number {
+    if (this.ownTrackId < 0 || this.ownPaused) return this.ownElapsedMs;
+    this.ownElapsedMs = Math.max(0, Date.now() - this.ownStartWall);
+    this.ownPaused = true;
+    const src = this.sources.get(this.ownKey);
+    if (src) this.stopSource(src);
+    this.sources.delete(this.ownKey);
+    return this.ownElapsedMs;
+  }
+
+  /** 从暂停处继续，返回恢复用的进度毫秒数（未暂停/没歌返回 -1） */
+  resumeOwn(songName = ""): number {
+    if (this.ownTrackId < 0 || !this.ownPaused || !this.ctx) return -1;
+    this.ownPaused = false;
+    const startedAt = Date.now() - this.ownElapsedMs;
+    this.ownStartWall = startedAt;
+    const src = this.makeSource(this.ownTrackId, songName, startedAt, false);
+    src.gain.gain.value = 0.62;
+    this.sources.set(this.ownKey, src);
+    return this.ownElapsedMs;
   }
 
   /** 同步/更新一首都端听到的歌 */

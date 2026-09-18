@@ -42,7 +42,23 @@ const ui = createUI({
     music.setOwnTrack(id, name ?? "");
     net?.sendTrack(id, name);
     ui.setNowPlaying(id, name ?? "");
+    ui.setPlayState("playing");
     music.sfxChime();
+  },
+  onTogglePlay: () => {
+    if (music.ownTrackId < 0) {
+      ui.openPicker();
+      return;
+    }
+    if (music.isOwnPaused) {
+      const resumeMs = music.resumeOwn(ui.currentSongName);
+      net?.sendTrack(music.ownTrackId, ui.currentSongName, resumeMs);
+      ui.setPlayState("playing");
+    } else {
+      music.pauseOwn();
+      net?.sendTrack(-1);
+      ui.setPlayState("paused");
+    }
   },
 });
 ui.focusName();
@@ -68,15 +84,14 @@ async function handleEnter(name: string) {
     ui.toast("岛上今天只有你——不过还有几位老住户在散步", 3600);
   }
 
-  // 默认给一首歌（随机），立刻就有音乐气泡
-  const first = Math.floor(Math.random() * 6);
-  music.setOwnTrack(first);
-  net?.sendTrack(first);
-  ui.setNowPlaying(first);
+  // 静默进岛：默认不放音乐，想听自己点「换歌」；
+  // 也可以什么都不选，只听身边人的世界
+  ui.setNowPlaying(-1);
+  ui.setPlayState("none");
 
   controls.setEnabled(true);
   ui.entered();
-  ui.toast("走近别人，就能听见他们的歌渐渐变清晰", 4200);
+  ui.toast("欢迎来到渐强之岛——选一首歌，或安静地走走", 4200);
 }
 
 function spawnSelf() {
@@ -183,11 +198,12 @@ function loop() {
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);
   world.bursts.update(dt);
 
-  // 自己的光环（永远亮着）
+  // 自己的光环（听歌且未暂停时亮着）
   if (selfAvatar) {
     const beat = music.beatEnv("self");
     const meta = trackMeta(music.ownTrackId, ui.currentSongName);
-    selfAvatar.setRing(music.ownTrackId >= 0 ? new THREE.Color(meta.color) : null, music.ownTrackId >= 0 ? 0.5 + 0.4 * beat : 0);
+    const active = music.ownTrackId >= 0 && !music.isOwnPaused;
+    selfAvatar.setRing(active ? new THREE.Color(meta.color) : null, active ? 0.5 + 0.4 * beat : 0);
   }
 
   // UI 低频刷新 + 靠近提示 + 翼能

@@ -26,7 +26,7 @@ export interface NetHandle {
   /** 服务器时间 - 本地时间（把别人的 startedAt 换算到本地时钟） */
   clockOffset: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
-  sendTrack: (trackId: number, name?: string) => void;
+  sendTrack: (trackId: number, name?: string, resumeMs?: number) => void;
   close: () => void;
 }
 
@@ -99,8 +99,8 @@ export async function connectIsland(name: string, remotes: RemotePlayers): Promi
       lastSent = now;
       room.send("pos", p);
     },
-    sendTrack(trackId, name) {
-      room.send("track", { trackId, name });
+    sendTrack(trackId, name, resumeMs) {
+      room.send("track", { trackId, name, resumeMs });
     },
     close() {
       room.leave(true);

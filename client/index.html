@@ -91,12 +91,13 @@
     #npDot { width: 14px; height: 14px; border-radius: 50%; background: var(--warm); box-shadow: 0 0 12px var(--warm); flex: none; }
     #npName { font-size: 14px; letter-spacing: 1px; }
     #npSub { font-size: 11px; color: var(--ink-dim); margin-top: 2px; }
-    #npBtn {
+    #npBtn, #npPlay {
       margin-left: 8px; padding: 7px 16px; font-size: 12px; letter-spacing: 2px; cursor: pointer;
       color: var(--accent); background: rgba(255, 217, 160, 0.1); border: 1px solid rgba(255, 217, 160, 0.3);
       border-radius: 999px; transition: background 0.25s;
     }
-    #npBtn:hover { background: rgba(255, 217, 160, 0.22); }
+    #npBtn:hover, #npPlay:hover { background: rgba(255, 217, 160, 0.22); }
+    #npPlay { padding: 7px 12px; font-size: 13px; }
 
     #nearbyWrap { right: 22px; bottom: 22px; padding: 14px 16px; width: 252px; }
     #nearbyWrap h3 { font-size: 12px; font-weight: 400; letter-spacing: 2px; color: var(--ink-dim); margin-bottom: 10px; }
@@ -206,8 +207,9 @@
     <div id="npDot"></div>
     <div style="flex:1; min-width:0">
       <div id="npName">还没选歌</div>
-      <div id="npSub">点右侧换一首，走近谁，就听谁的</div>
+      <div id="npSub">静默漫游中——点「换歌」选一首，或去听身边人的</div>
     </div>
+    <button id="npPlay" title="播放/暂停">▶</button>
     <button id="npBtn">换 歌</button>
   </div>
 
