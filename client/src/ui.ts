@@ -86,14 +86,40 @@ export function createUI(handlers: {
     }
   }
 
-  // 上传自己的歌
+  // 上传自己的歌（先本地预检，再把服务器压力挡在前面）
+  const MAX_MB = 20;
+  const MAX_SECONDS = 12 * 60;
   uploadCard.addEventListener("click", () => songFile.click());
   songFile.addEventListener("change", async () => {
     const file = songFile.files?.[0];
     if (!file) return;
     uploadCard.classList.add("uploading");
-    uploadCard.textContent = `正在上传「${file.name.slice(0, 16)}」…`;
+    uploadCard.textContent = `正在检查「${file.name.slice(0, 16)}」…`;
     try {
+      if (file.size > MAX_MB * 1024 * 1024) {
+        throw new Error(`太大了，请选 ${MAX_MB}MB 以内的歌曲`);
+      }
+      // 用 <audio> 元数据读真实时长（防伪造）
+      const duration = await new Promise<number>((resolve, reject) => {
+        const a = document.createElement("audio");
+        const url = URL.createObjectURL(file);
+        const timer = setTimeout(() => finish(-1), 8000);
+        const finish = (d: number) => {
+          clearTimeout(timer);
+          URL.revokeObjectURL(url);
+          a.src = "";
+          d > 0 ? resolve(d) : reject(new Error("读不出这首歌的时长，文件可能损坏了"));
+        };
+        a.preload = "metadata";
+        a.onloadedmetadata = () => finish(Number.isFinite(a.duration) ? a.duration : -1);
+        a.onerror = () => finish(-1);
+        a.src = url;
+      });
+      if (duration > MAX_SECONDS) {
+        throw new Error(`这首歌有 ${Math.round(duration / 60)} 分钟，超过 ${MAX_SECONDS / 60} 分钟上限啦`);
+      }
+
+      uploadCard.textContent = `正在上传「${file.name.slice(0, 16)}」…`;
       const res = await fetch(`/songs/upload?name=${encodeURIComponent(file.name)}`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },

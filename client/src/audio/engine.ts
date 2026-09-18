@@ -181,6 +181,11 @@ export class MusicEngine {
         // 异步加载完成时，这条源可能已经被换掉/移除
         if (this.sources.get(this.ownKey) !== src && ![...this.sources.values()].includes(src)) return;
         if (src.trackId !== CUSTOM_BASE + songId && src.songId !== songId) return;
+        // 超长音频解码后可能占用数百 MB 内存，直接拒播保护听者
+        if (buf.duration > 15 * 60) {
+          console.warn("[music] 曲目过长，跳过播放", songId);
+          return;
+        }
         const ctx = this.ctx!;
         src.bufDur = buf.duration;
         const node = ctx.createBufferSource();
