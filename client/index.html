@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crescendo · 渐强之岛</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='%23ffb45e'/><circle cx='50' cy='50' r='20' fill='%23ff8f9e'/></svg>" />
+  <style>
+    :root {
+      --ink: #fff4e6;
+      --ink-dim: rgba(255, 244, 230, 0.62);
+      --panel: rgba(40, 29, 56, 0.55);
+      --panel-border: rgba(255, 220, 180, 0.16);
+      --accent: #ffd9a0;
+      --warm: #ffb45e;
+      --coral: #ff8f9e;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+      font-family: "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Microsoft YaHei", ui-rounded, system-ui, sans-serif;
+      background: linear-gradient(180deg, #3b4a8f 0%, #9a7bc0 45%, #f2a48f 78%, #ffd9a3 100%);
+      color: var(--ink);
+      user-select: none;
+    }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 8px 32px rgba(20, 12, 40, 0.35);
+    }
+
+    /* ---------- 入场 ---------- */
+    #enter {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 70%, rgba(60, 38, 80, 0) 0%, rgba(30, 18, 48, 0.55) 100%);
+      transition: opacity 0.9s ease; 
+    }
+    #enter.hidden { opacity: 0; pointer-events: none; }
+    .enter-card { text-align: center; padding: 44px 56px; animation: floatIn 1.2s ease both; }
+    @keyframes floatIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+    .enter-card h1 {
+      font-size: 44px; letter-spacing: 6px; font-weight: 300;
+      background: linear-gradient(120deg, #ffe9c8 20%, #ffb45e 55%, #ff8f9e 85%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      filter: drop-shadow(0 2px 18px rgba(255, 180, 94, 0.35));
+    }
+    .enter-card .sub { margin: 14px 0 34px; font-size: 15px; color: var(--ink-dim); letter-spacing: 2px; }
+    .enter-card input {
+      width: 260px; padding: 12px 18px; font-size: 16px; text-align: center;
+      color: var(--ink); letter-spacing: 2px;
+      background: rgba(255, 244, 230, 0.08); border: 1px solid var(--panel-border);
+      border-radius: 999px; outline: none; transition: border-color 0.3s;
+    }
+    .enter-card input:focus { border-color: rgba(255, 217, 160, 0.55); }
+    .enter-card input::placeholder { color: rgba(255, 244, 230, 0.35); }
+    .btn-main {
+      display: inline-block; margin-left: 14px; padding: 12px 30px;
+      font-size: 16px; letter-spacing: 3px; color: #4a2c38; font-weight: 600;
+      background: linear-gradient(120deg, var(--warm), var(--coral));
+      border: none; border-radius: 999px; cursor: pointer;
+      box-shadow: 0 4px 22px rgba(255, 163, 120, 0.45);
+      transition: transform 0.25s, box-shadow 0.25s;
+    }
+    .btn-main:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(255, 163, 120, 0.6); }
+    .enter-tip { margin-top: 26px; font-size: 12px; color: rgba(255, 244, 230, 0.4); letter-spacing: 1px; }
+
+    /* ---------- HUD ---------- */
+    .hud { position: fixed; z-index: 20; opacity: 0; transition: opacity 1s ease 0.4s; }
+    body.playing .hud { opacity: 1; }
+
+    #brand { top: 20px; left: 22px; padding: 12px 18px; display: flex; align-items: center; gap: 12px; }
+    #brand .logo { width: 30px; height: 30px; border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #ffe9c8, #ffb45e 60%, #ff8f9e);
+      box-shadow: 0 0 16px rgba(255, 180, 94, 0.8); animation: breathe 4s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.12); opacity: 1; } }
+    #brand .t1 { font-size: 15px; letter-spacing: 3px; }
+    #brand .t2 { font-size: 11px; color: var(--ink-dim); letter-spacing: 1px; margin-top: 2px; }
+    #status { display: flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11px; color: var(--ink-dim); }
+    #statusDot { width: 7px; height: 7px; border-radius: 50%; background: #8fd6a0; box-shadow: 0 0 8px #8fd6a0; }
+    #statusDot.solo { background: #ffd27f; box-shadow: 0 0 8px #ffd27f; }
+    #statusDot.off { background: #ff8f9e; box-shadow: 0 0 8px #ff8f9e; }
+
+    #nowPlaying { left: 22px; bottom: 22px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; min-width: 240px; }
+    #npDot { width: 14px; height: 14px; border-radius: 50%; background: var(--warm); box-shadow: 0 0 12px var(--warm); flex: none; }
+    #npName { font-size: 14px; letter-spacing: 1px; }
+    #npSub { font-size: 11px; color: var(--ink-dim); margin-top: 2px; }
+    #npBtn {
+      margin-left: 8px; padding: 7px 16px; font-size: 12px; letter-spacing: 2px; cursor: pointer;
+      color: var(--accent); background: rgba(255, 217, 160, 0.1); border: 1px solid rgba(255, 217, 160, 0.3);
+      border-radius: 999px; transition: background 0.25s;
+    }
+    #npBtn:hover { background: rgba(255, 217, 160, 0.22); }
+
+    #nearbyWrap { right: 22px; bottom: 22px; padding: 14px 16px; width: 252px; }
+    #nearbyWrap h3 { font-size: 12px; font-weight: 400; letter-spacing: 2px; color: var(--ink-dim); margin-bottom: 10px; }
+    .nb-item { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+    .nb-item + .nb-item { border-top: 1px dashed rgba(255, 220, 180, 0.1); }
+    .nb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+    .nb-info { flex: 1; min-width: 0; }
+    .nb-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nb-track { font-size: 11px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nb-bar { width: 52px; height: 4px; border-radius: 2px; background: rgba(255, 244, 230, 0.12); overflow: hidden; flex: none; }
+    .nb-bar i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--warm), var(--coral)); width: 0%; transition: width 0.4s; }
+    .nb-empty { font-size: 12px; color: rgba(255, 244, 230, 0.35); padding: 4px 0; letter-spacing: 1px; }
+
+    #hints { right: 22px; top: 20px; padding: 10px 16px; font-size: 11.5px; color: var(--ink-dim); letter-spacing: 1.5px; }
+    #hints b { color: var(--ink); font-weight: 500; background: rgba(255, 244, 230, 0.1); border-radius: 5px; padding: 1px 6px; margin-right: 2px; }
+
+    /* ---------- 换歌面板 ---------- */
+    #trackModal {
+      position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+      background: rgba(24, 14, 40, 0.45); backdrop-filter: blur(4px);
+      opacity: 0; pointer-events: none; transition: opacity 0.3s;
+    }
+    #trackModal.open { opacity: 1; pointer-events: auto; }
+    #trackModal .box { padding: 26px; width: min(620px, 92vw); }
+    #trackModal h2 { font-size: 17px; font-weight: 400; letter-spacing: 3px; margin-bottom: 4px; }
+    #trackModal .sub { font-size: 12px; color: var(--ink-dim); margin-bottom: 18px; letter-spacing: 1px; }
+    #trackGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+    .track-card {
+      padding: 16px 14px; border-radius: 14px; cursor: pointer; text-align: left;
+      background: rgba(255, 244, 230, 0.05); border: 1px solid transparent; color: var(--ink);
+      transition: transform 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .track-card:hover { transform: translateY(-3px); background: rgba(255, 244, 230, 0.1); }
+    .track-card.active { border-color: rgba(255, 217, 160, 0.5); background: rgba(255, 217, 160, 0.1); }
+    .track-card .dot { width: 12px; height: 12px; border-radius: 50%; margin-bottom: 10px; }
+    .track-card .nm { font-size: 14px; letter-spacing: 1px; }
+    .track-card .ds { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.5; }
+
+    /* ---------- 提示气泡 ---------- */
+    #toasts { position: fixed; top: 84px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+    .toast {
+      padding: 10px 22px; font-size: 13px; letter-spacing: 2px; color: var(--ink);
+      background: rgba(40, 29, 56, 0.7); border: 1px solid var(--panel-border); border-radius: 999px;
+      backdrop-filter: blur(10px); animation: toastIn 0.5s ease both;
+    }
+    .toast.out { animation: toastOut 0.6s ease both; }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+    @keyframes toastOut { to { opacity: 0; transform: translateY(-8px); } }
+
+    @media (max-width: 720px) {
+      #hints { display: none; }
+      #nearbyWrap { width: 200px; }
+      .enter-card { padding: 34px 30px; }
+      .enter-card h1 { font-size: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- 入场 -->
+  <div id="enter">
+    <div class="enter-card panel">
+      <h1>CRESCENDO</h1>
+      <div class="sub">渐强之岛 —— 靠近一个人，他的歌会慢慢变得清晰</div>
+      <input id="enterName" maxlength="12" placeholder="给自己起个名字" autocomplete="off" />
+      <button id="enterBtn" class="btn-main">进入世界</button>
+      <div class="enter-tip">🎧 建议佩戴耳机 · 岛上无需任何任务，去听歌就好</div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="brand" class="hud panel">
+    <div class="logo"></div>
+    <div>
+      <div class="t1">渐强之岛</div>
+      <div class="t2">Crescendo World</div>
+    </div>
+    <div id="status"><span id="statusDot"></span><span id="statusText">连接中</span></div>
+  </div>
+
+  <div id="nowPlaying" class="hud panel">
+    <div id="npDot"></div>
+    <div style="flex:1; min-width:0">
+      <div id="npName">还没选歌</div>
+      <div id="npSub">点右侧换一首，走近谁，就听谁的</div>
+    </div>
+    <button id="npBtn">换 歌</button>
+  </div>
+
+  <div id="nearbyWrap" class="hud panel">
+    <h3>身边的人</h3>
+    <div id="nearby"><div class="nb-empty">还空着呢，四处走走吧</div></div>
+  </div>
+
+  <div id="hints" class="hud panel">
+    <div><b>W A S D</b> 移动 &nbsp; <b>Shift</b> 奔跑</div>
+    <div style="margin-top:6px"><b>E</b> 坐下 &nbsp; <b>拖动</b> 环顾 &nbsp; <b>滚轮</b> 拉近</div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <!-- 换歌 -->
+  <div id="trackModal">
+    <div class="box panel">
+      <h2>选一首陪你上岛的歌</h2>
+      <div class="sub">走近别人时，你们会短暂地听见彼此的世界</div>
+      <div id="trackGrid"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
