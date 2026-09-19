@@ -53,6 +53,13 @@ function nameTexture(name: string): THREE.CanvasTexture {
   return tex;
 }
 
+// 伊莱娜手写动作的复用临时量（避免每帧分配）
+const _eq1 = new THREE.Quaternion();
+const _eq2 = new THREE.Quaternion();
+const _ev1 = new THREE.Vector3();
+const _ev2 = new THREE.Vector3();
+const _ev3 = new THREE.Vector3();
+
 /** 披风材质：普通 toon 双面——形变与法线全部由 CapeSim 物理每帧驱动 */
 function makeCapeMaterial(color: THREE.Color, gradientMap: THREE.DataTexture | null) {
   return new THREE.MeshToonMaterial({ color, side: THREE.DoubleSide, gradientMap: gradientMap ?? undefined });
@@ -136,9 +143,28 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         // 改用程序化根运动叠加（见 animate 中的 elainaRoot 分支）
         elainaRoot = importedModel;
         elainaBaseY = glb.y;
+        // 抓取手写动作需要的骨骼（名字在运行时没有点号：thigh.l → thighl）+ 各自绑定姿态
+        const grab = (p: string) => {
+          let hit: THREE.Bone | null = null;
+          importedModel!.traverse((o) => {
+            if (!hit && (o as THREE.Bone).isBone && o.name.startsWith(p)) hit = o as THREE.Bone;
+          });
+          return hit;
+        };
+        elainaBones = {
+          thighL: grab("thighl"), thighR: grab("thighr"),
+          shinL: grab("legl"), shinR: grab("legr"),
+          armL: grab("arml"), armR: grab("armr"),
+          foreL: grab("forearml"), foreR: grab("forearmr"),
+        };
+        elainaBind = new Map();
+        for (const b of Object.values(elainaBones)) if (b) elainaBind.set(b, b.quaternion.clone());
         const clip = gltf.animations[0];
         if (clip) {
-          const action = importedMixer.clipAction(clip);
+          // 只循环展示动画的抬头段（9.5~12.5s 实测头部水平、站姿安稳；
+          // 前段她一直低头，整段循环会显得总是垂着头）
+          const loop = THREE.AnimationUtils.subclip(clip, "Action", Math.round(9.5 * 30), Math.round(12.5 * 30), 30);
+          const action = importedMixer.clipAction(loop.duration > 0.2 ? loop : clip);
           importedActions.set("Action", action);
           importedActions.set("Unarmed_Idle", action);
         }
@@ -404,6 +430,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // 伊莱娜的程序化状态运动（展示动画常播，状态靠根节点运动表达）
   let elainaRoot: THREE.Object3D | null = null;
   let elainaBaseY = 0;
+  // 手写骨骼动作：关键骨骼与绑定姿态（运行时在 her 骨架上做世界轴旋转叠加）
+  let elainaBones: { thighL: THREE.Bone | null; thighR: THREE.Bone | null; shinL: THREE.Bone | null; shinR: THREE.Bone | null; armL: THREE.Bone | null; armR: THREE.Bone | null; foreL: THREE.Bone | null; foreR: THREE.Bone | null } | null = null;
+  let elainaBind = new Map<THREE.Bone, THREE.Quaternion>();
 
   return {
     group,
@@ -600,14 +629,14 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9);
       }
 
-      // 伊莱娜：展示动画常播，状态用程序化根运动表达（不碰骨骼，无折叠风险）
+      // 伊莱娜：展示动画（抬头段循环）做基底，状态用手写骨骼动作 + 根运动表达
       if (elainaRoot) {
         const kk = Math.min(1, dt * 6);
         let pitch = 0.08 * speedN + THREE.MathUtils.clamp(accelSm * 0.012, -0.12, 0.2); // 跑动前倾
         let lift = 0;
         if (sit) {
-          pitch = -Math.PI / 2; // 向后躺平（绕脚跟旋转，身体放平在地面）
-          lift = 0.22; // 身体厚度离地
+          pitch = -Math.PI / 2; // 绕模型中心向后放平
+          lift = -2.24; // 旋转把身体甩到根上方，压回地面（两轮实测线性校准：身体贴地上方 ~0.3m）
         } else if (air === 2) {
           pitch = 0.85; // 滑翔俯冲角，与程序化小人一致
           lift = -0.05;
@@ -618,6 +647,48 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         elainaRoot.rotation.z = THREE.MathUtils.lerp(elainaRoot.rotation.z, Math.sin(walkPhase) * 0.05 * speedN, kk);
         const bounce = air > 0 || sit ? 0 : Math.abs(Math.sin(walkPhase)) * (0.035 + 0.05 * speedN); // 步伐弹跳
         elainaRoot.position.y = THREE.MathUtils.lerp(elainaRoot.position.y, elainaBaseY + lift, kk) + bounce;
+
+        // ---- 手写肢体动作：在她的骨骼上做世界轴旋转（绑定姿态 × 增量） ----
+        if (elainaBones) {
+          const yaw = group.rotation.y;
+          _ev1.set(Math.cos(yaw), 0, -Math.sin(yaw)); // 角色右向（世界）
+          _ev2.set(Math.sin(yaw), 0, Math.cos(yaw)); // 角色前向（世界）
+          const swing = (bone: THREE.Bone | null, axis: THREE.Vector3, ang: number) => {
+            const bind = bone ? elainaBind.get(bone) : undefined;
+            if (!bone || !bind || !bone.parent) return;
+            bone.parent.getWorldQuaternion(_eq1).invert();
+            _ev3.copy(axis).applyQuaternion(_eq1).normalize();
+            _eq2.setFromAxisAngle(_ev3, ang);
+            bone.quaternion.copy(bind).multiply(_eq2);
+          };
+          if (sit) {
+            // 躺平：双臂微微张开
+            swing(elainaBones.armL, _ev2, 0.35);
+            swing(elainaBones.armR, _ev2, -0.35);
+          } else if (air === 2) {
+            // 滑翔：双臂向侧上方展开，双腿并拢微后掠
+            swing(elainaBones.armL, _ev2, 1.25);
+            swing(elainaBones.armR, _ev2, -1.25);
+            swing(elainaBones.thighL, _ev1, -0.12);
+            swing(elainaBones.thighR, _ev1, -0.12);
+          } else if (speed > 0.3 && air === 0) {
+            // 走/跑：迈步 + 摆臂（与程序化小人同一套相位）
+            const run = THREE.MathUtils.clamp((speed - 4.2) / 3.5, 0, 1);
+            const amp = 0.38 + run * 0.42;
+            const s = Math.sin(walkPhase);
+            const s2 = Math.sin(walkPhase + Math.PI);
+            swing(elainaBones.thighL, _ev1, s * amp);
+            swing(elainaBones.thighR, _ev1, s2 * amp);
+            // 膝盖：腿后摆时收紧
+            swing(elainaBones.shinL, _ev1, Math.max(0, -s) * (0.5 + run * 0.7));
+            swing(elainaBones.shinR, _ev1, Math.max(0, -s2) * (0.5 + run * 0.7));
+            swing(elainaBones.armL, _ev1, s2 * amp * 0.65);
+            swing(elainaBones.armR, _ev1, s * amp * 0.65);
+            swing(elainaBones.foreL, _ev1, 0.25 + Math.max(0, s2) * 0.3);
+            swing(elainaBones.foreR, _ev1, 0.25 + Math.max(0, s) * 0.3);
+          }
+          // 待机：不碰四肢，展示动画的抬头段自然摆
+        }
       }
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
