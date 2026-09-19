@@ -129,6 +129,21 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
     eyes.push(eye);
   }
 
+  // 两点软软的腮红，让远处的小人也有一点表情
+  const cheekMat = new THREE.MeshBasicMaterial({
+    color: "#ff9caa",
+    transparent: true,
+    opacity: 0.58,
+    depthWrite: false,
+  });
+  const cheekGeo = new THREE.SphereGeometry(0.055, 10, 8);
+  for (const dx of [-0.22, 0.22]) {
+    const cheek = new THREE.Mesh(cheekGeo, cheekMat);
+    cheek.scale.set(1.25, 0.62, 0.3);
+    cheek.position.set(dx, -0.105, 0.245);
+    headGroup.add(cheek);
+  }
+
   // 兜帽：罩住后脑与头顶的半球
   const hood = new THREE.Mesh(
     new THREE.SphereGeometry(0.345, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),

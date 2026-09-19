@@ -43,7 +43,14 @@
       transition: opacity 0.9s ease; 
     }
     #enter.hidden { opacity: 0; pointer-events: none; }
-    .enter-card { text-align: center; padding: 44px 56px; animation: floatIn 1.2s ease both; }
+    .enter-card { position: relative; text-align: center; padding: 44px 56px; animation: floatIn 1.2s ease both; }
+    .enter-card::before, .enter-card::after {
+      position: absolute; color: rgba(255, 217, 160, 0.72); font-size: 26px; pointer-events: none;
+      animation: noteFloat 3.8s ease-in-out infinite;
+    }
+    .enter-card::before { content: "♪"; left: 22px; top: 24px; transform: rotate(-12deg); }
+    .enter-card::after { content: "♫"; right: 22px; bottom: 24px; animation-delay: -1.7s; transform: rotate(12deg); }
+    @keyframes noteFloat { 0%,100% { opacity: .35; translate: 0 4px; } 50% { opacity: .9; translate: 0 -5px; } }
     @keyframes floatIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
     .enter-card h1 {
       font-size: 44px; letter-spacing: 6px; font-weight: 300;
@@ -152,11 +159,13 @@
     .track-card {
       padding: 16px 14px; border-radius: 14px; cursor: pointer; text-align: left;
       background: rgba(255, 244, 230, 0.05); border: 1px solid transparent; color: var(--ink);
-      transition: transform 0.2s, border-color 0.2s, background 0.2s;
+      transition: transform 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
     }
-    .track-card:hover { transform: translateY(-3px); background: rgba(255, 244, 230, 0.1); }
+    .track-card:hover { transform: translateY(-4px) rotate(-0.5deg); background: rgba(255, 244, 230, 0.1); box-shadow: 0 10px 22px rgba(20, 12, 40, 0.18); }
     .track-card.active { border-color: rgba(255, 217, 160, 0.5); background: rgba(255, 217, 160, 0.1); }
     .track-card .dot { width: 12px; height: 12px; border-radius: 50%; margin-bottom: 10px; }
+    .track-card:hover .dot { animation: dotBounce 0.75s ease-in-out infinite alternate; }
+    @keyframes dotBounce { to { transform: scale(1.28); } }
     .track-card .nm { font-size: 14px; letter-spacing: 1px; }
     .track-card .ds { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.5; }
 
@@ -176,6 +185,16 @@
       #nearbyWrap { width: 200px; }
       .enter-card { padding: 34px 30px; }
       .enter-card h1 { font-size: 32px; }
+      .enter-card input { width: min(260px, 72vw); }
+      .btn-main { display: block; margin: 14px auto 0; width: min(260px, 72vw); }
+      #nowPlaying { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
+      #nearbyWrap { right: 12px; bottom: 86px; }
+      #brand { top: 12px; left: 12px; }
+      #trackModal .box { padding: 20px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
     }
   </style>
 </head>
