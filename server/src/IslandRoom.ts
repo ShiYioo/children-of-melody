@@ -11,7 +11,7 @@ function clamp(v: number, min: number, max: number) {
 }
 
 /**
- * 渐强之岛——单房间大岛。
+ * 拾音岛——单房间大岛。
  * 同步的内容刻意保持极小：位置、朝向、动作、正在听的曲目与起始时间。
  * 音频流不经过服务器，各客户端按 (trackId, startedAt) 本地对齐播放。
  */
@@ -36,7 +36,7 @@ export class IslandRoom extends Room {
       for (const [k, v] of this.pendingHands) if (now - v.at > 15000) this.pendingHands.delete(k);
     }, 5000);
 
-    console.log("[island] 渐强之岛已就绪");
+    console.log("[island] 拾音岛已就绪");
   }
 
   async onJoin(client: Client, options: any) {

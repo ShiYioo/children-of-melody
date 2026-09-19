@@ -1,7 +1,7 @@
 import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, isUrlTrack, type TrackDef } from "./tracks";
 
 /**
- * 音乐引擎：渐强之岛的心脏。
+ * 音乐引擎：拾音岛的心脏。
  *
  * - 每首歌是确定性生成的：由 (trackId, 起始时间) 即可在各端合奏出
  *   完全一致的旋律（音频流不过服务器）。

@@ -12,7 +12,7 @@ import { createUI } from "./ui";
 import { terrainHeight } from "./heightfield";
 
 /**
- * 渐强之岛 · 客户端主流程
+ * 拾音岛 · 客户端主流程
  * 世界 → 入场 → 联机(或独自漫游) → 听歌 → 走近谁，就听见谁
  */
 
@@ -158,7 +158,7 @@ async function handleEnter(name: string) {
 
   controls.setEnabled(true);
   ui.entered();
-  ui.toast("欢迎来到渐强之岛——选一首歌，或安静地走走", 4200);
+  ui.toast("欢迎来到拾音岛——选一首歌，或安静地走走", 4200);
 }
 
 function spawnSelf() {
