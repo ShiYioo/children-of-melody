@@ -347,6 +347,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // 布料仿真的复用临时量（避免每帧分配）
   const windWorld = new THREE.Vector3();
   const shoulderLocal = new THREE.Vector3();
+  const anchorEuler = new THREE.Euler();
   const UP_AXIS = new THREE.Vector3(0, 1, 0);
   const outerPins = new Float32Array(13 * 3); // cols=12+1 冗余一位无妨，step 按 sim.cols 读
   const innerPins = new Float32Array(11 * 3);
@@ -453,20 +454,29 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
 
       // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
-      if (!importedReady) {
-        const vx = state.vx ?? 0;
-        const vz = state.vz ?? 0;
-        windWorld.set(
-          -vx * 0.55 + Math.sin(t * 0.7) * 0.35,
-          // 上升时布向下拖曳(物理正确)；下落的上掀风减半，防止把布掀过头顶
-          -vy * (vy > 0 ? 0.55 : 0.28) + glideBlend * 8 - flapPulse * 4,
-          -vz * 0.55 + Math.cos(t * 0.5) * 0.25 - flapPulse * 2.5
-        );
+        if (!importedReady) {
+          const vx = state.vx ?? 0;
+          const vz = state.vz ?? 0;
+          // 滑翔时相对风衰减：大风会把布绕锚甩过头顶(链球效应)，轻风+托力才有安稳的翼形
+          const wf = 1 - glideBlend * 0.55;
+          windWorld.set(
+            (-vx * 0.55 + Math.sin(t * 0.7) * 0.35) * wf,
+            // 上升时布向下拖曳(物理正确)；下落的上掀风减半，防止把布掀过头顶
+            -vy * (vy > 0 ? 0.55 : 0.28) + glideBlend * 3.5 - flapPulse * 2,
+            // 滑翔托力是「斜后上方」：把布展开成翼形贴在身后，而不是正上方吹飞(避免与人分离)
+            (-vz * 0.55 + Math.cos(t * 0.5) * 0.25) * wf - glideBlend * 2.2 - flapPulse * 2.5
+          );
         windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
         // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
         for (let j = 0; j < outerCapeSim.cols; j++) {
           const k = j / (outerCapeSim.cols - 1) - 0.5;
-          shoulderLocal.set(k * 0.82, 1.02, -0.17 - 0.05 * Math.abs(k) * 2).applyEuler(bodyGroup.rotation).add(bodyGroup.position);
+          // 滑翔时锚点完全摆脱身体前倾并略后移：披风根钉在肩后上方，
+          // 斜后上的托力才能把布展开成翼（前倾会把锚旋到身前，布就被前界夹成一团）
+          anchorEuler.set(bodyGroup.rotation.x * (1 - glideBlend), bodyGroup.rotation.y, bodyGroup.rotation.z);
+          shoulderLocal
+            .set(k * 0.82, 1.02, -0.17 - glideBlend * 0.12 - 0.05 * Math.abs(k) * 2)
+            .applyEuler(anchorEuler)
+            .add(bodyGroup.position);
           outerPins[j * 3] = shoulderLocal.x;
           outerPins[j * 3 + 1] = shoulderLocal.y;
           outerPins[j * 3 + 2] = shoulderLocal.z;
