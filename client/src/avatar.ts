@@ -85,7 +85,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     seal: { url: "/models/seal.glb", scale: 1, y: 0, ry: 0 },
     owl: { url: "/models/owl.glb", scale: 1, y: 0, ry: 0 },
     hooded: { url: "/models/rogue-hooded.glb", scale: 1, y: 0, ry: 0 },
-    elaina: { url: "/models/elaina.glb", scale: 0.39, y: 1.29, ry: 0 }, // 站立身高校准到 ~1.6，脚底贴地
+    elaina: { url: "/models/elaina.glb", scale: 0.39, y: 0.57, ry: 0 }, // 模型原点=身体中心（载入时内部居中），脚底在中心下方 0.57
   };
   // 外部角色加载失败时继续使用下方程序化角色。
   let importedModel: THREE.Object3D | null = null;
@@ -165,6 +165,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           // 前段她一直低头，整段循环会显得总是垂着头）
           const loop = THREE.AnimationUtils.subclip(clip, "Action", Math.round(9.5 * 30), Math.round(12.5 * 30), 30);
           const action = importedMixer.clipAction(loop.duration > 0.2 ? loop : clip);
+          // GLB 文件本身没居中（静态包围盒中心在 z≈3.12 模型单位 ≈ 1.22 米，
+          // 全部来自场景级 Pivot 节点的静态位移——名牌偏移的根因）。
+          // 把每个直接子节点平移 −包围盒中心（模型局部单位），让身体中心落在模型原点上：
+          // 旋转（躺/滑翔俯仰）的轴心从此在身体中心而不是脚下方 1.2 米外。
+          // 量盒子前必须把模型自身的 position 清零——世界中心换算回局部单位时
+          // 会混入 glb.y/scale 的偏移（上一轮 y 多平移 1.46 单位的根因）
+          const keep = importedModel.position.y;
+          importedModel.position.set(0, 0, 0);
+          importedModel.updateMatrixWorld(true);
+          const box = new THREE.Box3().setFromObject(importedModel);
+          const bc = box.getCenter(new THREE.Vector3()).divideScalar(glb.scale);
+          importedModel.position.set(0, keep, 0);
+          for (const child of importedModel.children) {
+            child.position.x -= bc.x;
+            child.position.y -= bc.y;
+            child.position.z -= bc.z;
+          }
           importedActions.set("Action", action);
           importedActions.set("Unarmed_Idle", action);
         }
@@ -560,7 +577,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7;
 
       // 滑翔时名牌随肩线下压并前移：身体前倾后固定高度的名牌会飘在半空，远看像和角色脱开
-      nameSprite.position.y = 2.35 - glideBlend * 0.6;
+      if (elainaRoot) {
+        // 伊莱娜实际身高 ~1.14（含帽），名牌跟到 1.5；躺平时身体贴地，名牌也要落下来
+        const tagY = 1.5 - glideBlend * 0.35 - (sit ? 0.85 : 0);
+        nameSprite.position.y = THREE.MathUtils.lerp(nameSprite.position.y, tagY, Math.min(1, dt * 5));
+      } else {
+        nameSprite.position.y = 2.35 - glideBlend * 0.6;
+      }
       nameSprite.position.z = glideBlend * 0.3;
 
       // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
@@ -635,8 +658,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         let pitch = 0.08 * speedN + THREE.MathUtils.clamp(accelSm * 0.012, -0.12, 0.2); // 跑动前倾
         let lift = 0;
         if (sit) {
-          pitch = -Math.PI / 2; // 绕模型中心向后放平
-          lift = -2.24; // 旋转把身体甩到根上方，压回地面（两轮实测线性校准：身体贴地上方 ~0.3m）
+          pitch = -Math.PI / 2; // 绕身体中心向后放平
+          lift = -0.44; // 轴心已居中：把中心压到离地 ~0.13（背部厚度的一半）
         } else if (air === 2) {
           pitch = 0.85; // 滑翔俯冲角，与程序化小人一致
           lift = -0.05;
@@ -646,7 +669,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         elainaRoot.rotation.x = THREE.MathUtils.lerp(elainaRoot.rotation.x, pitch, kk);
         elainaRoot.rotation.z = THREE.MathUtils.lerp(elainaRoot.rotation.z, Math.sin(walkPhase) * 0.05 * speedN, kk);
         const bounce = air > 0 || sit ? 0 : Math.abs(Math.sin(walkPhase)) * (0.035 + 0.05 * speedN); // 步伐弹跳
-        elainaRoot.position.y = THREE.MathUtils.lerp(elainaRoot.position.y, elainaBaseY + lift, kk) + bounce;
+        // bounce 必须放在 lerp 目标里：加在外面会每帧累积，稳态抬高 bounce/kk（kk≈0.1 时放大十倍）
+        elainaRoot.position.y = THREE.MathUtils.lerp(elainaRoot.position.y, elainaBaseY + lift + bounce, kk);
 
         // ---- 手写肢体动作：在她的骨骼上做世界轴旋转（绑定姿态 × 增量） ----
         if (elainaBones) {
