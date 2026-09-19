@@ -102,14 +102,18 @@ export function createUI(handlers: {
     trackGrid.appendChild(card);
   });
 
-  // ---- 岛上的歌（共享曲库） ----
+  // ---- 岛上的歌（随身曲库：只看得到自己上传的，离岛自动收起） ----
+  let songOwner = "";
+  const setSongOwner = (id: string) => {
+    songOwner = id;
+  };
   async function loadSongs() {
     try {
-      const res = await fetch("/songs/list");
+      const res = await fetch(`/songs/list?owner=${encodeURIComponent(songOwner)}`);
       const songs: { id: string; name: string }[] = await res.json();
       songGrid.innerHTML = "";
       if (songs.length === 0) {
-        songGrid.innerHTML = `<div class="songs-empty">还没有人上传过歌，来当第一个吧</div>`;
+        songGrid.innerHTML = `<div class="songs-empty">你这次上岛还没有自己的歌——传一首，或贴个直链</div>`;
         return;
       }
       for (const s of songs.slice(0, 30)) {
@@ -122,7 +126,7 @@ export function createUI(handlers: {
         card.dataset.trackId = String(trackId);
         card.dataset.name = displayName;
         card.innerHTML = `<div class="dot" style="background:${meta.color};box-shadow:0 0 10px ${meta.color}"></div>
-          <div class="nm">${escapeHtml(displayName.slice(0, 18))}</div><div class="ds">旅人上传</div>`;
+          <div class="nm">${escapeHtml(displayName.slice(0, 18))}</div><div class="ds">我的歌 · 离岛即收</div>`;
         card.addEventListener("click", () => {
           handlers.onPickTrack(trackId, displayName);
           trackModal.classList.remove("open");
@@ -168,7 +172,7 @@ export function createUI(handlers: {
       }
 
       uploadCard.textContent = `正在上传「${file.name.slice(0, 16)}」…`;
-      const res = await fetch(`/songs/upload?name=${encodeURIComponent(file.name)}`, {
+      const res = await fetch(`/songs/upload?name=${encodeURIComponent(file.name)}&owner=${encodeURIComponent(songOwner)}`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: file,
@@ -177,7 +181,7 @@ export function createUI(handlers: {
       const { id } = await res.json();
       const displayName = file.name.replace(/\.[a-z0-9]+$/i, "");
       const trackId = CUSTOM_BASE + Number(id);
-      showToast(`「${displayName.slice(0, 14)}」已加入岛上的歌`);
+      showToast(`「${displayName.slice(0, 14)}」已放进你的随身曲库`);
       await loadSongs();
       handlers.onPickTrack(trackId, displayName);
       trackModal.classList.remove("open");
@@ -299,6 +303,8 @@ export function createUI(handlers: {
     toast(text: string, ms = 2600) {
       showToast(text, ms);
     },
+    /** 绑定随身曲库的主人（连接成功后调用，列表/上传都会带上） */
+    setSongOwner,
     /** 牵手邀请：显示提示条；返回撤销函数（超时/接受/婉拒时调用） */
     showInvite(name: string, onAccept: () => void, onReject: () => void) {
       hideInvite();

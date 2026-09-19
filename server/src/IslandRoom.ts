@@ -1,5 +1,6 @@
 import { Room, Client } from "colyseus";
 import { IslandState, Player } from "./state.js";
+import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
 const MAX_NAME_LEN = 12;
@@ -22,6 +23,10 @@ export class IslandRoom extends Room {
 
   onCreate() {
     this.maxClients = 64;
+
+    // 随身曲库：服务器重启即清空——歌只活在一次房间生命周期里
+    const cleared = clearAllSongs();
+    if (cleared > 0) console.log(`[island] 清理了上一轮遗留的 ${cleared} 首歌`);
 
     // 周期性对时，客户端用它把别人的 startedAt 换算成本地播放相位
     this.clock.setInterval(() => {
@@ -60,6 +65,9 @@ export class IslandRoom extends Room {
     this.unlinkHands(client.sessionId);
     for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
     this.state.players.delete(client.sessionId);
+    // 随身曲库：离岛即带走——他上传的歌自动删除
+    const removed = removeSongsOf(client.sessionId);
+    if (removed > 0) console.log(`[island] ${player?.name ?? "旅人"} 离开，随身曲库的 ${removed} 首歌已收起`);
     if (player) {
       console.log(`[island] ${player.name} 离开了岛 (${this.clients.length} 人在岛上)`);
     }

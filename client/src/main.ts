@@ -142,8 +142,11 @@ async function handleEnter(name: string) {
   });
   if (net) {
     ui.setStatus("online");
+    ui.setSongOwner(net.sessionId);
   } else {
     ui.setStatus("solo");
+    // 独自漫游时没有会话 id，用本地随机 id（HTTP 直传仍可用，重启时清理）
+    ui.setSongOwner("solo-" + Math.random().toString(36).slice(2, 10));
     npcs = new NpcDriver(remotes);
     ui.toast("岛上今天只有你——不过还有几位老住户在散步", 3600);
   }

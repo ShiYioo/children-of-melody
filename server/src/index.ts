@@ -1,18 +1,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import express from "express";
 import { defineServer, defineRoom } from "colyseus";
 import { IslandRoom } from "./IslandRoom.js";
+import { SONGS_DIR, addSong, songsOfOwner, songFileOf } from "./songs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(__dirname, "../../client/dist");
-
-// 共享曲库目录：用户上传的歌曲落在这里，附近的人按需拉取本地同步播放
-const SONGS_DIR = path.resolve(__dirname, "../songs");
-mkdirSync(SONGS_DIR, { recursive: true });
 
 const MIME: Record<string, string> = {
   ".mp3": "audio/mpeg",
@@ -83,7 +80,7 @@ const server = defineServer({
     island: defineRoom(IslandRoom),
   },
   express: (app) => {
-    // 上传：POST /songs/upload?name=歌名  (原始音频字节)
+    // 上传：POST /songs/upload?name=歌名&owner=会话id  (原始音频字节)
     app.post("/songs/upload", express.raw({ type: () => true, limit: `${UPLOAD_MAX_BYTES / 1024 / 1024}mb` }), (req, res) => {
       const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
       if (rateLimited(ip)) {
@@ -91,6 +88,7 @@ const server = defineServer({
         return;
       }
       const name = String(req.query.name ?? "未命名").slice(0, 40).replace(/[\\/:*?"<>|]/g, "_");
+      const owner = String(req.query.owner ?? "anonymous").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "anonymous";
       const body = req.body as Buffer;
       if (!body || body.length < 1024) {
         res.status(400).json({ error: "文件为空或太小" });
@@ -129,30 +127,27 @@ const server = defineServer({
       }
       const file = path.join(SONGS_DIR, id + ext);
       writeFile(file, body)
-        .then(() => res.json({ id, name }))
+        .then(() => {
+          addSong(id, name, owner);
+          res.json({ id, name });
+        })
         .catch((e: Error) => res.status(500).json({ error: e.message }));
     });
 
-    // 曲库列表
-    app.get("/songs/list", (_req, res) => {
-      const songs = readdirSync(SONGS_DIR)
-        .filter((f) => Object.keys(MIME).some((e) => f.endsWith(e)))
-        .map((f) => ({
-          id: Number(path.basename(f, path.extname(f))),
-          name: path.basename(f),
-          size: statSync(path.join(SONGS_DIR, f)).size,
-        }));
-      res.json(songs);
+    // 曲库列表：只返回 owner 自己上传的歌（随身曲库）
+    app.get("/songs/list", (req, res) => {
+      const owner = String(req.query.owner ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+      res.json(songsOfOwner(owner));
     });
 
-    // 文件下发
+    // 文件下发（任何人都可按 id 拉取——靠近你的人要能听见你正在播的歌）
     app.get("/songs/file/:id", (req, res) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         res.status(400).end();
         return;
       }
-      const hit = readdirSync(SONGS_DIR).find((f) => Number(path.basename(f, path.extname(f))) === id);
+      const hit = songFileOf(id);
       if (!hit) {
         res.status(404).end();
         return;
