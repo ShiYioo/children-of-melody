@@ -98,11 +98,23 @@ export class IslandRoom extends Room {
 
     // 换歌：记录曲目与服务器时间，附近的人据此本地同步播放。
     // resumeMs: 从暂停恢复时带上已播进度，断点续播。
+    // trackId 200 = 链接曲目：url 必须是 http(s) 音频直链，
+    // 服务器只保存字符串供各端自行拉取，不代理、不中转任何音频流。
     track: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
       p.trackId = clamp(m?.trackId | 0, -1, 9999);
       const resumeMs = clamp(m?.resumeMs | 0, 0, 24 * 3600 * 1000);
+      let url = "";
+      if (p.trackId === 200) {
+        const raw = typeof m?.url === "string" ? m.url.trim() : "";
+        if (/^https?:\/\/.+/i.test(raw) && raw.length <= 500 && !/[<>"']/i.test(raw)) {
+          url = raw;
+        } else {
+          p.trackId = -1;
+        }
+      }
+      p.songUrl = url;
       p.startedAt = p.trackId >= 0 ? Date.now() - resumeMs : 0;
       p.songName =
         p.trackId >= 100 && typeof m?.name === "string"

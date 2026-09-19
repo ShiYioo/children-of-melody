@@ -10,6 +10,7 @@ export function createUI(handlers: {
   onEnter: (name: string) => void;
   onAvatarChange: (model: AvatarModel) => void;
   onPickTrack: (id: number, name?: string) => void;
+  onPickUrl: (url: string, name: string) => void;
   onTogglePlay: () => void;
 }) {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -42,6 +43,25 @@ export function createUI(handlers: {
   const songGrid = $("songGrid");
   const uploadCard = $("uploadCard");
   const songFile = $("songFile") as HTMLInputElement;
+  const urlInput = $("urlInput") as HTMLInputElement;
+  const urlNameInput = $("urlNameInput") as HTMLInputElement;
+  const urlPlayBtn = $("urlPlayBtn");
+
+  // 链接点歌：贴一个音频直链立刻播放（支持 CORS 的直链有完整渐强体验）
+  urlPlayBtn?.addEventListener("click", () => {
+    const url = urlInput.value.trim();
+    if (!/^https?:\/\/.+/i.test(url)) {
+      showToast("先贴一个 http(s) 音频直链试试", 2600);
+      return;
+    }
+    handlers.onPickUrl(url, urlNameInput.value.trim().slice(0, 40));
+    trackModal.classList.remove("open");
+  });
+  urlInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") urlPlayBtn?.click();
+    e.stopPropagation(); // 输入框里的按键不进游戏快捷键
+  });
+  urlNameInput?.addEventListener("keydown", (e) => e.stopPropagation());
 
   const avatarNames: Array<{ id: AvatarModel; name: string; desc: string }> = [
     { id: "classic", name: "云朵旅人", desc: "原生渐强小人" },

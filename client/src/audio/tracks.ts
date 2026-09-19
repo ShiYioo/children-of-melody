@@ -122,10 +122,36 @@ export const CUSTOM_BASE = 100;
 export const isCustomTrack = (id: number) => id >= CUSTOM_BASE;
 export const songIdOf = (id: number) => id - CUSTOM_BASE;
 
-/** 任何曲目（生成式/自定义）的显示名与光环颜色 */
-export function trackMeta(trackId: number, songName = ""): { name: string; color: string } {
+/** 链接曲目固定编号：具体地址在 songUrl 字段里，服务器只存字符串不中转音频 */
+export const URL_TRACK = 200;
+export const isUrlTrack = (id: number) => id === URL_TRACK;
+
+/** 从链接里取个短名字（hostname） */
+export function urlHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "链接";
+  }
+}
+
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+/** 任何曲目（生成式/自定义/链接）的显示名与光环颜色 */
+export function trackMeta(trackId: number, songName = "", url = ""): { name: string; color: string } {
   const def = trackById(trackId);
   if (def) return { name: def.name, color: def.color };
+  if (isUrlTrack(trackId)) {
+    const hue = Math.round(hashStr(url || songName) * 360);
+    return { name: songName || urlHost(url) || "旅人的链接", color: hslToHex(hue / 360, 0.5, 0.66) };
+  }
   if (isCustomTrack(trackId)) {
     const hue = ((songIdOf(trackId) * 47) % 360 + 360) % 360;
     return { name: songName || "旅人的歌", color: hslToHex(hue / 360, 0.5, 0.66) };

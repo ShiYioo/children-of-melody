@@ -26,6 +26,7 @@ interface Entry {
   trackId: number;
   startedAt: number;
   songName: string;
+  songUrl: string; // 链接曲目的直链
   handWith: string; // 牵手对象 key（渲染光带用）
   speed: number; // 推算的移动速度（用于动画）
   lastPos: THREE.Vector3;
@@ -60,6 +61,7 @@ export class RemotePlayers {
       trackId: data.trackId ?? -1,
       startedAt: data.startedAt ?? 0,
       songName: data.songName ?? "",
+      songUrl: "",
       handWith: "",
       speed: 0,
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
@@ -91,8 +93,12 @@ export class RemotePlayers {
     return this.entries.get(key)?.songName ?? "";
   }
 
+  songUrlOf(key: string): string {
+    return this.entries.get(key)?.songUrl ?? "";
+  }
+
   /** 网络状态写入目标值 */
-  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number; songName: string; handWith: string }>) {
+  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number; songName: string; songUrl: string; handWith: string }>) {
     const e = this.entries.get(key);
     if (!e) return false;
     Object.assign(e.target, {
@@ -110,6 +116,7 @@ export class RemotePlayers {
     if (data.trackId !== undefined) e.trackId = data.trackId;
     if (data.startedAt !== undefined) e.startedAt = data.startedAt;
     if (data.songName !== undefined) e.songName = data.songName;
+    if (data.songUrl !== undefined) e.songUrl = data.songUrl;
     if (data.handWith !== undefined) e.handWith = data.handWith;
     return true;
   }
@@ -151,7 +158,7 @@ export class RemotePlayers {
     const out: RemoteInfo[] = [];
     for (const e of this.entries.values()) {
       const dist = e.avatar.group.position.distanceTo(selfPos);
-      const meta = trackMeta(e.trackId, e.songName);
+      const meta = trackMeta(e.trackId, e.songName, e.songUrl);
       out.push({
         key: e.key,
         name: e.name,
@@ -189,7 +196,7 @@ export class RemotePlayers {
       if (e.wasAir > 0 && air === 0) {
         e.avatar.land(); // 落地缓冲
         if (this.fx && selfDist < 60) {
-          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName).color), "land");
+          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName, e.songUrl).color), "land");
           if (selfDist < 22) this.fx.sfxLand();
         }
       }
@@ -197,7 +204,7 @@ export class RemotePlayers {
         e.avatar.flap();
         if (this.fx && selfDist < 22) this.fx.sfxFlap();
         if (this.fx && selfDist < 60) {
-          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName).color), "flap");
+          this.fx.burst(g.position.clone(), new THREE.Color(trackMeta(e.trackId, e.songName, e.songUrl).color), "flap");
         }
       }
       e.wasMov = e.target.mov;
@@ -205,7 +212,7 @@ export class RemotePlayers {
 
       const clarity = clarityMap.get(e.key) ?? 0;
       e.clarity = clarity;
-      const meta = trackMeta(e.trackId, e.songName);
+      const meta = trackMeta(e.trackId, e.songName, e.songUrl);
       const beat = beatMap?.get(e.key) ?? 0.35;
       e.avatar.setRing(e.trackId >= 0 ? new THREE.Color(meta.color) : null, clarity * (0.45 + 0.55 * beat));
       // 垂直速度从 y 差分估算（供空中姿势分层），水平速度按朝向近似（供披风风场）。

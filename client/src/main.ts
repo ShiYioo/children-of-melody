@@ -4,7 +4,7 @@ import { HandLinks } from "./world/handlink";
 import { PlayerControls } from "./controls";
 import { createAvatar, type Avatar, type AvatarModel } from "./avatar";
 import { MusicEngine, AUDIBLE_R } from "./audio/engine";
-import { trackById, trackMeta } from "./audio/tracks";
+import { trackById, trackMeta, URL_TRACK, urlHost } from "./audio/tracks";
 import { RemotePlayers } from "./remote";
 import { connectIsland, type NetHandle } from "./net";
 import { NpcDriver } from "./npcs";
@@ -20,6 +20,7 @@ const app = document.getElementById("app")!;
 const world = createWorld(app);
 const controls = new PlayerControls(world.camera, app);
 const music = new MusicEngine();
+music.onNotice = (msg) => ui && ui.toast(msg, 3600);
 const remotes = new RemotePlayers();
 remotes.bindScene(
   (o) => world.addToScene(o),
@@ -69,6 +70,13 @@ const ui = createUI({
     ui.setPlayState("playing");
     music.sfxChime();
   },
+  onPickUrl: (url, name) => {
+    music.setOwnTrack(URL_TRACK, name, url);
+    net?.sendTrack(URL_TRACK, name, undefined, url);
+    ui.setNowPlaying(URL_TRACK, name || urlHost(url));
+    ui.setPlayState("playing");
+    music.sfxChime();
+  },
   onTogglePlay: () => {
     if (music.ownTrackId < 0) {
       ui.openPicker();
@@ -76,7 +84,7 @@ const ui = createUI({
     }
     if (music.isOwnPaused) {
       const resumeMs = music.resumeOwn(ui.currentSongName);
-      net?.sendTrack(music.ownTrackId, ui.currentSongName, resumeMs);
+      net?.sendTrack(music.ownTrackId, ui.currentSongName, resumeMs, music.ownUrl);
       ui.setPlayState("playing");
     } else {
       music.pauseOwn();
@@ -157,7 +165,7 @@ function spawnSelf() {
   selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true, model: selectedAvatar });
   world.addToScene(selfAvatar.group);
   // 光遇式的动作反馈：动作 → 音效 + 瞬态光效
-  const ringColor = () => new THREE.Color(trackMeta(music.ownTrackId, ui.currentSongName).color);
+  const ringColor = () => new THREE.Color(trackMeta(music.ownTrackId, ui.currentSongName, music.ownUrl).color);
   controls.onLand = () => {
     selfAvatar?.land();
     music.sfxLand();
@@ -309,6 +317,7 @@ function tick(dt: number) {
       dist: i.dist,
       clockOffset,
       songName: remotes.songNameOf(i.key),
+      songUrl: remotes.songUrlOf(i.key),
     }))
   );
   // 光环节拍能量（文件源用实时频谱，生成式用相位）
@@ -379,7 +388,7 @@ function tick(dt: number) {
   // 自己的光环（听歌且未暂停时亮着）
   if (selfAvatar) {
     const beat = music.beatEnv("self");
-    const meta = trackMeta(music.ownTrackId, ui.currentSongName);
+    const meta = trackMeta(music.ownTrackId, ui.currentSongName, music.ownUrl);
     const active = music.ownTrackId >= 0 && !music.isOwnPaused;
     selfAvatar.setRing(active ? new THREE.Color(meta.color) : null, active ? 0.5 + 0.4 * beat : 0);
   }

@@ -1,4 +1,4 @@
-import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, type TrackDef } from "./tracks";
+import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, isUrlTrack, type TrackDef } from "./tracks";
 
 /**
  * 音乐引擎：渐强之岛的心脏。
@@ -26,10 +26,11 @@ function seeded(seed: number) {
 }
 
 interface Source {
-  kind: "gen" | "file";
+  kind: "gen" | "file" | "url";
   def: TrackDef | null;
   songId: number; // file 源的服务器曲目 id
   songName: string;
+  url: string; // url 源的音频直链
   bus: GainNode; // 音符/文件汇入点
   filter: BiquadFilterNode | null; // 远端专属低通
   gain: GainNode; // 最终音量（距离控制）
@@ -41,6 +42,7 @@ interface Source {
   bufDur: number;
   analyser: AnalyserNode | null; // file 源的实时能量（光环脉动）
   trackId: number;
+  html: HTMLAudioElement | null; // 无 CORS 链接的降级播放（纯音量，无滤波）
 }
 
 export interface MixInfo {
@@ -55,7 +57,11 @@ export class MusicEngine {
   private sources = new Map<string, Source>();
   private ownKey = "self";
   ownTrackId = -1;
-  private bufCache = new Map<number, Promise<AudioBuffer>>();
+  /** 自己当前链接曲目的 URL（暂停恢复时带上） */
+  ownUrl = "";
+  /** 引擎提示（降级/失败等，接 UI toast） */
+  onNotice: ((msg: string) => void) | null = null;
+  private bufCache = new Map<string, Promise<AudioBuffer>>();
   private freqData: Uint8Array<ArrayBuffer> | null = null;
   private ownStartWall = 0; // 自己当前曲目开始时的墙钟时间
   private ownPaused = false;
@@ -115,7 +121,7 @@ export class MusicEngine {
 
   // ---------- 曲源管理 ----------
 
-  private makeSource(trackId: number, songName: string, startedAtLocalMs: number, remote: boolean): Source {
+  private makeSource(trackId: number, songName: string, startedAtLocalMs: number, remote: boolean, url = ""): Source {
     const ctx = this.ctx!;
     const bus = ctx.createGain();
     const gain = ctx.createGain();
@@ -132,8 +138,9 @@ export class MusicEngine {
     }
 
     const custom = isCustomTrack(trackId);
-    const def = custom ? null : trackById(trackId) ?? null;
-    if (custom) {
+    const urlTrack = isUrlTrack(trackId) && /^https?:\/\//.test(url);
+    const def = !custom && !urlTrack ? trackById(trackId) ?? null : null;
+    if (custom || urlTrack) {
       analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       bus.connect(analyser);
@@ -146,10 +153,11 @@ export class MusicEngine {
     const nextBeat = def ? Math.max(0, Math.ceil((ctx.currentTime - startCtx) / beatSec)) : 0;
 
     const src: Source = {
-      kind: custom ? "file" : "gen",
+      kind: urlTrack ? "url" : custom ? "file" : "gen",
       def,
       songId: custom ? songIdOf(trackId) : -1,
       songName,
+      url: urlTrack ? url : "",
       bus,
       filter,
       gain,
@@ -161,20 +169,93 @@ export class MusicEngine {
       bufDur: 0,
       analyser,
       trackId,
+      html: null,
     };
 
-    if (custom) {
+    if (urlTrack) {
+      this.attachUrlBuffer(src, url, Math.max(0, elapsedMs) / 1000, remote);
+    } else if (custom) {
       this.attachFileBuffer(src, Math.max(0, elapsedMs) / 1000);
     }
     return src;
   }
 
+  /** 链接曲目：先尝试 fetch+decode（链接带 CORS → 完整渐强管线）；
+   *  失败则降级为 <audio> 纯音量播放（无滤波渐清晰，靠近只变大声） */
+  private attachUrlBuffer(src: Source, url: string, elapsedSec: number, remote: boolean) {
+    const key = "u:" + url;
+    if (!this.bufCache.has(key)) {
+      this.bufCache.set(
+        key,
+        (async () => {
+          const res = await fetch(url, { mode: "cors" });
+          if (!res.ok) throw new Error(`链接拉取失败 ${res.status}`);
+          const data = await res.arrayBuffer();
+          return await this.ctx!.decodeAudioData(data);
+        })()
+      );
+    }
+    this.bufCache
+      .get(key)!
+      .then((buf) => {
+        if (!this.sources.has(this.ownKey) && ![...this.sources.values()].includes(src)) return;
+        if (src.url !== url) return;
+        if (buf.duration > 15 * 60) {
+          this.onNotice?.("链接的曲子太长了（超过 15 分钟），换一首吧");
+          this.stopSource(src);
+          return;
+        }
+        const ctx = this.ctx!;
+        src.bufDur = buf.duration;
+        const node = ctx.createBufferSource();
+        node.buffer = buf;
+        node.loop = true;
+        node.connect(src.bus);
+        node.start(ctx.currentTime, elapsedSec % buf.duration);
+        src.bufNode = node;
+      })
+      .catch(() => {
+        // CORS 拒绝或解码失败 → 降级
+        if (src.url !== url) return;
+        this.startDegraded(src, url, elapsedSec, remote);
+      });
+  }
+
+  /** 无 CORS 链接的降级播放：普通 <audio> 元素，只有音量可控 */
+  private startDegraded(src: Source, url: string, elapsedSec: number, remote: boolean) {
+    if (src.url !== url || src.html) return;
+    const el = new Audio(url);
+    el.loop = true;
+    el.preload = "auto";
+    el.volume = 0;
+    el.addEventListener(
+      "loadedmetadata",
+      () => {
+        if (Number.isFinite(el.duration) && el.duration > 0) el.currentTime = elapsedSec % el.duration;
+      },
+      { once: true }
+    );
+    el.play().catch(() => {
+      // 自动播放策略或链接失效
+      if (src.url === url) this.onNotice?.("这个链接播不出来，换一个试试");
+    });
+    src.html = el;
+    if (!remote) el.volume = 0.62;
+    if (!this.degradedNotified) {
+      this.degradedNotified = true;
+      this.onNotice?.("该链接不支持渐清晰滤波，以基础模式播放（靠近只变大声）");
+    }
+  }
+
+  private degradedNotified = false;
+
   /** 拉取歌曲文件并循环播放（进度与大家保持一致） */
   private attachFileBuffer(src: Source, elapsedSec: number) {
     const songId = src.songId;
-    if (!this.bufCache.has(songId)) {
+    const key = "f:" + songId;
+    if (!this.bufCache.has(key)) {
       this.bufCache.set(
-        songId,
+        key,
         (async () => {
           const res = await fetch(`/songs/file/${songId}`);
           if (!res.ok) throw new Error(`歌曲 ${songId} 拉取失败`);
@@ -184,7 +265,7 @@ export class MusicEngine {
       );
     }
     this.bufCache
-      .get(songId)!
+      .get(key)!
       .then((buf) => {
         // 异步加载完成时，这条源可能已经被换掉/移除
         if (this.sources.get(this.ownKey) !== src && ![...this.sources.values()].includes(src)) return;
@@ -206,9 +287,10 @@ export class MusicEngine {
       .catch((e) => console.warn("[music] 无法播放自定义曲目", e));
   }
 
-  /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字 */
-  setOwnTrack(trackId: number, songName = "") {
+  /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字，链接曲目传 URL_TRACK 与直链 */
+  setOwnTrack(trackId: number, songName = "", url = "") {
     this.ownTrackId = trackId;
+    this.ownUrl = isUrlTrack(trackId) ? url : "";
     this.ownPaused = false;
     this.ownElapsedMs = 0;
     this.ownStartWall = Date.now();
@@ -216,7 +298,7 @@ export class MusicEngine {
     if (existing) this.stopSource(existing);
     this.sources.delete(this.ownKey);
     if (trackId < 0 || !this.ctx) return;
-    const src = this.makeSource(trackId, songName, Date.now(), false);
+    const src = this.makeSource(trackId, songName, Date.now(), false, url);
     src.gain.gain.value = 0.62;
     this.sources.set(this.ownKey, src);
   }
@@ -238,21 +320,21 @@ export class MusicEngine {
     this.ownPaused = false;
     const startedAt = Date.now() - this.ownElapsedMs;
     this.ownStartWall = startedAt;
-    const src = this.makeSource(this.ownTrackId, songName, startedAt, false);
+    const src = this.makeSource(this.ownTrackId, songName, startedAt, false, this.ownUrl);
     src.gain.gain.value = 0.62;
     this.sources.set(this.ownKey, src);
     return this.ownElapsedMs;
   }
 
   /** 同步/更新一首都端听到的歌 */
-  syncRemote(key: string, trackId: number, startedAtServerMs: number, clockOffset: number, songName = "") {
+  syncRemote(key: string, trackId: number, startedAtServerMs: number, clockOffset: number, songName = "", url = "") {
     if (trackId < 0) {
       this.removeRemote(key);
       return;
     }
     const existing = this.sources.get(key);
     const startedLocal = startedAtServerMs - clockOffset;
-    if (existing && existing.trackId === trackId) {
+    if (existing && existing.trackId === trackId && existing.url === url) {
       // 已在播：校对相位（漂移超过阈值才重排，避免抖动）
       const elapsedSec = Math.max(0, (Date.now() - startedLocal) / 1000);
       if (existing.kind === "gen" && existing.def) {
@@ -272,7 +354,7 @@ export class MusicEngine {
       return;
     }
     this.removeRemote(key);
-    this.sources.set(key, this.makeSource(trackId, songName, startedLocal, true));
+    this.sources.set(key, this.makeSource(trackId, songName, startedLocal, true, url));
   }
 
   private stopSource(src: Source) {
@@ -281,6 +363,15 @@ export class MusicEngine {
       src.bufNode?.stop();
     } catch {
       /* 已停止 */
+    }
+    if (src.html) {
+      try {
+        src.html.pause();
+        src.html.src = "";
+      } catch {
+        /* 忽略 */
+      }
+      src.html = null;
     }
     const bus = src.bus;
     setTimeout(() => bus.disconnect(), 400);
@@ -392,10 +483,10 @@ export class MusicEngine {
   // ---------- 距离混音 ----------
 
   /**
-   * @param listeners 每个远处听歌人 { key, trackId, startedAt(服务器ms), dist, songName }
+   * @param listeners 每个远处听歌人 { key, trackId, startedAt(服务器ms), dist, songName, songUrl }
    * @returns 每个人的清晰度（供光环与 UI 使用）
    */
-  mix(listeners: Array<{ key: string; trackId: number; startedAt: number; dist: number; clockOffset: number; songName?: string }>): Map<string, number> {
+  mix(listeners: Array<{ key: string; trackId: number; startedAt: number; dist: number; clockOffset: number; songName?: string; songUrl?: string }>): Map<string, number> {
     if (!this.ctx || this.ctx.state !== "running") return new Map();
     const clarityMap = new Map<string, number>();
 
@@ -416,29 +507,32 @@ export class MusicEngine {
         const src = this.sources.get(key)!;
         src.gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
         src.filter?.frequency.setTargetAtTime(320, this.ctx.currentTime, 0.3);
+        if (src.html) src.html.volume = 0;
         clarityMap.set(key, 0);
       }
     }
 
     const now = this.ctx.currentTime;
     for (const l of audible) {
-      this.syncRemote(l.key, l.trackId, l.startedAt, l.clockOffset, l.songName ?? "");
+      this.syncRemote(l.key, l.trackId, l.startedAt, l.clockOffset, l.songName ?? "", l.songUrl ?? "");
       const src = this.sources.get(l.key);
       if (!src) continue;
       const gain = 0.78 * Math.pow(l.clarity, 1.5);
       const cutoff = 320 + Math.pow(l.clarity, 3) * 14800;
       src.gain.gain.setTargetAtTime(gain, now, 0.18);
       src.filter?.frequency.setTargetAtTime(cutoff, now, 0.2);
+      // 降级链接源：<audio> 只能控音量，没有滤波渐清晰
+      if (src.html) src.html.volume = Math.min(1, gain);
       clarityMap.set(l.key, l.clarity);
     }
     return clarityMap;
   }
 
-  /** 光环节拍包络（0~1，每拍衰减）；文件源用实时频谱能量 */
+  /** 光环节拍包络（0~1，每拍衰减）；文件/链接源用实时频谱能量 */
   beatEnv(key: string): number {
     const src = this.sources.get(key);
     if (!src || !this.ctx) return 0;
-    if (src.kind === "file" && src.analyser) {
+    if ((src.kind === "file" || src.kind === "url") && src.analyser && !src.html) {
       if (!this.freqData || this.freqData.length !== src.analyser.frequencyBinCount) {
         this.freqData = new Uint8Array(src.analyser.frequencyBinCount);
       }
@@ -446,6 +540,11 @@ export class MusicEngine {
       let sum = 0;
       for (let i = 0; i < this.freqData.length; i++) sum += this.freqData[i];
       return Math.min(1, sum / this.freqData.length / 96);
+    }
+    if (src.kind === "url" && src.html) {
+      // 降级链接：没有频谱可看，用时间相位模拟节拍脉动
+      const phase = ((this.ctx.currentTime - src.startCtx) / 0.73) % 1;
+      return Math.pow(1 - phase, 2.2);
     }
     if (!src.def) return 0;
     const beatSec = 60 / src.def.bpm;

@@ -19,6 +19,7 @@ interface PlayerLike {
   trackId: number;
   startedAt: number;
   songName: string;
+  songUrl?: string;
   hue: number;
   avatar: AvatarModel;
   handWith?: string;
@@ -40,7 +41,7 @@ export interface NetHandle {
   /** 服务器时间 - 本地时间（把别人的 startedAt 换算到本地时钟） */
   clockOffset: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
-  sendTrack: (trackId: number, name?: string, resumeMs?: number) => void;
+  sendTrack: (trackId: number, name?: string, resumeMs?: number, url?: string) => void;
   sendHandInvite: (to: string) => void;
   sendHandAccept: (to: string) => void;
   sendHandReject: (to: string) => void;
@@ -134,8 +135,8 @@ export async function connectIsland(
       lastSent = now;
       room.send("pos", p);
     },
-    sendTrack(trackId, name, resumeMs) {
-      room.send("track", { trackId, name, resumeMs });
+    sendTrack(trackId, name, resumeMs, url) {
+      room.send("track", { trackId, name, resumeMs, url });
     },
     sendHandInvite(to) {
       room.send("hand-invite", { to });

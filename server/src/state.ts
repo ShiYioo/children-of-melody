@@ -15,6 +15,7 @@ export class Player extends Schema {
   @type("int16") trackId: number = -1; // -1 没在听；0-5 生成式曲库；100+ 自定义曲目(100+songId)
   @type("number") startedAt: number = 0; // 服务器纪元的开始播放时间(ms)
   @type("string") songName: string = ""; // 自定义曲目的显示名
+  @type("string") songUrl: string = ""; // 链接曲目的音频直链（只存字符串，不代理音频）
   @type("uint8") hue: number = 0; // 披风色相 0-359
   @type("string") avatar: string = "classic"; // 角色外观
   @type("string") handWith: string = ""; // 牵手对象 sessionId；空 = 单独一人
