@@ -351,6 +351,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const UP_AXIS = new THREE.Vector3(0, 1, 0);
   const outerPins = new Float32Array(13 * 3); // cols=12+1 冗余一位无妨，step 按 sim.cols 读
   const innerPins = new Float32Array(11 * 3);
+  let wingPose: Float32Array | null = null; // 滑翔翼形目标姿态（懒分配）
 
   return {
     group,
@@ -403,7 +404,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       bodyGroup.rotation.x =
         -0.5 * sitLerp +
         (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
-        0.6 * glideBlend +
+        0.92 * glideBlend +
         0.15 * jumpBlend * (1 - glideBlend);
       // 压弯（整体侧倾）
       group.rotation.z = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
@@ -424,25 +425,25 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const kneeL = Math.max(0, Math.sin(walkPhase - 1.15)) * kneeBase;
       const kneeR = Math.max(0, Math.sin(walkPhase + Math.PI - 1.15)) * kneeBase;
 
-      // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 后展 + sit 盘腿
+      // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 并拢后掠（与躯干轴对齐） + sit 盘腿
       legL.root.rotation.x =
-        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 0.3 * glideBlend - 1.45 * sitLerp;
+        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp;
       legL.joint.rotation.x =
-        kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend + 0.25 * glideBlend + 1.45 * sitLerp;
+        kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp;
       legR.root.rotation.x =
-        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 0.3 * glideBlend - 1.45 * sitLerp;
+        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp;
       legR.joint.rotation.x =
-        kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend + 0.25 * glideBlend + 1.45 * sitLerp;
+        kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp;
 
-      // 臂：walk 反相摆 + rise 后上摆 + fall 侧举 + glide 张翼 + sit 放前
+      // 臂：walk 反相摆 + rise 后上摆 + fall 侧举 + glide 向前上方伸出（从翼面前缘探出，不被布盖住） + sit 放前
       const armSwL = -strideL;
       const armSwR = -strideR;
       armL.root.rotation.x =
-        armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.08 * glideBlend - 0.5 * sitLerp;
+        armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp;
       armR.root.rotation.x =
-        armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.08 * glideBlend - 0.5 * sitLerp;
-      armL.root.rotation.z = 0.16 + 0.95 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp;
-      armR.root.rotation.z = -0.16 - 0.95 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp;
+        armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp;
+      armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp;
+      armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp;
       // 肘：跑步更弯、滑翔前伸、其余自然微弯
       const elbow = -(0.3 + (0.35 + speedN * 0.55) * walkAmp + 0.25 * riseBlend + 0.5 * glideBlend + 0.15 * fallBlend) * (1 - sitLerp) - 0.35 * sitLerp;
       armL.joint.rotation.x = elbow;
@@ -451,7 +452,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       // 头：待机慢张望（光遇小人会东看看西看看）+ 滑翔抬头看前方
       headGroup.rotation.y = (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26;
       headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
-      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
+      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7;
+
+      // 滑翔时名牌随肩线下压：身体前倾后固定 2.35 高度的名牌会飘在半空，远看像和角色脱开
+      nameSprite.position.y = 2.35 - glideBlend * 0.6;
 
       // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
         if (!importedReady) {
@@ -462,9 +466,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           windWorld.set(
             (-vx * 0.55 + Math.sin(t * 0.7) * 0.35) * wf,
             // 上升时布向下拖曳(物理正确)；下落的上掀风减半，防止把布掀过头顶
-            -vy * (vy > 0 ? 0.55 : 0.28) + glideBlend * 3.5 - flapPulse * 2,
-            // 滑翔托力是「斜后上方」：把布展开成翼形贴在身后，而不是正上方吹飞(避免与人分离)
-            (-vz * 0.55 + Math.cos(t * 0.5) * 0.25) * wf - glideBlend * 2.2 - flapPulse * 2.5
+            -vy * (vy > 0 ? 0.55 : 0.28) + glideBlend * 1.1 - flapPulse * 2,
+            // 滑翔成形交给翼形姿态混合（见下），这里只保留轻微气流参与残余抖动
+            (-vz * 0.55 + Math.cos(t * 0.5) * 0.25) * wf - glideBlend * 0.7 - flapPulse * 2.5
           );
         windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
         // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
@@ -481,7 +485,43 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           outerPins[j * 3 + 1] = shoulderLocal.y;
           outerPins[j * 3 + 2] = shoulderLocal.z;
         }
-        outerCapeSim.step(dt, outerPins, windWorld);
+        // 滑翔翼形：光遇滑翔时披风张开成翼。纯靠风吹只会把布拉成拖在身后的布条
+        // （远看就像披风和人物分离），所以这里直接给出目标姿态，与物理位形混合输出：
+        // 前缘钉在肩线，后缘绕肩线向后上方扫开并展宽，附飞行涟漪；物理只保留少量抖动。
+        let pose: Float32Array | null = null;
+        if (glideBlend > 0.02) {
+          if (!wingPose) wingPose = new Float32Array(outerCapeSim.cols * outerCapeSim.rows * 3);
+          pose = wingPose;
+          const cols = outerCapeSim.cols;
+          const rows = outerCapeSim.rows;
+          for (let i = 0; i < rows; i++) {
+            const tc = i / (rows - 1); // 0=前缘(肩) 1=后缘
+            // 展翼角：翼面基本贴着肩线向后展开，后缘仅微微上扬（12°~20°）。
+            // 后缘扫太高会变成「悬在头顶的伞」，从背后看像与肩部分离
+            const phi = 1.35 + 0.35 * tc;
+            const chord = 0.9 * tc;
+            const camber = Math.sin(Math.PI * tc) * 0.12; // 翼面中段鼓成弧（翼型弯度）
+            for (let j = 0; j < cols; j++) {
+              const k = j / (cols - 1) - 0.5;
+              const o = (i * cols + j) * 3;
+              const flutter = Math.sin(t * 3.1 + tc * 6.5 + j * 0.5);
+              const flutter2 = Math.cos(t * 2.7 + tc * 5.5 + j * 0.45);
+              const tip = 4 * k * k; // 0=翼根 1=翼尖
+              wingPose[o] = outerPins[j * 3] * (1 + 1.35 * tc); // 翼展从肩宽张到 ~2.3 倍
+              wingPose[o + 1] =
+                outerPins[j * 3 + 1] -
+                Math.cos(phi) * chord +
+                tip * 0.3 * (0.3 + 0.7 * tc) + // 翼尖轻微上反角（V 形）
+                flutter * 0.07 * (0.3 + 0.7 * tc);
+              wingPose[o + 2] =
+                outerPins[j * 3 + 2] -
+                Math.sin(phi) * chord * (1 - tip * 0.22) - // 翼尖略回收，形成后掠
+                camber +
+                flutter2 * 0.06 * (0.3 + 0.7 * tc);
+            }
+          }
+        }
+        outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9);
       }
 
       // 眼睛：偶尔眨一下（scale.y 压扁）

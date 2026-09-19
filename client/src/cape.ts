@@ -56,8 +56,11 @@ export class CapeSim {
    * @param dt 帧间隔
    * @param pins 顶行锚点（局部坐标，每 3 个一组，长度 = cols*3），由肩部世界位置换算而来
    * @param windLocal 作用于布的合外力（局部坐标系）：重力由内部加重
+   * @param wingPose 滑翔翼形目标姿态（与 pos 同构）；物理位形与它按 wingBlend 插值后输出，
+   *                 物理内部状态不受影响，退出滑翔时布料无跳变地回到纯仿真
+   * @param wingBlend 0=纯物理 1=纯翼形
    */
-  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3) {
+  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0) {
     const gravity = this.opts.gravity ?? 14;
     const damping = this.opts.damping ?? 0.985;
     const iters = this.opts.iters ?? 5;
@@ -165,13 +168,17 @@ export class CapeSim {
       }
     }
 
-    (this.geo.attributes.position as THREE.BufferAttribute).copyArray(this.pos);
+    const attr = this.geo.attributes.position as THREE.BufferAttribute;
+    if (wingPose && wingBlend > 0) {
+      const b = Math.min(1, wingBlend);
+      const out = attr.array as Float32Array;
+      for (let v = 0; v < this.pos.length; v++) out[v] = this.pos[v] + (wingPose[v] - this.pos[v]) * b;
+    } else {
+      attr.copyArray(this.pos);
+    }
     // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面
-    {
-      const attr = this.geo.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < attr.count; i++) {
-        if (attr.getZ(i) > -0.06) attr.setZ(i, -0.06);
-      }
+    for (let i = 0; i < attr.count; i++) {
+      if (attr.getZ(i) > -0.06) attr.setZ(i, -0.06);
     }
     this.geo.attributes.position.needsUpdate = true;
     this.geo.computeVertexNormals();
