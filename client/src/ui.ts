@@ -46,6 +46,11 @@ export function createUI(handlers: {
   const avatarNames: Array<{ id: AvatarModel; name: string; desc: string }> = [
     { id: "classic", name: "云朵旅人", desc: "原生渐强小人" },
     { id: "hooded", name: "兜帽旅人", desc: "披风与兜帽" },
+    { id: "corgi", name: "柯基", desc: "摇着尾巴散步" },
+    { id: "duck", name: "小鸭子", desc: "嘎嘎的暖黄色" },
+    { id: "seal", name: "小海豹", desc: "软绵绵的海风" },
+    { id: "owl", name: "小猫头鹰", desc: "夜色里的朋友" },
+    { id: "platypus", name: "鸭嘴兽", desc: "圆脑袋旅行家" },
     { id: "minion", name: "圆滚精灵", desc: "软乎乎的小伙伴" },
   ];
   avatarNames.forEach((choice, index) => {

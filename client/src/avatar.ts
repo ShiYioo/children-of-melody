@@ -14,7 +14,7 @@ import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
  *  - 身体带一圈淡淡的轮廓光
  */
 
-export type AvatarModel = "classic" | "hooded" | "minion";
+export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "platypus" | "seal" | "owl";
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
@@ -123,6 +123,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   group.add(bodyGroup);
 
   const modelChoice = opts.model ?? "classic";
+  const animalModels = new Set<AvatarModel>(["minion", "corgi", "duck", "platypus", "seal", "owl"]);
   // 外部角色加载失败时继续使用下方程序化角色。
   let importedModel: THREE.Object3D | null = null;
   let importedMixer: THREE.AnimationMixer | null = null;
@@ -141,7 +142,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     importedCurrent = name;
   };
   if (modelChoice !== "classic") new GLTFLoader().load(
-    modelChoice === "minion" ? "/models/minion-a01.glb" : "/models/rogue-hooded.glb",
+    animalModels.has(modelChoice) ? `/models/${modelChoice === "minion" ? "minion-a01" : modelChoice}.glb` : "/models/rogue-hooded.glb",
     (gltf) => {
       importedModel = SkeletonUtils.clone(gltf.scene);
       importedModel.traverse((obj) => {
@@ -157,12 +158,15 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       group.add(importedModel);
       bodyGroup.visible = false;
       importedMixer = new THREE.AnimationMixer(importedModel);
-      const clips = modelChoice === "minion" && gltf.animations[0]
-        ? [THREE.AnimationUtils.subclip(gltf.animations[0], "idle", 0, 30, 24)]
+      const clips = animalModels.has(modelChoice) && gltf.animations[0]
+        ? [
+            THREE.AnimationUtils.subclip(gltf.animations[0], "idle", 0, 30, 24),
+            ...(modelChoice !== "minion" ? [THREE.AnimationUtils.subclip(gltf.animations[0], "walk", 90, 120, 24)] : []),
+          ]
         : gltf.animations;
       for (const clip of clips) importedActions.set(clip.name, importedMixer.clipAction(clip));
       importedReady = true;
-      playImported(modelChoice === "minion" ? "idle" : "Unarmed_Idle", true);
+      playImported(animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
     },
     undefined,
     () => {
@@ -412,7 +416,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     animate(dt, t, speed, sit, air = 0, yawVel = 0, state = {}) {
       importedMixer?.update(dt);
       if (importedReady) {
-        if (modelChoice === "minion") playImported("idle", true);
+        if (animalModels.has(modelChoice)) playImported(speed > 0.2 && modelChoice !== "minion" ? "walk" : "idle", true);
         else if (sit) playImported("Sit_Floor_Idle", true);
         else if (air === 2) playImported("Jump_Idle", true);
         else if (air === 1) playImported("Jump_Start", false);

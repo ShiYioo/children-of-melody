@@ -3,7 +3,7 @@ import { IslandState, Player } from "./state.js";
 
 const ISLAND_RADIUS = 58;
 const MAX_NAME_LEN = 12;
-const AVATARS = new Set(["classic", "hooded", "minion"]);
+const AVATARS = new Set(["classic", "hooded", "minion", "corgi", "duck", "platypus", "seal", "owl"]);
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
