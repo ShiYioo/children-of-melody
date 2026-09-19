@@ -6,49 +6,6 @@ import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
 
 /**
- * 动画供体：KayKit 人形动画库（rogue-hooded.glb 里带了整套走/跑/跳/躺/坐）。
- * 伊莱娜的 GLB 只有一段展示动画，跑/飞/躺等状态动作从这里运行时重定向
- * （SkeletonUtils.retargetClip 按骨骼名映射，模块级缓存只下载一次）。
- */
-let donorPromise: Promise<{ root: THREE.Object3D; clips: THREE.AnimationClip[] }> | null = null;
-function loadAnimDonor() {
-  donorPromise ??= new GLTFLoader()
-    .loadAsync("/models/rogue-hooded.glb")
-    .then((g) => {
-      g.scene.updateMatrixWorld(true);
-      return { root: g.scene, clips: g.animations };
-    });
-  return donorPromise;
-}
-
-/** 按前缀找骨骼（伊莱娜的骨骼名带唯一后缀，如 arm.l_0106） */
-function findBone(root: THREE.Object3D, prefix: string): THREE.Bone | null {
-  let hit: THREE.Bone | null = null;
-  root.traverse((o) => {
-    if (!hit && (o as THREE.Bone).isBone && o.name.startsWith(prefix)) hit = o as THREE.Bone;
-  });
-  return hit;
-}
-
-/** retargetClip 要求传入的 Object3D 自带 .skeleton（SkinnedMesh 才有）——
- *  给场景根临时挂上第一个 SkinnedMesh 的骨架即可（根的子树里也有全部骨骼，轨道绑定能找到）。
- *  同时挂 .bones：重定向产物的轨道名是「.bones[名].xxx」， mixer 根需要 bones 数组才能绑定 */
-function withSkeleton(root: THREE.Object3D): THREE.Object3D {
-  const r = root as unknown as { skeleton?: THREE.Skeleton; bones?: THREE.Bone[] };
-  if (r.skeleton) return root;
-  const found: THREE.Skeleton[] = [];
-  root.traverse((o) => {
-    if (found.length === 0 && (o as THREE.SkinnedMesh).isSkinnedMesh) found.push((o as THREE.SkinnedMesh).skeleton);
-  });
-  const sk = found[0];
-  if (sk) {
-    r.skeleton = sk;
-    r.bones = sk.bones;
-  }
-  return root;
-}
-
-/**
  * 光遇风小人 · 二代
  *
  * 建模参考 Sky: Children of the Light：
@@ -121,7 +78,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     seal: { url: "/models/seal.glb", scale: 1, y: 0, ry: 0 },
     owl: { url: "/models/owl.glb", scale: 1, y: 0, ry: 0 },
     hooded: { url: "/models/rogue-hooded.glb", scale: 1, y: 0, ry: 0 },
-    elaina: { url: "/models/elaina.glb", scale: 0.5, y: 0.765, ry: 0 }, // 居中后高 3.06，×0.5≈1.53，脚底抬回地面
+    elaina: { url: "/models/elaina.glb", scale: 0.39, y: 1.29, ry: 0 }, // 站立身高校准到 ~1.6，脚底贴地
   };
   // 外部角色加载失败时继续使用下方程序化角色。
   let importedModel: THREE.Object3D | null = null;
@@ -174,87 +131,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedMixer = new THREE.AnimationMixer(importedModel);
       let clips: THREE.AnimationClip[];
       if (singleAnimModels.has(modelChoice)) {
-        // 伊莱娜：本地只有一段 13 秒展示动画（作为 idle 兜底）；
-        // 走/跑/跳/飞/躺 从 KayKit 动画库运行时重定向到她的骨架
-        const model = importedModel;
-        importedModel.updateMatrixWorld(true);
-        loadAnimDonor()
-          .then((donor) => {
-            if (importedModel !== model) return; // 已被换掉
-            // KayKit 骨骼名 ↔ 伊莱娜骨骼前缀（她的骨骼名带唯一数字后缀，按前缀找主骨）。
-            // retargetClip 的 names 是「目标骨骼名 → 源骨骼名」（按实现，文档注释反了）
-            const pairs: Array<[string, string]> = [
-              ["hips", "root.x"],
-              ["spine", "spine_01.x"],
-              ["chest", "spine_02.x"],
-              ["head", "head.x"],
-              ["upperarm.l", "arm.l"],
-              ["lowerarm.l", "forearm.l"],
-              ["wrist.l", "hand.l"],
-              ["upperarm.r", "arm.r"],
-              ["lowerarm.r", "forearm.r"],
-              ["wrist.r", "hand.r"],
-              ["upperleg.l", "thigh.l"],
-              ["lowerleg.l", "leg.l"],
-              ["foot.l", "foot.l"],
-              ["toes.l", "toes_01.l"],
-              ["upperleg.r", "thigh.r"],
-              ["lowerleg.r", "leg.r"],
-              ["foot.r", "foot.r"],
-              ["toes.r", "toes_01.r"],
-            ];
-            const names: Record<string, string> = {};
-            let mapped = 0;
-            // 注意：GLTFLoader 会把骨骼名里的点号剥掉（arm.l → arml），
-            // 两端的骨骼名都必须按「无点」形式匹配（此前静默失败的根因）
-            const sane = (s: string) => s.replace(/[.[\]]/g, "");
-            for (const [donorName, prefix] of pairs) {
-              const bone = findBone(model, sane(prefix));
-              if (bone) {
-                names[bone.name] = sane(donorName);
-                mapped++;
-              }
-            }
-            if (mapped < 12) {
-              console.warn("[avatar] 伊莱娜动画重定向：骨骼映射不足", mapped);
-              return; // 骨骼对不上就继续用展示动画
-            }
-            const wanted = ["Unarmed_Idle", "Walking_A", "Running_A", "Jump_Idle", "Jump_Start", "Jump_Land", "Lie_Idle"];
-            const sourceRoot = withSkeleton(donor.root);
-            let retargeted = 0;
-            for (const name of wanted) {
-              const src = donor.clips.find((c) => c.name === name);
-              if (!src) continue;
-              try {
-                // preserveBonePositions(默认) 保留伊莱娜自身的骨骼比例，只借动作旋转
-                const clip = SkeletonUtils.retargetClip(withSkeleton(model), sourceRoot, src, {
-                  names,
-                  hip: "hips",
-                });
-                if (clip.tracks.length === 0) {
-                  console.warn("[avatar] 重定向产物为空:", name);
-                  continue;
-                }
-                importedActions.set(name, importedMixer!.clipAction(clip));
-                retargeted++;
-              } catch (e) {
-                console.warn("[avatar] 重定向失败:", name, e);
-              }
-            }
-            if (retargeted === 0) return;
-            // 停掉展示动画兜底并整套骨架归位（它驱动全部 890 根骨骼，
-            // 半途停掉会残留位移姿态——人留在离名牌几米外的地方），再切到重定向 idle
-            importedActions.get("Action")?.stop();
-            (withSkeleton(model) as unknown as { skeleton?: THREE.Skeleton }).skeleton?.pose();
-            importedCurrent = "";
-            playImported("Unarmed_Idle", true);
-          })
-          .catch((e) => console.warn("[avatar] 动画供体加载失败，伊莱娜将只有展示动画", e));        // 展示动画先注册为 idle 兜底（重定向完成后停掉并切换）
+        // 伊莱娜：整段循环播放她自己的展示动画（原生骨架动作，姿态绝对正确）。
+        // 走/跑/飞/躺不借外部动画库——两副骨架差异太大，重定向会把人折成一团；
+        // 改用程序化根运动叠加（见 animate 中的 elainaRoot 分支）
+        elainaRoot = importedModel;
+        elainaBaseY = glb.y;
         const clip = gltf.animations[0];
         if (clip) {
           const action = importedMixer.clipAction(clip);
           importedActions.set("Action", action);
-          if (!importedActions.has("Unarmed_Idle")) importedActions.set("Unarmed_Idle", action);
+          importedActions.set("Unarmed_Idle", action);
         }
         clips = [];
       } else if (animalModels.has(modelChoice) && gltf.animations[0]) {
@@ -515,6 +401,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const outerPins = new Float32Array(13 * 3); // cols=12+1 冗余一位无妨，step 按 sim.cols 读
   const innerPins = new Float32Array(11 * 3);
   let wingPose: Float32Array | null = null; // 滑翔翼形目标姿态（懒分配）
+  // 伊莱娜的程序化状态运动（展示动画常播，状态靠根节点运动表达）
+  let elainaRoot: THREE.Object3D | null = null;
+  let elainaBaseY = 0;
 
   return {
     group,
@@ -709,6 +598,26 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           }
         }
         outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9);
+      }
+
+      // 伊莱娜：展示动画常播，状态用程序化根运动表达（不碰骨骼，无折叠风险）
+      if (elainaRoot) {
+        const kk = Math.min(1, dt * 6);
+        let pitch = 0.08 * speedN + THREE.MathUtils.clamp(accelSm * 0.012, -0.12, 0.2); // 跑动前倾
+        let lift = 0;
+        if (sit) {
+          pitch = -Math.PI / 2; // 向后躺平（绕脚跟旋转，身体放平在地面）
+          lift = 0.22; // 身体厚度离地
+        } else if (air === 2) {
+          pitch = 0.85; // 滑翔俯冲角，与程序化小人一致
+          lift = -0.05;
+        } else if (air === 1) {
+          pitch = -0.05; // 腾空微后仰
+        }
+        elainaRoot.rotation.x = THREE.MathUtils.lerp(elainaRoot.rotation.x, pitch, kk);
+        elainaRoot.rotation.z = THREE.MathUtils.lerp(elainaRoot.rotation.z, Math.sin(walkPhase) * 0.05 * speedN, kk);
+        const bounce = air > 0 || sit ? 0 : Math.abs(Math.sin(walkPhase)) * (0.035 + 0.05 * speedN); // 步伐弹跳
+        elainaRoot.position.y = THREE.MathUtils.lerp(elainaRoot.position.y, elainaBaseY + lift, kk) + bounce;
       }
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
