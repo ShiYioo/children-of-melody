@@ -242,8 +242,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
               }
             }
             if (retargeted === 0) return;
-            // 停掉展示动画兜底，切到重定向好的 idle
+            // 停掉展示动画兜底并整套骨架归位（它驱动全部 890 根骨骼，
+            // 半途停掉会残留位移姿态——人留在离名牌几米外的地方），再切到重定向 idle
             importedActions.get("Action")?.stop();
+            (withSkeleton(model) as unknown as { skeleton?: THREE.Skeleton }).skeleton?.pose();
             importedCurrent = "";
             playImported("Unarmed_Idle", true);
           })
