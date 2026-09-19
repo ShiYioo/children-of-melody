@@ -28,6 +28,7 @@ interface Entry {
   songName: string;
   speed: number; // 推算的移动速度（用于动画）
   lastPos: THREE.Vector3;
+  lastY: number; // 上一帧 y（估算垂直速度）
   clarity: number;
   wasNear: boolean;
   wasAir: number; // 上一帧的空中状态（0/1/2）
@@ -60,6 +61,7 @@ export class RemotePlayers {
       songName: data.songName ?? "",
       speed: 0,
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
+      lastY: data.y,
       clarity: 0,
       wasNear: false,
       wasAir: 0,
@@ -178,7 +180,10 @@ export class RemotePlayers {
       const meta = trackMeta(e.trackId, e.songName);
       const beat = beatMap?.get(e.key) ?? 0.35;
       e.avatar.setRing(e.trackId >= 0 ? new THREE.Color(meta.color) : null, clarity * (0.45 + 0.55 * beat));
-      e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4));
+      // 垂直速度从 y 差分估算（供空中姿势分层）
+      const vyEst = (g.position.y - e.lastY) / Math.max(dt, 1e-3);
+      e.lastY = g.position.y;
+      e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4), { vy: vyEst });
     }
     return [];
   }

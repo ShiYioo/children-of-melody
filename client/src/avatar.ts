@@ -18,8 +18,8 @@ export type AvatarModel = "classic" | "hooded" | "minion";
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
-  /** air: 0 地面 / 1 腾空上升 / 2 滑翔 */
-  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number) => void;
+  /** air: 0 地面 / 1 腾空 / 2 滑翔；opts.vy 用于空中姿势分层（上升/下落） */
+  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, opts?: { vy?: number }) => void;
   /** 落地缓冲（着地瞬间调用） */
   land: () => void;
   /** 扑翼脉冲（腾空按跳时调用，披风向后上方一抖） */
@@ -133,13 +133,35 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const skinDark = "#e6d5ba";
   const faceDark = "#2e2745"; // 面具脸
 
-  // ---- 腿 ----
-  const legGeo = new THREE.CapsuleGeometry(0.085, 0.2, 4, 8);
-  const legL = new THREE.Mesh(legGeo, kit.mat(skinDark));
-  legL.position.set(-0.11, 0.24, 0);
-  const legR = legL.clone();
-  legR.position.x = 0.11;
-  bodyGroup.add(legL, legR);
+  // ---- 腿（两段：大腿+小腿+脚，膝盖能弯） ----
+  interface Limb2 {
+    root: THREE.Group; // 髋/肩
+    joint: THREE.Group; // 膝/肘
+  }
+  const thighGeo = new THREE.CapsuleGeometry(0.08, 0.13, 4, 8);
+  const shinGeo = new THREE.CapsuleGeometry(0.062, 0.11, 4, 8);
+  const footGeo = new THREE.SphereGeometry(0.075, 8, 6);
+  const makeLeg = (side: number): Limb2 => {
+    const root = new THREE.Group();
+    root.position.set(0.11 * side, 0.46, 0);
+    const thigh = new THREE.Mesh(thighGeo, kit.mat(skinDark));
+    thigh.position.y = -0.09;
+    root.add(thigh);
+    const joint = new THREE.Group();
+    joint.position.y = -0.19;
+    root.add(joint);
+    const shin = new THREE.Mesh(shinGeo, kit.mat(skinDark));
+    shin.position.y = -0.075;
+    joint.add(shin);
+    const foot = new THREE.Mesh(footGeo, kit.mat(skinDark));
+    foot.position.set(0, -0.15, 0.03);
+    joint.add(foot);
+    thigh.castShadow = shin.castShadow = true;
+    bodyGroup.add(root);
+    return { root, joint };
+  };
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
 
   // ---- 身体 ----
   const torso = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 14), kit.mat(skin));
@@ -148,16 +170,32 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   torso.castShadow = true;
   bodyGroup.add(torso);
 
-  // ---- 手臂 ----
-  const armGeo = new THREE.CapsuleGeometry(0.055, 0.3, 4, 8);
-  const armL = new THREE.Mesh(armGeo, kit.mat(skinDark));
-  armL.position.set(-0.32, 0.66, 0);
-  armL.rotation.z = 0.18;
-  const armR = armL.clone();
-  armR.position.x = 0.32;
-  armR.rotation.z = -0.18;
-  armL.castShadow = armR.castShadow = true;
-  bodyGroup.add(armL, armR);
+  // ---- 手臂（两段：大臂+小臂+手，手肘微弯） ----
+  const upperArmGeo = new THREE.CapsuleGeometry(0.05, 0.12, 4, 8);
+  const foreArmGeo = new THREE.CapsuleGeometry(0.042, 0.1, 4, 8);
+  const handGeo = new THREE.SphereGeometry(0.052, 8, 6);
+  const makeArm = (side: number): Limb2 => {
+    const root = new THREE.Group();
+    root.position.set(0.30 * side, 0.82, 0);
+    root.rotation.z = -0.16 * side; // 微微外张
+    const upper = new THREE.Mesh(upperArmGeo, kit.mat(skinDark));
+    upper.position.y = -0.075;
+    root.add(upper);
+    const joint = new THREE.Group();
+    joint.position.y = -0.155;
+    root.add(joint);
+    const fore = new THREE.Mesh(foreArmGeo, kit.mat(skinDark));
+    fore.position.y = -0.06;
+    joint.add(fore);
+    const hand = new THREE.Mesh(handGeo, kit.mat(skin));
+    hand.position.y = -0.125;
+    joint.add(hand);
+    upper.castShadow = true;
+    bodyGroup.add(root);
+    return { root, joint };
+  };
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
 
   // ---- 头（大、圆、戴兜帽的面具脸） ----
   const headGroup = new THREE.Group();
@@ -308,8 +346,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let ringEnergy = 0;
   let jumpBlend = 0;
   let glideBlend = 0;
+  let riseBlend = 0; // 腾空上升（vy>0）
+  let fallBlend = 0; // 腾空下落（vy<0，准备落地）
   let squash = 0; // 落地缓冲
   let flapPulse = 0; // 扑翼脉冲
+  let accelSm = 0; // 平滑加速度（起跑前倾/急停后仰）
+  let lastSpeed = 0;
+  let prevAir = 0;
 
   return {
     group,
@@ -321,7 +364,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       flapPulse = 1;
       playImported("Jump_Start", false, 0.08);
     },
-    animate(dt, t, speed, sit, air = 0, yawVel = 0) {
+    animate(dt, t, speed, sit, air = 0, yawVel = 0, state = {}) {
       importedMixer?.update(dt);
       if (importedReady) {
         if (modelChoice === "minion") playImported("idle", true);
@@ -333,41 +376,83 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         else playImported("Unarmed_Idle", true);
       }
       const speedN = Math.min(1, speed / 7.2);
+      const vy = state.vy ?? 0;
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
-      walkPhase += dt * (3.2 + speed * 2.2);
-      jumpBlend = THREE.MathUtils.lerp(jumpBlend, air === 1 ? 1 : 0, Math.min(1, dt * 6));
+      walkPhase += dt * (3.0 + speed * 2.4);
+      jumpBlend = THREE.MathUtils.lerp(jumpBlend, air > 0 ? 1 : 0, Math.min(1, dt * 6));
       glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
+      riseBlend = THREE.MathUtils.lerp(riseBlend, air > 0 && vy > 0.8 ? 1 : 0, Math.min(1, dt * 5));
+      fallBlend = THREE.MathUtils.lerp(fallBlend, air > 0 && vy < -0.8 ? 1 : 0, Math.min(1, dt * 5));
       squash = Math.max(0, squash - dt * 4);
       flapPulse = Math.max(0, flapPulse - dt * 3.2);
+      // 起跳蹬地：腾空第一帧快速屈膝蓄力
+      if (air > 0 && prevAir === 0) squash = Math.max(squash, 0.55);
+      prevAir = air;
       const airN = Math.max(jumpBlend, glideBlend);
+      const ground = 1 - airN;
+
+      // 平滑加速度 → 前倾角（起跑前倾、急停后仰，光遇的重量感）
+      const accelRaw = (speed - lastSpeed) / Math.max(dt, 1e-3);
+      lastSpeed = speed;
+      accelSm = THREE.MathUtils.lerp(accelSm, THREE.MathUtils.clamp(accelRaw, -12, 12), Math.min(1, dt * 5));
+      const leanAcc = THREE.MathUtils.clamp(accelSm * 0.014, -0.16, 0.2);
 
       // 落地缓冲的压扁恢复
       const sq = 1 - squash * 0.16;
       bodyGroup.scale.set(1 + squash * 0.1, sq, 1 + squash * 0.1);
 
-      // 坐下后仰 / 跑动前倾 / 滑翔大幅前倾
+      // 躯干：盘坐后靠 / 跑动前倾+加速度 / 滑翔大幅前倾
       bodyGroup.rotation.x =
-        -1.05 * sitLerp + 0.14 * speedN + 0.62 * glideBlend + 0.18 * jumpBlend * (1 - glideBlend);
-      // 转弯侧倾（压弯）
-      group.rotation.z = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * (1 - airN);
+        -0.5 * sitLerp +
+        (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
+        0.6 * glideBlend +
+        0.15 * jumpBlend * (1 - glideBlend);
+      // 压弯（整体侧倾）
+      group.rotation.z = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
+      // 重心左右晃（跳跳步的步感）
+      bodyGroup.rotation.z = (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp);
 
       bodyGroup.position.y =
-        -0.38 * sitLerp +
-        (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.05 * (0.4 + speedN) : Math.sin(t * 1.5) * 0.012) -
+        -0.3 * sitLerp +
+        (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.055 * (0.45 + speedN) : Math.sin(t * 1.4) * 0.012) -
         airN * 0.06;
 
-      // 四肢：走路摆动 → 腾空收腿 → 滑翔张臂
-      const swing = Math.sin(walkPhase) * (0.15 + speedN * 0.55);
-      const armOut = 1.15 * glideBlend; // 张臂
-      armL.rotation.x = swing * (1 - airN);
-      armR.rotation.x = -swing * (1 - airN);
-      armL.rotation.z = 0.18 + armOut - flapPulse * 0.5;
-      armR.rotation.z = -0.18 - armOut + flapPulse * 0.5;
-      legL.rotation.x = -swing * 0.9 * (1 - airN) + (0.45 * jumpBlend + 0.3 * glideBlend) - sitLerp * 1.2;
-      legR.rotation.x = swing * 0.9 * (1 - airN) + (0.45 * jumpBlend + 0.3 * glideBlend) - sitLerp * 1.2;
+      // ---- 四肢（两段关节：步态 → 空中分层 → 盘坐） ----
+      // 步态：大腿摆动、小腿在恢复期屈膝（相位差 ~1.15rad），手臂与同侧腿反相
+      const walkAmp = (speed > 0.2 ? 0.35 + speedN * 0.65 : 0) * ground * (1 - sitLerp);
+      const strideL = Math.sin(walkPhase);
+      const strideR = Math.sin(walkPhase + Math.PI);
+      const kneeBase = 0.5 + speedN * 0.6;
+      const kneeL = Math.max(0, Math.sin(walkPhase - 1.15)) * kneeBase;
+      const kneeR = Math.max(0, Math.sin(walkPhase + Math.PI - 1.15)) * kneeBase;
 
-      // 头部呼吸与轻微摆动（滑翔时抬头看前方）
-      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * (1 - airN);
+      // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 后展 + sit 盘腿
+      legL.root.rotation.x =
+        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 0.3 * glideBlend - 1.45 * sitLerp;
+      legL.joint.rotation.x =
+        kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend + 0.25 * glideBlend + 1.45 * sitLerp;
+      legR.root.rotation.x =
+        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 0.3 * glideBlend - 1.45 * sitLerp;
+      legR.joint.rotation.x =
+        kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend + 0.25 * glideBlend + 1.45 * sitLerp;
+
+      // 臂：walk 反相摆 + rise 后上摆 + fall 侧举 + glide 张翼 + sit 放前
+      const armSwL = -strideL;
+      const armSwR = -strideR;
+      armL.root.rotation.x =
+        armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.08 * glideBlend - 0.5 * sitLerp;
+      armR.root.rotation.x =
+        armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.08 * glideBlend - 0.5 * sitLerp;
+      armL.root.rotation.z = 0.16 + 0.95 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp;
+      armR.root.rotation.z = -0.16 - 0.95 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp;
+      // 肘：跑步更弯、滑翔前伸、其余自然微弯
+      const elbow = -(0.3 + (0.35 + speedN * 0.55) * walkAmp + 0.25 * riseBlend + 0.5 * glideBlend + 0.15 * fallBlend) * (1 - sitLerp) - 0.35 * sitLerp;
+      armL.joint.rotation.x = elbow;
+      armR.joint.rotation.x = elbow;
+
+      // 头：待机慢张望（光遇小人会东看看西看看）+ 滑翔抬头看前方
+      headGroup.rotation.y = (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26;
+      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
 
       // 披风：风感 + 速度拖尾 + 滑翔展开（加宽+向后上方扬起）+ 扑翼抖动

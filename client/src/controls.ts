@@ -49,6 +49,11 @@ export class PlayerControls {
     return Math.hypot(this.vel.x, this.vel.z);
   }
 
+  /** 当前垂直速度（米/秒，空中姿势分层用） */
+  get verticalVel(): number {
+    return this.vy;
+  }
+
   /** 水平速度向量（风线等特效使用） */
   get horizVel(): THREE.Vector3 {
     return this.vel;
