@@ -97,6 +97,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       });
       group.add(importedModel);
       bodyGroup.visible = false;
+      // GLB 模型用自己的外观（hooded 自带披风、动物有毛皮尾巴），不挂程序化布料
+      if (outerCapeSim) outerCapeSim.mesh.visible = false;
+      if (innerCape) innerCape.visible = false;
       importedMixer = new THREE.AnimationMixer(importedModel);
       const clips = animalModels.has(modelChoice) && gltf.animations[0]
         ? [
@@ -110,7 +113,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     },
     undefined,
     () => {
-      importedModel = null;
+      importedModel = null; // 加载失败：回退程序化角色（披风恢复可见）
+      if (outerCapeSim) outerCapeSim.mesh.visible = true;
+      if (innerCape) innerCape.visible = true;
     }
   );
 
@@ -245,20 +250,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       pos.setX(i, x * 0.86);
     }
   };
-  const outerGeo = new THREE.PlaneGeometry(0.82, 1.05, 12, 18);
-  outerGeo.translate(0, -0.525, 0); // 顶端为固定轴
+  const outerGeo = new THREE.PlaneGeometry(0.82, 0.9, 12, 16);
+  outerGeo.translate(0, -0.45, 0); // 顶端为固定轴
   shapeCape(outerGeo, 1);
-  const outerCapeSim = new CapeSim(outerGeo, makeCapeMaterial(capeOuter, kit.gradient), { gravity: 15, damping: 0.986, iters: 5 });
+  // 参数柔和：重力小、风缓、阻尼收敛快——站立时垂坠安静，跑动时才后扬
+  const outerCapeSim = new CapeSim(outerGeo, makeCapeMaterial(capeOuter, kit.gradient), { gravity: 6, damping: 0.94, iters: 5 });
   const outerCape = outerCapeSim.mesh;
   // 注意：mesh 不带偏移——CapeSim 的顶点/锚点/碰撞都在 group 坐标系里表达
   group.add(outerCape);
 
-  const innerGeo = new THREE.PlaneGeometry(0.62, 0.72, 10, 14);
-  innerGeo.translate(0, -0.36, 0);
-  shapeCape(innerGeo, 0.7);
-  const innerCapeSim = new CapeSim(innerGeo, makeCapeMaterial(capeInner, kit.gradient), { gravity: 18, damping: 0.982, iters: 4 });
-  const innerCape = innerCapeSim.mesh;
-  group.add(innerCape);
+  // 内层：静态贴身后襟（层次感来自颜色差，不与外层布互穿）
+  const innerGeo = new THREE.PlaneGeometry(0.56, 0.42, 6, 6);
+  innerGeo.translate(0, -0.21, 0);
+  innerGeo.rotateX(0.14);
+  const innerCape = new THREE.Mesh(innerGeo, makeCapeMaterial(capeInner, kit.gradient));
+  innerCape.position.set(0, 0.98, -0.12);
+  innerCape.castShadow = true;
+  bodyGroup.add(innerCape);
 
   // ---- 轮廓光（背壳法，淡淡的暖边） ----
   const rimMat = new THREE.MeshBasicMaterial({
@@ -444,28 +452,26 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
 
-      // 披风：Verlet 布料物理——风 = 相对风(角色速度的反向) + 环境风 + 滑翔上流 + 扑翼风冲
-      const vx = state.vx ?? 0;
-      const vz = state.vz ?? 0;
-      windWorld.set(
-        -vx * 1.35 + Math.sin(t * 0.7) * 0.7,
-        -vy * 1.2 + glideBlend * 13 - flapPulse * 5,
-        -vz * 1.35 + Math.cos(t * 0.5) * 0.5 - flapPulse * 3
-      );
-      windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
-      // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
-      const pinCape = (sim: CapeSim, pins: Float32Array, ax: number, ay: number, az: number) => {
-        for (let j = 0; j < sim.cols; j++) {
-          const k = j / (sim.cols - 1) - 0.5; // -0.5..0.5
-          shoulderLocal.set(k * 0.82, ay, az - 0.05 * Math.abs(k) * 2).applyEuler(bodyGroup.rotation).add(bodyGroup.position);
-          pins[j * 3] = shoulderLocal.x;
-          pins[j * 3 + 1] = shoulderLocal.y;
-          pins[j * 3 + 2] = shoulderLocal.z;
+      // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
+      if (!importedReady) {
+        const vx = state.vx ?? 0;
+        const vz = state.vz ?? 0;
+        windWorld.set(
+          -vx * 0.55 + Math.sin(t * 0.7) * 0.35,
+          -vy * 0.6 + glideBlend * 8 - flapPulse * 4,
+          -vz * 0.55 + Math.cos(t * 0.5) * 0.25 - flapPulse * 2.5
+        );
+        windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
+        // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
+        for (let j = 0; j < outerCapeSim.cols; j++) {
+          const k = j / (outerCapeSim.cols - 1) - 0.5;
+          shoulderLocal.set(k * 0.82, 1.02, -0.17 - 0.05 * Math.abs(k) * 2).applyEuler(bodyGroup.rotation).add(bodyGroup.position);
+          outerPins[j * 3] = shoulderLocal.x;
+          outerPins[j * 3 + 1] = shoulderLocal.y;
+          outerPins[j * 3 + 2] = shoulderLocal.z;
         }
-        sim.step(dt, pins, windWorld);
-      };
-      pinCape(outerCapeSim, outerPins, 0, 1.02, -0.17);
-      pinCape(innerCapeSim, innerPins, 0, 0.98, -0.12);
+        outerCapeSim.step(dt, outerPins, windWorld);
+      }
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;

@@ -104,15 +104,14 @@ export class CapeSim {
             this.pos[ob + 2] += mz * (aPinned ? 2 : 1);
           }
         }
-        // 身体碰撞：近似球（躯干+头），把布推离
+        // 身体碰撞：近似球（躯干+头），把布推离（半径略小于视觉，避免把布拉离身体）
         for (let v = this.cols; v < n; v++) {
           const o = v * 3;
-          // 球心 (0, 0.85, 0) 半径 0.42（披风局部）
           const dx = this.pos[o];
-          const dy = this.pos[o + 1] - 0.85;
+          const dy = this.pos[o + 1] - 0.8;
           const dz = this.pos[o + 2];
           const d2 = dx * dx + dy * dy + dz * dz;
-          const r = 0.42;
+          const r = 0.36;
           if (d2 < r * r && d2 > 1e-9) {
             const d = Math.sqrt(d2);
             const push = (r - d) / d;

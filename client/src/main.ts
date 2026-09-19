@@ -138,6 +138,9 @@ if (import.meta.env.DEV) {
     get npcs() {
       return npcs;
     },
+    get selfAvatar() {
+      return selfAvatar;
+    },
   };
 }
 
