@@ -26,6 +26,7 @@ interface Entry {
   trackId: number;
   startedAt: number;
   songName: string;
+  handWith: string; // 牵手对象 key（渲染光带用）
   speed: number; // 推算的移动速度（用于动画）
   lastPos: THREE.Vector3;
   lastY: number; // 上一帧 y（估算垂直速度）
@@ -59,6 +60,7 @@ export class RemotePlayers {
       trackId: data.trackId ?? -1,
       startedAt: data.startedAt ?? 0,
       songName: data.songName ?? "",
+      handWith: "",
       speed: 0,
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
       lastY: data.y,
@@ -90,7 +92,7 @@ export class RemotePlayers {
   }
 
   /** 网络状态写入目标值 */
-  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number; songName: string }>) {
+  update(key: string, data: Partial<{ x: number; y: number; z: number; ry: number; mov: number; sit: boolean; name: string; hue: number; trackId: number; startedAt: number; songName: string; handWith: string }>) {
     const e = this.entries.get(key);
     if (!e) return false;
     Object.assign(e.target, {
@@ -108,7 +110,33 @@ export class RemotePlayers {
     if (data.trackId !== undefined) e.trackId = data.trackId;
     if (data.startedAt !== undefined) e.startedAt = data.startedAt;
     if (data.songName !== undefined) e.songName = data.songName;
+    if (data.handWith !== undefined) e.handWith = data.handWith;
     return true;
+  }
+
+  // ---- 牵手支持：主循环查询与驱动 ----
+  /** 某人的渲染位置（插值后） */
+  posOf(key: string): THREE.Vector3 | null {
+    return this.entries.get(key)?.avatar.group.position ?? null;
+  }
+
+  /** 某人的朝向 / 动作码 / 牵手对象 */
+  statsOf(key: string): { yaw: number; mov: number; handWith: string; name: string } | null {
+    const e = this.entries.get(key);
+    if (!e) return null;
+    return { yaw: e.avatar.group.rotation.y, mov: e.target.mov, handWith: e.handWith, name: e.name };
+  }
+
+  /** 给某个远程小人设置伸手指向（牵手姿势，世界方向） */
+  setHandOf(key: string, dir: THREE.Vector3 | null) {
+    this.entries.get(key)?.avatar.setHand(dir);
+  }
+
+  /** 遍历所有远程玩家（牵手光带配对用） */
+  forEachRemote(cb: (key: string, pos: THREE.Vector3, yaw: number, handWith: string) => void) {
+    for (const e of this.entries.values()) {
+      cb(e.key, e.avatar.group.position, e.avatar.group.rotation.y, e.handWith);
+    }
   }
 
   /** NPC 直接驱动（绕过网络状态） */

@@ -70,6 +70,7 @@ export class PlayerControls {
   private flapTimer = 0; // mov=4 的显示时长
   private flapRegen = 0;
   private enabled = false;
+  private led = false; // 被牵着：移动输入与物理都交给主循环的跟随逻辑
   private mouseLocked = false;
   private dom: HTMLElement;
   private baseFov = 55;
@@ -137,6 +138,23 @@ export class PlayerControls {
     if (!v) this.keys.clear();
   }
 
+  /** 被牵（true）/ 自由（false）。被牵时输入与跳跃失效，位置由牵手跟随写入 */
+  setLed(v: boolean) {
+    if (this.led === v) return;
+    this.led = v;
+    if (v) {
+      this.keys.clear();
+      this.vel.set(0, 0, 0);
+      this.jumpQueued = false;
+    }
+  }
+
+  /** 被牵时由跟随逻辑写入运动量（供动画/披风风场使用） */
+  setCarriedMotion(hSpeed: number, vy: number) {
+    this.vel.set(Math.sin(this.state.yaw) * hSpeed, 0, Math.cos(this.state.yaw) * hSpeed);
+    this.vy = vy;
+  }
+
   spawnAt(x: number, z: number) {
     this.state.pos.set(x, terrainHeight(x, z), z);
     this.vel.set(0, 0, 0);
@@ -156,6 +174,12 @@ export class PlayerControls {
 
   update(dt: number) {
     const s = this.state;
+    if (this.led) {
+      // 被牵着走：位置已由牵手跟随写入，这里只跟镜头（还能东张西望）
+      this.state.yawVel = THREE.MathUtils.lerp(this.state.yawVel, 0, Math.min(1, dt * 6));
+      this.updateCamera(dt);
+      return;
+    }
     let ix = 0;
     let iz = 0;
     if (this.enabled) {
@@ -280,6 +304,13 @@ export class PlayerControls {
     }
 
     // ---- 相机：跟随 + 速度感 FOV ----
+    this.updateCamera(dt);
+  }
+
+  private updateCamera(dt: number) {
+    const s = this.state;
+    const speedH = Math.hypot(this.vel.x, this.vel.z);
+    const glideHeld = this.keys.has(" ");
     const focus = new THREE.Vector3(s.pos.x, s.pos.y + 1.7, s.pos.z);
     const cx = focus.x + Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const cz = focus.z + Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);

@@ -17,6 +17,8 @@ function clamp(v: number, min: number, max: number) {
 export class IslandRoom extends Room {
   state = new IslandState();
   patchRate = 50; // 20Hz 状态广播
+  /** 牵手邀请：被邀人 sessionId → { from, at }；15 秒未回应自动失效 */
+  private pendingHands = new Map<string, { from: string; at: number }>();
 
   onCreate() {
     this.maxClients = 64;
@@ -24,6 +26,9 @@ export class IslandRoom extends Room {
     // 周期性对时，客户端用它把别人的 startedAt 换算成本地播放相位
     this.clock.setInterval(() => {
       this.broadcast("time", { t: Date.now() });
+      // 顺手清理过期的牵手邀请
+      const now = Date.now();
+      for (const [k, v] of this.pendingHands) if (now - v.at > 15000) this.pendingHands.delete(k);
     }, 5000);
 
     console.log("[island] 渐强之岛已就绪");
@@ -52,10 +57,25 @@ export class IslandRoom extends Room {
 
   async onLeave(client: Client) {
     const player = this.state.players.get(client.sessionId);
+    this.unlinkHands(client.sessionId);
+    for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
     this.state.players.delete(client.sessionId);
     if (player) {
       console.log(`[island] ${player.name} 离开了岛 (${this.clients.length} 人在岛上)`);
     }
+  }
+
+  /** 解除 sessionId 的牵手（双方都清空） */
+  private unlinkHands(sessionId: string) {
+    const p = this.state.players.get(sessionId);
+    if (!p || !p.handWith) return;
+    const partner = this.state.players.get(p.handWith);
+    if (partner && partner.handWith === sessionId) {
+      partner.handWith = "";
+      partner.handLead = false;
+    }
+    p.handWith = "";
+    p.handLead = false;
   }
 
   messages = {
@@ -92,6 +112,55 @@ export class IslandRoom extends Room {
 
     time: (client: Client) => {
       client.send("time", { t: Date.now() });
+    },
+
+    // ---- 牵手（光遇式：邀请 → 对方同意 → 连接） ----
+    "hand-invite": (client: Client, m: any) => {
+      const me = this.state.players.get(client.sessionId);
+      const target = typeof m?.to === "string" ? this.state.players.get(m.to) : undefined;
+      const targetClient = typeof m?.to === "string" ? this.clients.find((c) => c.sessionId === m.to) : undefined;
+      if (!me || !target || !targetClient || m.to === client.sessionId) return;
+      if (me.handWith || target.handWith) {
+        client.send("hand-busy", {});
+        return;
+      }
+      // 必须走近才能伸手（服务器按最近上报位置校验）
+      if (Math.hypot(me.x - target.x, me.z - target.z) > 16 || Math.abs(me.y - target.y) > 10) {
+        client.send("hand-far", {});
+        return;
+      }
+      // 覆盖同目标的旧邀请
+      this.pendingHands.set(m.to, { from: client.sessionId, at: Date.now() });
+      targetClient.send("hand-invite", { from: client.sessionId, name: me.name });
+    },
+
+    "hand-accept": (client: Client, m: any) => {
+      const inv = this.pendingHands.get(client.sessionId);
+      if (!inv || inv.from !== m?.to || Date.now() - inv.at > 15000) {
+        this.pendingHands.delete(client.sessionId);
+        return;
+      }
+      this.pendingHands.delete(client.sessionId);
+      const a = this.state.players.get(inv.from);
+      const b = this.state.players.get(client.sessionId);
+      if (!a || !b || a.handWith || b.handWith) return;
+      a.handWith = client.sessionId;
+      a.handLead = true;
+      b.handWith = inv.from;
+      b.handLead = false;
+    },
+
+    "hand-reject": (client: Client, m: any) => {
+      const inv = this.pendingHands.get(client.sessionId);
+      if (!inv || inv.from !== m?.to) return;
+      this.pendingHands.delete(client.sessionId);
+      this.clients.find((c) => c.sessionId === inv.from)?.send("hand-reject", {
+        name: this.state.players.get(client.sessionId)?.name ?? "旅人",
+      });
+    },
+
+    "hand-release": (client: Client) => {
+      this.unlinkHands(client.sessionId);
     },
   };
 }

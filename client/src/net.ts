@@ -21,6 +21,18 @@ interface PlayerLike {
   songName: string;
   hue: number;
   avatar: AvatarModel;
+  handWith?: string;
+  handLead?: boolean;
+}
+
+/** 牵手相关的服务器事件（经 connectIsland 注入回调） */
+export interface HandEvents {
+  /** 有人向我伸手（15 秒内有效） */
+  onInvite: (from: string, name: string) => void;
+  /** 我的邀请/牵手状态变化的结果提示（busy/far/reject） */
+  onResult: (kind: "busy" | "far" | "reject", name?: string) => void;
+  /** 自己的牵手状态变化（服务器权威） */
+  onHandChange: (withId: string, lead: boolean) => void;
 }
 
 export interface NetHandle {
@@ -29,10 +41,19 @@ export interface NetHandle {
   clockOffset: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
   sendTrack: (trackId: number, name?: string, resumeMs?: number) => void;
+  sendHandInvite: (to: string) => void;
+  sendHandAccept: (to: string) => void;
+  sendHandReject: (to: string) => void;
+  sendHandRelease: () => void;
   close: () => void;
 }
 
-export async function connectIsland(name: string, remotes: RemotePlayers, avatar: AvatarModel = "classic"): Promise<NetHandle | null> {
+export async function connectIsland(
+  name: string,
+  remotes: RemotePlayers,
+  avatar: AvatarModel = "classic",
+  hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} }
+): Promise<NetHandle | null> {
   const endpoint = import.meta.env.DEV ? "http://localhost:2567" : window.location.origin;
   const client = new Client(endpoint);
 
@@ -55,6 +76,13 @@ export async function connectIsland(name: string, remotes: RemotePlayers, avatar
   };
   room.onMessage("time", ({ t }: { t: number }) => applyTime(t));
 
+  let lastHandWith = "";
+  let lastHandLead = false;
+  room.onMessage("hand-invite", (m: any) => hand.onInvite(String(m?.from ?? ""), String(m?.name ?? "旅人")));
+  room.onMessage("hand-reject", (m: any) => hand.onResult("reject", m?.name));
+  room.onMessage("hand-busy", () => hand.onResult("busy"));
+  room.onMessage("hand-far", () => hand.onResult("far"));
+
   let selfHue: number | null = null;
   const getSelfHue = () => selfHue;
 
@@ -65,6 +93,11 @@ export async function connectIsland(name: string, remotes: RemotePlayers, avatar
     players.forEach((p: PlayerLike, key: string) => {
       if (key === room.sessionId) {
         if (selfHue === null) selfHue = p.hue;
+        if (p.handWith !== lastHandWith || !!p.handLead !== lastHandLead) {
+          lastHandWith = p.handWith ?? "";
+          lastHandLead = !!p.handLead;
+          hand.onHandChange(lastHandWith, lastHandLead);
+        }
         return;
       }
       if (!seen.has(key)) {
@@ -103,6 +136,18 @@ export async function connectIsland(name: string, remotes: RemotePlayers, avatar
     },
     sendTrack(trackId, name, resumeMs) {
       room.send("track", { trackId, name, resumeMs });
+    },
+    sendHandInvite(to) {
+      room.send("hand-invite", { to });
+    },
+    sendHandAccept(to) {
+      room.send("hand-accept", { to });
+    },
+    sendHandReject(to) {
+      room.send("hand-reject", { to });
+    },
+    sendHandRelease() {
+      room.send("hand-release", {});
     },
     close() {
       room.leave(true);

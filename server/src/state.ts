@@ -17,6 +17,8 @@ export class Player extends Schema {
   @type("string") songName: string = ""; // 自定义曲目的显示名
   @type("uint8") hue: number = 0; // 披风色相 0-359
   @type("string") avatar: string = "classic"; // 角色外观
+  @type("string") handWith: string = ""; // 牵手对象 sessionId；空 = 单独一人
+  @type("boolean") handLead: boolean = false; // 是否牵头（带着对方走/飞）
 }
 
 export class IslandState extends Schema {

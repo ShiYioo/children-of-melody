@@ -27,6 +27,8 @@ export interface Avatar {
   flap: () => void;
   setRing: (color: THREE.Color | null, energy: number) => void;
   setName: (name: string) => void;
+  /** 牵手姿势：传入牵手对象的方向（世界系，传 null 取消），内侧手臂会抬向对方 */
+  setHand: (dir: THREE.Vector3 | null) => void;
   dispose: () => void;
 }
 
@@ -343,6 +345,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let accelSm = 0; // 平滑加速度（起跑前倾/急停后仰）
   let lastSpeed = 0;
   let prevAir = 0;
+  let handBlend = 0; // 牵手姿势混合 0-1
+  let handSide = 1; // 对方在哪一侧（+1 右 / -1 左）
+  let handFwd = 0; // 对方在前方分量（抬臂前后倾角）
+  const handDirWorld = new THREE.Vector3();
 
   // 布料仿真的复用临时量（避免每帧分配）
   const windWorld = new THREE.Vector3();
@@ -384,6 +390,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       fallBlend = THREE.MathUtils.lerp(fallBlend, air > 0 && vy < -0.8 ? 1 : 0, Math.min(1, dt * 5));
       squash = Math.max(0, squash - dt * 4);
       flapPulse = Math.max(0, flapPulse - dt * 3.2);
+      // 牵手姿势混合 & 方向（世界 → 本地）
+      const handTarget = handDirWorld.lengthSq() > 1e-6 ? 1 : 0;
+      handBlend = THREE.MathUtils.lerp(handBlend, handTarget, Math.min(1, dt * 8));
+      if (handTarget) {
+        const lx = handDirWorld.x * Math.cos(-group.rotation.y) - handDirWorld.z * Math.sin(-group.rotation.y);
+        const lz = handDirWorld.x * Math.sin(-group.rotation.y) + handDirWorld.z * Math.cos(-group.rotation.y);
+        const h = Math.hypot(lx, lz) || 1e-6;
+        handSide = lx >= 0 ? 1 : -1;
+        handFwd = THREE.MathUtils.clamp(-lz / h, -1, 1);
+      }
       // 起跳蹬地：腾空第一帧快速屈膝蓄力
       if (air > 0 && prevAir === 0) squash = Math.max(squash, 0.55);
       prevAir = air;
@@ -448,6 +464,20 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const elbow = -(0.3 + (0.35 + speedN * 0.55) * walkAmp + 0.25 * riseBlend + 0.5 * glideBlend + 0.15 * fallBlend) * (1 - sitLerp) - 0.35 * sitLerp;
       armL.joint.rotation.x = elbow;
       armR.joint.rotation.x = elbow;
+
+      // 牵手：内侧手臂抬向对方（走/飞时保持，光遇式牵着走）
+      if (handBlend > 0.005) {
+        const raise = handBlend * (1 - 0.55 * glideBlend); // 滑翔时手臂已被翼形占据，只微微示意
+        if (handSide > 0) {
+          armR.root.rotation.z -= raise * 1.05;
+          armR.root.rotation.x += handFwd * raise * 0.5;
+          armL.root.rotation.z += raise * 0.18;
+        } else {
+          armL.root.rotation.z += raise * 1.05;
+          armL.root.rotation.x += handFwd * raise * 0.5;
+          armR.root.rotation.z -= raise * 0.18;
+        }
+      }
 
       // 头：待机慢张望（光遇小人会东看看西看看）+ 滑翔抬头看前方
       headGroup.rotation.y = (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26;
@@ -562,6 +592,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       ringMat.opacity = 0.75 * energy;
       discMat.opacity = 0.14 * energy;
       moteMat.opacity = 0.85 * energy;
+    },
+    setHand(dir) {
+      if (dir && dir.lengthSq() > 1e-6) handDirWorld.copy(dir).normalize();
+      else handDirWorld.set(0, 0, 0);
     },
     setName(name) {
       nameSprite.material.map?.dispose();

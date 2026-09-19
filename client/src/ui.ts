@@ -279,10 +279,64 @@ export function createUI(handlers: {
     toast(text: string, ms = 2600) {
       showToast(text, ms);
     },
+    /** 牵手邀请：显示提示条；返回撤销函数（超时/接受/婉拒时调用） */
+    showInvite(name: string, onAccept: () => void, onReject: () => void) {
+      hideInvite();
+      const bar = document.createElement("div");
+      bar.className = "hand-invite";
+      bar.innerHTML = `
+        <span class="hi-text"><b>${escapeHtml(name)}</b> 想牵你的手</span>
+        <button class="hi-yes">接受 (F)</button>
+        <button class="hi-no">婉拒 (G)</button>`;
+      document.body.appendChild(bar);
+      const yes = bar.querySelector(".hi-yes") as HTMLButtonElement;
+      const no = bar.querySelector(".hi-no") as HTMLButtonElement;
+      const timer = window.setTimeout(() => done(false), 15000);
+      function done(accept: boolean) {
+        window.clearTimeout(timer);
+        bar.remove();
+        accept ? onAccept() : onReject();
+      }
+      yes.addEventListener("click", () => done(true));
+      no.addEventListener("click", () => done(false));
+      inviteResolve = done;
+    },
+    hideInvite,
+    /** 键盘 F：接受当前邀请 */
+    acceptInvite() {
+      if (!inviteResolve) return;
+      const r = inviteResolve;
+      inviteResolve = null;
+      document.querySelectorAll(".hand-invite").forEach((el) => el.remove());
+      r(true);
+    },
+    /** 键盘 G：婉拒当前邀请 */
+    rejectInvite() {
+      if (!inviteResolve) return;
+      const r = inviteResolve;
+      inviteResolve = null;
+      document.querySelectorAll(".hand-invite").forEach((el) => el.remove());
+      r(false);
+    },
+    hasInvite() {
+      return !!inviteResolve;
+    },
     focusName() {
       enterName.focus();
     },
   };
+}
+
+/** 当前邀请的处理器（供 F/G 键触发）；无邀请时为 null */
+let inviteResolve: ((accept: boolean) => void) | null = null;
+
+function hideInvite() {
+  if (inviteResolve) {
+    const r = inviteResolve;
+    inviteResolve = null;
+    r(false);
+  }
+  document.querySelectorAll(".hand-invite").forEach((el) => el.remove());
 }
 
 function escapeHtml(s: string) {

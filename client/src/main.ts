@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createWorld } from "./world/scene";
+import { HandLinks } from "./world/handlink";
 import { PlayerControls } from "./controls";
 import { createAvatar, type Avatar, type AvatarModel } from "./avatar";
 import { MusicEngine, AUDIBLE_R } from "./audio/engine";
@@ -8,6 +9,7 @@ import { RemotePlayers } from "./remote";
 import { connectIsland, type NetHandle } from "./net";
 import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
+import { terrainHeight } from "./heightfield";
 
 /**
  * 渐强之岛 · 客户端主流程
@@ -36,6 +38,24 @@ let playerName = "旅人";
 let selfHue = Math.floor(Math.random() * 360);
 let selectedAvatar: AvatarModel = "classic";
 let entered = false;
+
+// ---- 牵手（光遇式：走近邀请 → 对方同意 → 牵着走/飞） ----
+const handLinks = new HandLinks();
+world.addToScene(handLinks.mesh);
+/** 自己当前的牵手状态（服务器权威，经 onHandChange 更新） */
+const hand = { withId: "", lead: false };
+/** 手腕世界坐标缓存（光带端点） */
+const wristA = new THREE.Vector3();
+const wristB = new THREE.Vector3();
+const tmpDir = new THREE.Vector3();
+const followTarget = new THREE.Vector3();
+
+/** 两人手腕位置：脚底 + 朝对方方向 0.42m + 高 0.98m */
+function wristOf(pos: THREE.Vector3, dirToOther: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+  out.copy(pos).addScaledVector(dirToOther, 0.42);
+  out.y += 0.98;
+  return out;
+}
 
 const ui = createUI({
   onEnter: handleEnter,
@@ -79,7 +99,39 @@ async function handleEnter(name: string) {
   spawnSelf();
 
   // 连接服务器；失败则进入独自漫游（NPC 陪伴）
-  net = await connectIsland(name, remotes, selectedAvatar);
+  net = await connectIsland(name, remotes, selectedAvatar, {
+    onInvite: (from, fromName) => {
+      if (hand.withId) {
+        // 已牵着别人：直接婉拒
+        net?.sendHandReject(from);
+        return;
+      }
+      music.sfxChime();
+      ui.showInvite(
+        fromName,
+        () => net?.sendHandAccept(from),
+        () => net?.sendHandReject(from)
+      );
+    },
+    onResult: (kind, who) => {
+      if (kind === "busy") ui.toast("对方已经牵着别人了");
+      else if (kind === "far") ui.toast("走近一点再伸手吧");
+      else if (kind === "reject") ui.toast(`${who ?? "对方"} 婉拒了牵手`);
+    },
+    onHandChange: (withId, lead) => {
+      if (withId && !hand.withId) {
+        const other = remotes.statsOf(withId);
+        ui.toast(`和 ${other?.name ?? "旅人"} 手牵着手`);
+        music.sfxChime();
+      } else if (!withId && hand.withId) {
+        ui.toast("松开了手");
+        selfAvatar?.setHand(null);
+      }
+      hand.withId = withId;
+      hand.lead = lead;
+      controls.setLed(!!withId && !lead);
+    },
+  });
   if (net) {
     ui.setStatus("online");
   } else {
@@ -141,24 +193,92 @@ if (import.meta.env.DEV) {
     get selfAvatar() {
       return selfAvatar;
     },
+    /** 测试钩子：手动泵帧（隐藏页 rAF 冻结时驱动同一份主循环逻辑） */
+    step(frames = 1) {
+      for (let i = 0; i < frames; i++) tick(1 / 60);
+    },
   };
 }
+
+// ---------------- 牵手按键：G 邀请/松手 · F 接受 ----------------
+window.addEventListener("keydown", (e) => {
+  if (!entered || e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === "f") {
+    ui.acceptInvite();
+  } else if (k === "g") {
+    if (ui.hasInvite()) {
+      ui.rejectInvite();
+    } else if (hand.withId) {
+      net?.sendHandRelease();
+    } else if (!net) {
+      ui.toast("独自漫游的岛上，只有你和老住户…");
+    } else {
+      // 邀请 5 米内最近的真人玩家（npc- 前缀是离线演示住户，不参与牵手）
+      const near = remotes
+        .infos(controls.state.pos)
+        .filter((i) => i.dist < 5 && !i.key.startsWith("npc-"))
+        .sort((a, b) => a.dist - b.dist)[0];
+      if (!near) ui.toast("附近没有可以牵手的人");
+      else {
+        net.sendHandInvite(near.key);
+        ui.toast(`向 ${near.name} 伸出手，等待回应…`, 4000);
+      }
+    }
+  }
+});
 
 // ---------------- 主循环 ----------------
 const clock = new THREE.Clock();
 let uiTimer = 0;
 const nearBefore = new Map<string, boolean>();
+/** 模拟时钟（测试钩子 crescendo.step 在 rAF 冻结时也走同一份逻辑） */
+let simT = 0;
 
 function loop() {
   requestAnimationFrame(loop);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const t = clock.elapsedTime;
+  tick(Math.min(clock.getDelta(), 0.05));
+}
+
+function tick(dt: number) {
+  simT += dt;
+  const t = simT;
 
   if (!entered) {
     // 入场前的环岛镜头
     controls.cinematicOrbit(t);
     world.render(dt, t);
     return;
+  }
+
+  // ---- 牵手·被牵跟随：位置物理换成「被队长牵着」 ----
+  if (entered && hand.withId && !hand.lead) {
+    const lead = remotes.statsOf(hand.withId);
+    const leadPos = remotes.posOf(hand.withId);
+    if (!lead || !leadPos) {
+      net?.sendHandRelease(); // 队长掉线/离开
+    } else {
+      const s = controls.state;
+      const flying = lead.mov >= 3 || leadPos.y - terrainHeight(leadPos.x, leadPos.z) > 0.8;
+      // 待在队长右手边 0.78m（恰好是牵手距离）
+      const sideX = Math.cos(lead.yaw);
+      const sideZ = -Math.sin(lead.yaw);
+      followTarget.set(leadPos.x + sideX * 0.78, leadPos.y, leadPos.z + sideZ * 0.78);
+      if (!flying) followTarget.y = Math.max(terrainHeight(followTarget.x, followTarget.z), followTarget.y);
+      const k = Math.min(1, dt * 6);
+      const px = s.pos.x, py = s.pos.y, pz = s.pos.z;
+      s.pos.lerp(followTarget, k);
+      let dy = lead.yaw - s.yaw;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      s.yaw += dy * k;
+      s.airborne = flying;
+      s.mov = flying ? lead.mov : lead.mov >= 3 ? 0 : lead.mov;
+      s.sit = false;
+      // 喂给动画/披风的运动量（本帧位移差分，限幅防网络尖峰）
+      const clampV = (x: number) => Math.max(-9, Math.min(9, x));
+      controls.setCarriedMotion(clampV(Math.hypot(s.pos.x - px, s.pos.z - pz) / Math.max(dt, 1e-3)), clampV((s.pos.y - py) / Math.max(dt, 1e-3)));
+    }
   }
 
   controls.update(dt);
@@ -195,6 +315,57 @@ function loop() {
   const beatMap = new Map<string, number>();
   for (const i of infos) if (i.dist < AUDIBLE_R) beatMap.set(i.key, music.beatEnv(i.key));
   remotes.animate(dt, t, clarity, beatMap);
+
+  // ---- 牵手视觉：手臂朝向 + 光带（自己参与的与他人之间的都要画） ----
+  {
+    const pairs: { a: THREE.Vector3; b: THREE.Vector3 }[] = [];
+    const touched = new Set<string>();
+    const selfPos = controls.state.pos;
+    if (hand.withId && selfAvatar) {
+      const otherPos = remotes.posOf(hand.withId);
+      if (otherPos) {
+        tmpDir.copy(otherPos).sub(selfPos);
+        tmpDir.y = 0;
+        const d = tmpDir.length();
+        if (d > 1e-3) {
+          tmpDir.divideScalar(d);
+          selfAvatar.setHand(tmpDir);
+          remotes.setHandOf(hand.withId, tmpDir.clone().negate());
+          touched.add(hand.withId);
+          pairs.push({
+            a: wristOf(selfPos, tmpDir, new THREE.Vector3()),
+            b: wristOf(otherPos, tmpDir.clone().negate(), new THREE.Vector3()),
+          });
+        }
+      }
+    }
+    // 他人之间的牵手（旁观时也看得见光带）
+    remotes.forEachRemote((key, pos, _yaw, withId) => {
+      if (!withId || withId === net?.sessionId) return;
+      if (key > withId) return; // 每对只画一次
+      const other = remotes.posOf(withId);
+      if (!other) return;
+      tmpDir.copy(other).sub(pos);
+      tmpDir.y = 0;
+      const dd = tmpDir.length();
+      if (dd < 1e-3) return;
+      tmpDir.divideScalar(dd);
+      remotes.setHandOf(key, tmpDir);
+      remotes.setHandOf(withId, tmpDir.clone().negate());
+      touched.add(key);
+      touched.add(withId);
+      pairs.push({
+        a: wristOf(pos, tmpDir, new THREE.Vector3()),
+        b: wristOf(other, tmpDir.clone().negate(), new THREE.Vector3()),
+      });
+    });
+    // 没在牵手的远程小人清掉残留姿势
+    remotes.forEachRemote((key, _pos, _yaw, withId) => {
+      if (!touched.has(key)) remotes.setHandOf(key, null);
+    });
+    handLinks.update(pairs, t);
+  }
+
   music.ambient(
     t,
     Math.hypot(controls.state.pos.x, controls.state.pos.z),

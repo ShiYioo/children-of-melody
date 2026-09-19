@@ -197,6 +197,25 @@
     @keyframes toastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
     @keyframes toastOut { to { opacity: 0; transform: translateY(-8px); } }
 
+    /* ---------- 牵手邀请 ---------- */
+    .hand-invite {
+      position: fixed; bottom: 118px; left: 50%; transform: translateX(-50%); z-index: 45;
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 20px; font-size: 13px; letter-spacing: 1px; color: var(--ink);
+      background: rgba(40, 29, 56, 0.78); border: 1px solid var(--panel-border); border-radius: 16px;
+      backdrop-filter: blur(10px); animation: toastIn 0.45s ease both;
+      box-shadow: 0 6px 30px rgba(255, 205, 130, 0.16);
+    }
+    .hand-invite b { color: #ffd9a0; }
+    .hand-invite button {
+      font: inherit; cursor: pointer; border-radius: 999px; padding: 7px 16px; letter-spacing: 1px;
+      border: 1px solid var(--panel-border); color: var(--ink); background: rgba(255, 255, 255, 0.06);
+      transition: background 0.2s;
+    }
+    .hand-invite button:hover { background: rgba(255, 255, 255, 0.14); }
+    .hand-invite .hi-yes { background: rgba(255, 190, 120, 0.24); border-color: rgba(255, 210, 150, 0.55); color: #ffe6c4; }
+    .hand-invite .hi-yes:hover { background: rgba(255, 190, 120, 0.4); }
+
     @media (max-width: 720px) {
       #hints { display: none; }
       #nearbyWrap { width: 200px; }
@@ -265,6 +284,7 @@
   <div id="hints" class="hud panel">
     <div><b>W A S D</b> 移动 &nbsp; <b>Shift</b> 奔跑 &nbsp; <b>E</b> 坐下</div>
     <div style="margin-top:6px"><b>空格</b> 跳跃 · 腾空按住 <b>滑翔</b> · 再按 <b>扑翼</b></div>
+    <div style="margin-top:6px"><b>G</b> 牵手 / 松手 &nbsp; <b>F</b> 接受牵手</div>
     <div style="margin-top:6px;font-size:10.5px;color:rgba(255,244,230,0.35)">点击画面锁定鼠标环顾 · Esc 释放 · 篝火与灯塔山丘有暖流</div>
   </div>
 
