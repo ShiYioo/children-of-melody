@@ -16,6 +16,7 @@ export class CapeSim {
   private pos: Float32Array;
   private prev: Float32Array;
   private constraints: { a: number; b: number; rest: number; k: number }[] = [];
+  private rowLen = 0.06; // 每行网格的长度（锚距硬约束用）
   private acc = 0;
   private readonly dt = 1 / 60;
   private geo: THREE.BufferGeometry;
@@ -47,6 +48,8 @@ export class CapeSim {
         if (i < this.rows - 2) addC(idx(i, j), idx(i + 2, j), 0.25); // 弯曲（更弱）
       }
     }
+    // 每行竖向步长（锚距硬约束的量尺）
+    this.rowLen = Math.abs(P(0).y - P((this.rows - 1) * this.cols).y) / Math.max(1, this.rows - 1) || 0.06;
   }
 
   /**
@@ -140,6 +143,25 @@ export class CapeSim {
         this.prev[o] = pins[o];
         this.prev[o + 1] = pins[o + 1];
         this.prev[o + 2] = pins[o + 2];
+      }
+
+      // 锚距硬约束：任意点到其所在列顶锚的距离不得超过链长上限(1.45 倍)。
+      // 极端风(如远程玩家网络速度尖峰)再也拉不出丝，只是把布拉直到极限再弹回。
+      for (let v = this.cols; v < n; v++) {
+        const col = v % this.cols;
+        const maxLen = Math.floor(v / this.cols) * this.rowLen * 1.45;
+        const oa = col * 3;
+        const o = v * 3;
+        const dx = this.pos[o] - this.pos[oa];
+        const dy = this.pos[o + 1] - this.pos[oa + 1];
+        const dz = this.pos[o + 2] - this.pos[oa + 2];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d > maxLen && d > 1e-6) {
+          const s = maxLen / d;
+          this.pos[o] = this.pos[oa] + dx * s;
+          this.pos[o + 1] = this.pos[oa + 1] + dy * s;
+          this.pos[o + 2] = this.pos[oa + 2] + dz * s;
+        }
       }
     }
 
