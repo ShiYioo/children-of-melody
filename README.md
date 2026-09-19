@@ -1,4 +1,4 @@
-# 音遇 · Meet in Melody
+# 音遇 · Children of the Melody
 
 > 靠近一个人，他的歌会慢慢变得清晰。
 
