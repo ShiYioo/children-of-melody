@@ -165,7 +165,7 @@ function loop() {
     selfAvatar.group.rotation.y = s.yaw;
     const speed = controls.horizSpeed;
     const air = s.mov === 3 || s.mov === 4 ? 2 : s.airborne ? 1 : 0;
-    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel });
+    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel, vx: controls.horizVel.x, vz: controls.horizVel.z });
     net?.sendPos({ x: s.pos.x, y: s.pos.y, z: s.pos.z, ry: s.yaw, mov: s.mov, sit: s.sit });
   }
 

@@ -180,10 +180,14 @@ export class RemotePlayers {
       const meta = trackMeta(e.trackId, e.songName);
       const beat = beatMap?.get(e.key) ?? 0.35;
       e.avatar.setRing(e.trackId >= 0 ? new THREE.Color(meta.color) : null, clarity * (0.45 + 0.55 * beat));
-      // 垂直速度从 y 差分估算（供空中姿势分层）
+      // 垂直速度从 y 差分估算（供空中姿势分层），水平速度按朝向近似（供披风风场）
       const vyEst = (g.position.y - e.lastY) / Math.max(dt, 1e-3);
       e.lastY = g.position.y;
-      e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4), { vy: vyEst });
+      e.avatar.animate(dt, t, e.speed, e.target.sit, air, yawStep / Math.max(dt, 1e-4), {
+        vy: vyEst,
+        vx: Math.sin(g.rotation.y) * e.speed,
+        vz: Math.cos(g.rotation.y) * e.speed,
+      });
     }
     return [];
   }

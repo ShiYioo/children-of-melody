@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { createToonKit } from "./world/toon";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
+import { CapeSim } from "./cape";
 
 /**
  * 光遇风小人 · 二代
@@ -18,8 +19,8 @@ export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
-  /** air: 0 地面 / 1 腾空 / 2 滑翔；opts.vy 用于空中姿势分层（上升/下落） */
-  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, opts?: { vy?: number }) => void;
+  /** air: 0 地面 / 1 腾空 / 2 滑翔；state 提供速度分量（披风的风）与 vy（姿势分层） */
+  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, state?: { vy?: number; vx?: number; vz?: number }) => void;
   /** 落地缓冲（着地瞬间调用） */
   land: () => void;
   /** 扑翼脉冲（腾空按跳时调用，披风向后上方一抖） */
@@ -49,70 +50,9 @@ function nameTexture(name: string): THREE.CanvasTexture {
   return tex;
 }
 
-/**
- * 披风材质：toon + 顶点布料仿真。
- * 位移由三层波叠加（纵向行波 / 横向涟漪 / 非线性拖尾），
- * 并在着色器里用数值差分重算法线——光影随布褶流动，不再是硬纸板。
- */
-function makeCapeMaterial(
-  color: THREE.Color,
-  gradientMap: THREE.DataTexture | null,
-  uni: Record<string, THREE.IUniform>,
-  halfW: number,
-  phase: number
-) {
-  const mat = new THREE.MeshToonMaterial({ color, side: THREE.DoubleSide, gradientMap: gradientMap ?? undefined });
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = uni.uTime;
-    shader.uniforms.uAmp = uni.uAmp;
-    shader.uniforms.uFlow = uni.uFlow;
-    shader.uniforms.uHalfW = { value: halfW };
-    shader.uniforms.uPhase = { value: phase };
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-        uniform float uTime;
-        uniform float uAmp;
-        uniform float uFlow;
-        uniform float uHalfW;
-        uniform float uPhase;
-        vec3 capeWave(vec3 p) {
-          float f = clamp(-p.y / 1.05, 0.0, 1.0); // 0 顶(固定) → 1 底(自由)
-          float edge = clamp(abs(p.x) / uHalfW, 0.0, 1.0);
-          // 纵向行波：风从肩传到底边
-          float wave = sin(p.y * 5.2 + uTime * 3.1 + uPhase) * 0.05 * f * uAmp;
-          // 横向涟漪：边缘滞后于中心，越靠自由端越乱
-          float ripple = sin(p.x * 4.2 - uTime * 2.3 + uPhase * 1.7 + p.y * 1.5) * 0.055 * f * f * uAmp * (0.35 + 0.65 * edge);
-          // 拖尾：非线性后仰 + 横向不同步（底边乱舞）
-          float trail = -uFlow * 0.62 * f * f * (1.0 + 0.18 * sin(p.x * 2.6 + uTime * 1.8 + uPhase));
-          return vec3(
-            wave + ripple,
-            -abs(ripple) * 0.35 * f,
-            trail + cos(p.y * 4.2 + uTime * 2.7 + uPhase * 0.6) * 0.045 * f * uAmp
-          );
-        }`
-      )
-      .replace(
-        "#include <beginnormal_vertex>",
-        `#include <beginnormal_vertex>
-        { // 数值差分重算法线：光影随布褶起伏
-          float eps = 0.03;
-          vec3 o0 = capeWave(position);
-          vec3 ox = capeWave(position + vec3(eps, 0.0, 0.0));
-          vec3 oy = capeWave(position + vec3(0.0, eps, 0.0));
-          vec3 tx = vec3(1.0, 0.0, 0.0) + (ox - o0) / eps;
-          vec3 ty = vec3(0.0, 1.0, 0.0) + (oy - o0) / eps;
-          objectNormal = normalize(cross(ty, tx));
-        }`
-      )
-      .replace(
-        "#include <begin_vertex>",
-        `#include <begin_vertex>
-        transformed += capeWave(position);`
-      );
-  };
-  return mat;
+/** 披风材质：普通 toon 双面——形变与法线全部由 CapeSim 物理每帧驱动 */
+function makeCapeMaterial(color: THREE.Color, gradientMap: THREE.DataTexture | null) {
+  return new THREE.MeshToonMaterial({ color, side: THREE.DoubleSide, gradientMap: gradientMap ?? undefined });
 }
 
 export function createAvatar(opts: { name: string; hue: number; self?: boolean; model?: AvatarModel }): Avatar {
@@ -293,12 +233,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   hood.rotation.x = -0.45; // 向后仰，露出脸
   headGroup.add(hood);
 
-  // ---- 双层披风（顶点布料，底边裁成不规则扇形） ----
-  const capeUni = {
-    uTime: { value: 0 },
-    uAmp: { value: 1 },
-    uFlow: { value: 0 },
-  };
+  // ---- 双层披风（Verlet 布料物理，底边裁成不规则扇形） ----
   const shapeCape = (geo: THREE.PlaneGeometry, jag: number) => {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
@@ -313,19 +248,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const outerGeo = new THREE.PlaneGeometry(0.82, 1.05, 12, 18);
   outerGeo.translate(0, -0.525, 0); // 顶端为固定轴
   shapeCape(outerGeo, 1);
-  const outerCape = new THREE.Mesh(outerGeo, makeCapeMaterial(capeOuter, kit.gradient, capeUni, 0.41, 0));
-  outerCape.position.set(0, 1.02, -0.17);
-  outerCape.rotation.x = 0.12;
-  outerCape.castShadow = true;
-  bodyGroup.add(outerCape);
+  const outerCapeSim = new CapeSim(outerGeo, makeCapeMaterial(capeOuter, kit.gradient), { gravity: 15, damping: 0.986, iters: 5 });
+  const outerCape = outerCapeSim.mesh;
+  // 注意：mesh 不带偏移——CapeSim 的顶点/锚点/碰撞都在 group 坐标系里表达
+  group.add(outerCape);
 
   const innerGeo = new THREE.PlaneGeometry(0.62, 0.72, 10, 14);
   innerGeo.translate(0, -0.36, 0);
   shapeCape(innerGeo, 0.7);
-  const innerCape = new THREE.Mesh(innerGeo, makeCapeMaterial(capeInner, kit.gradient, capeUni, 0.31, 1.4));
-  innerCape.position.set(0, 0.98, -0.12);
-  innerCape.rotation.x = 0.1;
-  bodyGroup.add(innerCape);
+  const innerCapeSim = new CapeSim(innerGeo, makeCapeMaterial(capeInner, kit.gradient), { gravity: 18, damping: 0.982, iters: 4 });
+  const innerCape = innerCapeSim.mesh;
+  group.add(innerCape);
 
   // ---- 轮廓光（背壳法，淡淡的暖边） ----
   const rimMat = new THREE.MeshBasicMaterial({
@@ -402,6 +335,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let accelSm = 0; // 平滑加速度（起跑前倾/急停后仰）
   let lastSpeed = 0;
   let prevAir = 0;
+
+  // 布料仿真的复用临时量（避免每帧分配）
+  const windWorld = new THREE.Vector3();
+  const shoulderLocal = new THREE.Vector3();
+  const UP_AXIS = new THREE.Vector3(0, 1, 0);
+  const outerPins = new Float32Array(13 * 3); // cols=12+1 冗余一位无妨，step 按 sim.cols 读
+  const innerPins = new Float32Array(11 * 3);
 
   return {
     group,
@@ -504,23 +444,28 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.45;
 
-      // 披风：风感 + 速度拖尾 + 滑翔展开（加宽+向后上方扬起）+ 扑翼抖动
-      capeUni.uTime.value = t;
-      capeUni.uAmp.value = 0.35 + speedN * 1.1 + glideBlend * 0.8 + flapPulse * 1.6;
-      capeUni.uFlow.value = THREE.MathUtils.lerp(
-        capeUni.uFlow.value,
-        Math.max(speedN * 1.0, glideBlend * 1.3) + flapPulse * 0.8,
-        Math.min(1, dt * 6)
+      // 披风：Verlet 布料物理——风 = 相对风(角色速度的反向) + 环境风 + 滑翔上流 + 扑翼风冲
+      const vx = state.vx ?? 0;
+      const vz = state.vz ?? 0;
+      windWorld.set(
+        -vx * 1.35 + Math.sin(t * 0.7) * 0.7,
+        -vy * 1.2 + glideBlend * 13 - flapPulse * 5,
+        -vz * 1.35 + Math.cos(t * 0.5) * 0.5 - flapPulse * 3
       );
-      const flowRot = 0.1 + speedN * 0.5 + sitLerp * 0.75 - glideBlend * 0.42 - flapPulse * 0.3;
-      outerCape.rotation.x = THREE.MathUtils.lerp(outerCape.rotation.x, flowRot, Math.min(1, dt * 8));
-      // 肩部随步频轻摆（布的从动感），待机时只有微风轻拂
-      outerCape.rotation.z = Math.sin(walkPhase) * 0.07 * walkAmp + Math.sin(t * 1.2 + opts.hue) * 0.02;
-      innerCape.rotation.z = outerCape.rotation.z * 0.6;
-      innerCape.rotation.x = outerCape.rotation.x * 0.7;
-      const spread = 1 + glideBlend * 0.22 + flapPulse * 0.12;
-      outerCape.scale.x = THREE.MathUtils.lerp(outerCape.scale.x, spread, Math.min(1, dt * 7));
-      innerCape.scale.x = outerCape.scale.x;
+      windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
+      // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
+      const pinCape = (sim: CapeSim, pins: Float32Array, ax: number, ay: number, az: number) => {
+        for (let j = 0; j < sim.cols; j++) {
+          const k = j / (sim.cols - 1) - 0.5; // -0.5..0.5
+          shoulderLocal.set(k * 0.82, ay, az - 0.05 * Math.abs(k) * 2).applyEuler(bodyGroup.rotation).add(bodyGroup.position);
+          pins[j * 3] = shoulderLocal.x;
+          pins[j * 3 + 1] = shoulderLocal.y;
+          pins[j * 3 + 2] = shoulderLocal.z;
+        }
+        sim.step(dt, pins, windWorld);
+      };
+      pinCape(outerCapeSim, outerPins, 0, 1.02, -0.17);
+      pinCape(innerCapeSim, innerPins, 0, 0.98, -0.12);
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;
@@ -582,8 +527,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       moteMat.dispose();
       eyeMat.dispose();
       rimMat.dispose();
-      outerCape.material.dispose();
-      innerCape.material.dispose();
+      outerCape.geometry.dispose();
+      innerCape.geometry.dispose();
+      for (const m of [outerCape.material, innerCape.material]) {
+        for (const mat of Array.isArray(m) ? m : [m]) (mat as THREE.Material).dispose();
+      }
     },
   };
 }

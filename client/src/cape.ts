@@ -1,0 +1,143 @@
+import * as THREE from "three";
+
+/**
+ * 披风布料仿真：Verlet 质点网格。
+ *
+ * 为什么这不像「预设摆动动画」：
+ *  - 每个顶点是一个有质量的质点，受重力与相对风驱动（角色的加速度就是风）
+ *  - 结构/剪切/弯曲约束每帧迭代求解，布有张力与 stiffness
+ *  - 顶行钉在肩上：角色加速→布因惯性滞后甩动；急转→甩向外侧；滑翔→上风气流托起鼓成翼
+ *  - 与身体近似碰撞 + 地面碰撞：坐下时披风自然堆叠在地面
+ */
+export class CapeSim {
+  readonly mesh: THREE.Mesh;
+  readonly cols: number;
+  readonly rows: number;
+  private pos: Float32Array;
+  private prev: Float32Array;
+  private constraints: { a: number; b: number; rest: number; k: number }[] = [];
+  private acc = 0;
+  private readonly dt = 1 / 60;
+  private geo: THREE.BufferGeometry;
+
+  constructor(geometry: THREE.BufferGeometry, material: THREE.Material, private opts: { gravity?: number; damping?: number; iters?: number; drag?: number } = {}) {
+    this.geo = geometry;
+    this.mesh = new THREE.Mesh(geometry, material);
+    this.mesh.castShadow = true;
+    this.mesh.frustumCulled = false;
+    const src = geometry.attributes.position as THREE.BufferAttribute;
+    this.pos = new Float32Array(src.array as Float32Array);
+    this.prev = new Float32Array(this.pos);
+    const params = (geometry as unknown as { parameters?: { widthSegments: number; heightSegments: number } }).parameters;
+    this.cols = (params?.widthSegments ?? 11) + 1;
+    this.rows = (params?.heightSegments ?? 17) + 1;
+
+    const idx = (i: number, j: number) => i * this.cols + j;
+    const P = (n: number) => new THREE.Vector3(this.pos[n * 3], this.pos[n * 3 + 1], this.pos[n * 3 + 2]);
+    const addC = (a: number, b: number, k: number) => this.constraints.push({ a, b, rest: P(a).distanceTo(P(b)), k });
+
+    for (let i = 0; i < this.rows; i++) {
+      for (let j = 0; j < this.cols; j++) {
+        if (j < this.cols - 1) addC(idx(i, j), idx(i, j + 1), 1); // 结构·横
+        if (i < this.rows - 1) addC(idx(i, j), idx(i + 1, j), 1); // 结构·竖
+        if (i < this.rows - 1 && j < this.cols - 1) {
+          addC(idx(i, j), idx(i + 1, j + 1), 0.35); // 剪切（弱）
+          addC(idx(i, j + 1), idx(i + 1, j), 0.35);
+        }
+        if (i < this.rows - 2) addC(idx(i, j), idx(i + 2, j), 0.25); // 弯曲（更弱）
+      }
+    }
+  }
+
+  /**
+   * @param dt 帧间隔
+   * @param pins 顶行锚点（局部坐标，每 3 个一组，长度 = cols*3），由肩部世界位置换算而来
+   * @param windLocal 作用于布的合外力（局部坐标系）：重力由内部加重
+   */
+  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3) {
+    const gravity = this.opts.gravity ?? 14;
+    const damping = this.opts.damping ?? 0.985;
+    const iters = this.opts.iters ?? 5;
+
+    this.acc = Math.min(this.acc + dt, this.dt * 3);
+    while (this.acc >= this.dt) {
+      this.acc -= this.dt;
+      const h = this.dt;
+      const n = this.pos.length / 3;
+
+      // Verlet 积分（顶行 pin 除外）
+      for (let v = this.cols; v < n; v++) {
+        const o = v * 3;
+        for (let c = 0; c < 3; c++) {
+          const p = this.pos[o + c];
+          const pr = this.prev[o + c];
+          this.prev[o + c] = p;
+          this.pos[o + c] = p + (p - pr) * damping + windLocal.getComponent(c) * h * h * 60;
+        }
+      }
+      // 重力（局部 y-）
+      for (let v = this.cols; v < n; v++) this.pos[v * 3 + 1] -= gravity * h * h * 60;
+
+      // 约束松弛
+      for (let it = 0; it < iters; it++) {
+        for (const c of this.constraints) {
+          const oa = c.a * 3;
+          const ob = c.b * 3;
+          const dx = this.pos[oa] - this.pos[ob];
+          const dy = this.pos[oa + 1] - this.pos[ob + 1];
+          const dz = this.pos[oa + 2] - this.pos[ob + 2];
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-6;
+          const diff = ((d - c.rest) / d) * 0.5 * c.k;
+          const mx = dx * diff;
+          const my = dy * diff;
+          const mz = dz * diff;
+          const aPinned = c.a < this.cols;
+          const bPinned = c.b < this.cols;
+          if (!aPinned) {
+            this.pos[oa] -= mx * (bPinned ? 2 : 1);
+            this.pos[oa + 1] -= my * (bPinned ? 2 : 1);
+            this.pos[oa + 2] -= mz * (bPinned ? 2 : 1);
+          }
+          if (!bPinned) {
+            this.pos[ob] += mx * (aPinned ? 2 : 1);
+            this.pos[ob + 1] += my * (aPinned ? 2 : 1);
+            this.pos[ob + 2] += mz * (aPinned ? 2 : 1);
+          }
+        }
+        // 身体碰撞：近似球（躯干+头），把布推离
+        for (let v = this.cols; v < n; v++) {
+          const o = v * 3;
+          // 球心 (0, 0.85, 0) 半径 0.42（披风局部）
+          const dx = this.pos[o];
+          const dy = this.pos[o + 1] - 0.85;
+          const dz = this.pos[o + 2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          const r = 0.42;
+          if (d2 < r * r && d2 > 1e-9) {
+            const d = Math.sqrt(d2);
+            const push = (r - d) / d;
+            this.pos[o] += dx * push;
+            this.pos[o + 1] += dy * push;
+            this.pos[o + 2] += dz * push;
+          }
+          if (this.pos[o + 1] < 0.03) this.pos[o + 1] = 0.03; // 地面
+        }
+      }
+
+      // 顶行钉在肩上
+      for (let j = 0; j < this.cols; j++) {
+        const o = j * 3;
+        this.pos[o] = pins[o];
+        this.pos[o + 1] = pins[o + 1];
+        this.pos[o + 2] = pins[o + 2];
+        this.prev[o] = pins[o];
+        this.prev[o + 1] = pins[o + 1];
+        this.prev[o + 2] = pins[o + 2];
+      }
+    }
+
+    (this.geo.attributes.position as THREE.BufferAttribute).copyArray(this.pos);
+    this.geo.attributes.position.needsUpdate = true;
+    this.geo.computeVertexNormals();
+  }
+}
