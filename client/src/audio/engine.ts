@@ -77,6 +77,12 @@ export class MusicEngine {
   private waveGain!: GainNode;
   private fireGain!: GainNode;
   private noiseBuf!: AudioBuffer;
+  // 飞行风声（光遇式：随空速涨落的宽频风 + 高频气流层 + 布料扑簌）
+  private flightLowG!: GainNode; // 风声主体（低频体腔）
+  private flightHighG!: GainNode; // 高频气流（速度越快越亮）
+  private flightHighF!: BiquadFilterNode; // 气流滤波（中心频率随空速/俯冲开高）
+  private flightLevel = 0; // 平滑后的飞行强度
+  private nextFlutter = 0; // 下一次布料扑簌的时刻
 
   /** 必须在用户手势里调用（浏览器自动播放策略）。
    *  不阻塞等待 resume——即使音频暂时被策略挂起，入场流程也能继续，
@@ -117,6 +123,29 @@ export class MusicEngine {
     this.windGain = mkNoise("bandpass", 480, 0.6);
     this.waveGain = mkNoise("lowpass", 360, 0.8);
     this.fireGain = mkNoise("highpass", 2800, 0.5);
+
+    // 飞行风声：两层共用一条噪声源——
+    // 低频层是风的「体腔」（lowpass，随空速增强），
+    // 高频层是擦过耳边的「气流」（bandpass，中心频率随空速与俯冲速度开高）
+    const mkFlight = (filterType: BiquadFilterType, freq: number, q: number) => {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuf;
+      src.loop = true;
+      const f = ctx.createBiquadFilter();
+      f.type = filterType;
+      f.frequency.value = freq;
+      f.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(f).connect(g).connect(this.master);
+      src.start();
+      return { f, g };
+    };
+    const low = mkFlight("lowpass", 380, 0.7);
+    const high = mkFlight("bandpass", 1100, 0.9);
+    this.flightLowG = low.g;
+    this.flightHighG = high.g;
+    this.flightHighF = high.f;
   }
 
   // ---------- 曲源管理 ----------
@@ -552,14 +581,50 @@ export class MusicEngine {
     return Math.pow(1 - phase, 2.2);
   }
 
-  /** 环境声：风、浪、篝火；滑翔速度会自然加大风声 */
-  ambient(t: number, playerR: number, fireDist: number, glideSpeed = 0) {
+  /** 环境声：风、浪、篝火；飞行风声（光遇式）随空速涨落
+   *  @param speedH 水平空速（腾空时传入，地面传 0）
+   *  @param airborne 是否腾空（滑翔/下落都算）
+   *  @param vy 垂直速度（俯冲为负，负得越多气流越亮） */
+  ambient(t: number, playerR: number, fireDist: number, speedH = 0, airborne = false, vy = 0) {
     if (!this.ctx || this.ctx.state !== "running") return;
     const shore = smoothstep(30, 52, playerR); // 越靠近岸浪声越大
     this.waveGain.gain.value = (0.05 + 0.045 * (0.5 + 0.5 * Math.sin(t * 0.4))) * (0.25 + shore);
-    this.windGain.gain.value = 0.028 + 0.014 * Math.sin(t * 0.23) + shore * 0.01 + Math.min(0.11, glideSpeed * 0.012);
+    this.windGain.gain.value = 0.028 + 0.014 * Math.sin(t * 0.23) + shore * 0.01;
     const fireProx = Math.max(0, 1 - fireDist / 13);
     this.fireGain.gain.value = fireProx * (0.014 + Math.random() * 0.012);
+
+    // ---- 飞行风声 ----
+    // 强度 = 空速 + 俯冲分量：起跳离地时缓缓升起，落地时收掉
+    const w = Math.min(1, speedH / 9);
+    const dive = airborne ? Math.max(0, Math.min(1, -vy / 10)) : 0; // 俯冲 0~1
+    const target = airborne ? Math.min(1, 0.28 + w * 0.6 + dive * 0.45) : 0;
+    // 手动平滑（起风 ~0.5s，收风 ~0.35s）
+    this.flightLevel += (target - this.flightLevel) * (target > this.flightLevel ? 0.05 : 0.07);
+    if (this.flightLevel < 0.003) {
+      this.flightLevel = 0;
+      this.flightLowG.gain.value = 0;
+      this.flightHighG.gain.value = 0;
+    } else {
+      // 阵风起伏：三个不同频率的正弦叠加，像一阵一阵的风
+      const gust = 0.72 + 0.16 * Math.sin(t * 1.9) + 0.08 * Math.sin(t * 3.7 + 1.3) + 0.04 * Math.sin(t * 7.3);
+      const lv = this.flightLevel * gust;
+      this.flightLowG.gain.value = 0.16 * lv;
+      // 气流层：速度越快、俯冲越猛，频段越亮、越响
+      this.flightHighF.frequency.value = 900 + w * 1500 + dive * 1200;
+      this.flightHighG.gain.value = (0.05 + 0.11 * w + 0.1 * dive) * gust * this.flightLevel;
+      // 布料扑簌：高速滑翔时披风边角被风撕出的间歇轻响
+      if (airborne && w > 0.35 && t > this.nextFlutter) {
+        this.noiseHit({
+          freq0: 1600 + Math.random() * 1800,
+          freq1: 700 + Math.random() * 500,
+          dur: 0.05 + Math.random() * 0.09,
+          vol: 0.02 + Math.random() * 0.028 * w,
+          type: "bandpass",
+          q: 1.4,
+        });
+        this.nextFlutter = t + 0.35 + Math.random() * 0.85;
+      }
+    }
   }
 
   // ---------- 动作音效（合成，零素材） ----------
@@ -606,10 +671,14 @@ export class MusicEngine {
     this.noiseHit({ freq0: 300, freq1: 1400, dur: 0.28, vol: 0.1, type: "bandpass", q: 0.8 });
   }
 
-  /** 扑翼：布料展翅的呼啸（两层） */
+  /** 扑翼：光遇式的披风拍打——布料闷响 + 推气 + 织物脆响，三层叠出体量感 */
   sfxFlap() {
-    this.noiseHit({ freq0: 500, freq1: 1600, dur: 0.22, vol: 0.16, type: "bandpass", q: 0.7 });
-    this.noiseHit({ freq0: 900, freq1: 420, dur: 0.3, vol: 0.09, type: "bandpass", q: 1.2, delay: 0.05 });
+    // 布料的「体腔」：低频一闷
+    this.noiseHit({ freq0: 320, freq1: 130, dur: 0.14, vol: 0.17, type: "lowpass", q: 0.9 });
+    // 向下推的一口「气」
+    this.noiseHit({ freq0: 1300, freq1: 520, dur: 0.2, vol: 0.11, type: "bandpass", q: 0.7, delay: 0.015 });
+    // 织物表面的「脆」：一闪即逝
+    this.noiseHit({ freq0: 2600, freq1: 4200, dur: 0.07, vol: 0.05, type: "highpass", q: 1.1, delay: 0.01 });
   }
 
   /** 落地：低沉的噗 + 轻尘 */

@@ -382,7 +382,9 @@ function tick(dt: number) {
     t,
     Math.hypot(controls.state.pos.x, controls.state.pos.z),
     world.campfire.position.distanceTo(controls.state.pos),
-    controls.state.airborne ? controls.horizSpeed : 0
+    controls.state.airborne ? controls.horizSpeed : 0,
+    controls.state.airborne,
+    controls.verticalVel
   );
   // 滑翔风线与瞬态光效
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);
