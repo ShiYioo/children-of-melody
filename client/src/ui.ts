@@ -64,7 +64,7 @@ export function createUI(handlers: {
   urlNameInput?.addEventListener("keydown", (e) => e.stopPropagation());
 
   const avatarNames: Array<{ id: AvatarModel; name: string; desc: string }> = [
-    { id: "classic", name: "云朵旅人", desc: "原生拾音小人" },
+    { id: "classic", name: "云朵旅人", desc: "原生音遇小人" },
     { id: "hooded", name: "兜帽旅人", desc: "披风与兜帽" },
     { id: "corgi", name: "柯基", desc: "摇着尾巴散步" },
     { id: "duck", name: "小鸭子", desc: "嘎嘎的暖黄色" },
@@ -227,7 +227,7 @@ export function createUI(handlers: {
     },
     setStatus(mode: "online" | "solo" | "off") {
       statusDot.className = mode === "online" ? "" : mode === "solo" ? "solo" : "off";
-      statusText.textContent = mode === "online" ? "拾音岛 · 在线" : mode === "solo" ? "独自漫游中" : "连接中断";
+      statusText.textContent = mode === "online" ? "音遇 · 在线" : mode === "solo" ? "独自漫游中" : "连接中断";
     },
     /** 刷新播放/暂停按钮与状态文案：mode "none" | "playing" | "paused" */
     setPlayState(mode: "none" | "playing" | "paused") {

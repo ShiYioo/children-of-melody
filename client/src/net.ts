@@ -65,7 +65,7 @@ export async function connectIsland(
       new Promise((_, rej) => setTimeout(() => rej(new Error("连接超时")), 6000)),
     ]);
   } catch (e) {
-    console.warn("[net] 无法连上拾音岛，进入独自漫游模式", e);
+    console.warn("[net] 无法连上音遇，进入独自漫游模式", e);
     return null;
   }
 

@@ -166,4 +166,4 @@ const server = defineServer({
 
 const port = Number(process.env.PORT || 2567);
 server.listen(port);
-console.log(`[crescendo] 拾音岛 · 服务端已启动 → ws://0.0.0.0:${port}`);
+console.log(`[crescendo] 音遇 · 服务端已启动 → ws://0.0.0.0:${port}`);
