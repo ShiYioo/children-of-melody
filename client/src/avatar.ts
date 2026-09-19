@@ -454,8 +454,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7;
 
-      // 滑翔时名牌随肩线下压：身体前倾后固定 2.35 高度的名牌会飘在半空，远看像和角色脱开
+      // 滑翔时名牌随肩线下压并前移：身体前倾后固定高度的名牌会飘在半空，远看像和角色脱开
       nameSprite.position.y = 2.35 - glideBlend * 0.6;
+      nameSprite.position.z = glideBlend * 0.3;
 
       // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
         if (!importedReady) {
@@ -471,14 +472,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             (-vz * 0.55 + Math.cos(t * 0.5) * 0.25) * wf - glideBlend * 0.7 - flapPulse * 2.5
           );
         windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
-        // 肩锚点行：身体前倾/坐下时肩部位置变化，钉点跟随（布因惯性自然甩动）
+        // 肩锚点行：钉点跟随身体的完整旋转（含滑翔前倾）。
+        // 前倾时真实肩膀在 (y0.75, z+0.71)，若锚点不跟旋转会悬在直立肩位，翼与身体脱开 1 米
         for (let j = 0; j < outerCapeSim.cols; j++) {
           const k = j / (outerCapeSim.cols - 1) - 0.5;
-          // 滑翔时锚点完全摆脱身体前倾并略后移：披风根钉在肩后上方，
-          // 斜后上的托力才能把布展开成翼（前倾会把锚旋到身前，布就被前界夹成一团）
-          anchorEuler.set(bodyGroup.rotation.x * (1 - glideBlend), bodyGroup.rotation.y, bodyGroup.rotation.z);
+          anchorEuler.set(bodyGroup.rotation.x, bodyGroup.rotation.y, bodyGroup.rotation.z);
           shoulderLocal
-            .set(k * 0.82, 1.02, -0.17 - glideBlend * 0.12 - 0.05 * Math.abs(k) * 2)
+            .set(k * 0.82, 1.02, -0.17 - 0.05 * Math.abs(k) * 2)
             .applyEuler(anchorEuler)
             .add(bodyGroup.position);
           outerPins[j * 3] = shoulderLocal.x;

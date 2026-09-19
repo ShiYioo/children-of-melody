@@ -86,6 +86,9 @@ export class CapeSim {
 
       // 约束松弛
       for (let it = 0; it < iters; it++) {
+        // 前界随翼形混合放宽：滑翔时锚点跟随前倾的肩膀移到身体前方(z+)，
+        // 固定 -0.06 的前界会把翼根硬拽回来、撕裂肩缝
+        const frontZ = -0.06 + wingBlend * 1.5;
         for (const c of this.constraints) {
           const oa = c.a * 3;
           const ob = c.b * 3;
@@ -129,9 +132,9 @@ export class CapeSim {
             }
           }
           // 单向前界：布面不能越过身体正面（防跳跃下落时被上掀风翻到身前穿模）
-          if (this.pos[o + 2] > -0.06) {
-            this.pos[o + 2] = -0.06;
-            this.prev[o + 2] = Math.min(this.prev[o + 2], -0.06); // 同步速度，防反冲
+          if (this.pos[o + 2] > frontZ) {
+            this.pos[o + 2] = frontZ;
+            this.prev[o + 2] = Math.min(this.prev[o + 2], frontZ); // 同步速度，防反冲
           }
           if (this.pos[o + 1] < 0.03) this.pos[o + 1] = 0.03; // 地面
         }
@@ -176,9 +179,10 @@ export class CapeSim {
     } else {
       attr.copyArray(this.pos);
     }
-    // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面
+    // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面（翼形混合时随锚点放宽）
+    const outFront = -0.06 + Math.min(1, wingBlend) * 1.5;
     for (let i = 0; i < attr.count; i++) {
-      if (attr.getZ(i) > -0.06) attr.setZ(i, -0.06);
+      if (attr.getZ(i) > outFront) attr.setZ(i, outFront);
     }
     this.geo.attributes.position.needsUpdate = true;
     this.geo.computeVertexNormals();
