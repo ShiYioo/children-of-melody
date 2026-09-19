@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { terrainHeight, ISLAND_RADIUS, WATER_LEVEL } from "./heightfield";
+import { resolveColliders } from "./colliders";
 
 /**
  * 光遇式操控 · 二代
@@ -208,6 +209,9 @@ export class PlayerControls {
       s.yawVel = THREE.MathUtils.lerp(s.yawVel, 0, Math.min(1, dt * 6));
     }
     if (moving && s.sit) s.sit = false;
+
+    // ---- 实体碰撞：树/岩石/灯塔/篝火不可穿越，贴着表面滑行 ----
+    resolveColliders(s.pos, this.vel);
 
     // ---- 岛界（空中也留在岛上空） ----
     const r = Math.hypot(s.pos.x, s.pos.z);

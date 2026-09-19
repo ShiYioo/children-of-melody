@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { terrainHeight, terrainSlope } from "../heightfield";
+import { addCollider, clearColliders } from "../colliders";
 import type { ToonKit } from "./toon";
 
 /**
@@ -392,6 +393,7 @@ function makeCampfire(kit: ToonKit): Campfire {
 export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: number) => void)[]; campfire: Campfire } {
   const group = new THREE.Group();
   const updates: ((t: number) => void)[] = [];
+  clearColliders(); // HMR 重跑时避免重复注册
 
   // 草坡树与林地树（大冠树，株距拉开）
   const treeSpots: [number, number, number][] = [
@@ -402,6 +404,9 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
   for (const [x, z, s] of treeSpots) {
     if (terrainHeight(x, z) < 1.4) continue;
     group.add(makeTree(kit, x, z, s));
+    // 树干碰撞（冠不挡人）
+    const h = terrainHeight(x, z);
+    addCollider({ x, z, r: 0.32 * s, y0: h - 0.2, y1: h + 2.4 * s });
   }
 
   // 岩石（圆润卵石）
@@ -409,7 +414,11 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
     [40, 6, 1.8], [44, -6, 1.4], [-44, -20, 2.0], [-20, 42, 1.5], [10, -48, 1.8],
     [34, 30, 1.2], [-12, -18, 0.8], [48, 14, 2.2], [-6, 48, 1.3], [20, -44, 1.5],
   ];
-  for (const [x, z, s] of rockSpots) group.add(makeRock(kit, x, z, s));
+  for (const [x, z, s] of rockSpots) {
+    group.add(makeRock(kit, x, z, s));
+    const h = terrainHeight(x, z);
+    addCollider({ x, z, r: 1.05 * s, y0: h + 0.1 * s - 0.6 * s, y1: h + 0.1 * s + 0.5 * s });
+  }
 
   group.add(makeFlowers());
 
@@ -420,10 +429,34 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
   const lh = makeLighthouse(kit);
   group.add(lh.group);
   updates.push(lh.update);
+  {
+    // 灯塔塔身（含顶层环廊）
+    const h = terrainHeight(26, -28);
+    addCollider({ x: 26, z: -28, r: 1.45, y0: h - 0.6, y1: h + 8.6 });
+  }
 
   const campfire = makeCampfire(kit);
   group.add(campfire.group);
   updates.push(campfire.update);
+  {
+    // 火堆本体不能踩进去（围坐区不受影响）
+    addCollider({ x: 0, z: 0, r: 0.9, y0: campfire.position.y - 0.6, y1: campfire.position.y + 1.1 });
+    // 木凳：长凳用两段圆柱近似
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + 0.4;
+      const dirX = Math.sin(a);
+      const dirZ = -Math.cos(a);
+      for (const k of [-0.55, 0.55]) {
+        addCollider({
+          x: Math.cos(a) * 3.6 + dirX * k,
+          z: Math.sin(a) * 3.6 + dirZ * k,
+          r: 0.3,
+          y0: campfire.position.y - 0.5,
+          y1: campfire.position.y + 0.45,
+        });
+      }
+    }
+  }
 
   return { group, updates, campfire };
 }

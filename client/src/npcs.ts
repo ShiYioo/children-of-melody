@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { RemotePlayers } from "./remote";
 import { LANDMARKS, terrainHeight } from "./heightfield";
+import { resolveColliders } from "./colliders";
 import { TRACKS } from "./audio/tracks";
 
 /**
@@ -13,6 +14,7 @@ interface NpcState {
   target: THREE.Vector3;
   waitUntil: number;
   sitUntil: number;
+  stuckFor: number; // 被实体挡住的累计时长（卡住就换目的地）
 }
 
 const NPC_NAMES = ["海风的诗", "星屑收集者", "花田看守", "潮汐信使", "拾光的人"];
@@ -44,6 +46,7 @@ export class NpcDriver {
         target: new THREE.Vector3(x, 0, z),
         waitUntil: this.t + Math.random() * 4,
         sitUntil: 0,
+        stuckFor: 0,
       });
     });
   }
@@ -88,6 +91,21 @@ export class NpcDriver {
         const speed = 1.5;
         pos.x += (dx / d) * speed * dt;
         pos.z += (dz / d) * speed * dt;
+        // 老住户也绕开树石灯塔；直线走被挡住太久就换个目的地
+        if (resolveColliders(pos, null, 0.34)) {
+          n.stuckFor += dt;
+          if (n.stuckFor > 1.2) {
+            const spot = LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)];
+            n.target.set(
+              spot.x + (Math.random() - 0.5) * 10,
+              0,
+              spot.z + (Math.random() - 0.5) * 10
+            );
+            n.stuckFor = 0;
+          }
+        } else {
+          n.stuckFor = 0;
+        }
         pos.y = terrainHeight(pos.x, pos.z);
         target.x = pos.x;
         target.y = pos.y;
