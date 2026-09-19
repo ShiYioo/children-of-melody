@@ -169,14 +169,22 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           // 全部来自场景级 Pivot 节点的静态位移——名牌偏移的根因）。
           // 把每个直接子节点平移 −包围盒中心（模型局部单位），让身体中心落在模型原点上：
           // 旋转（躺/滑翔俯仰）的轴心从此在身体中心而不是脚下方 1.2 米外。
-          // 量盒子前必须把模型自身的 position 清零——世界中心换算回局部单位时
-          // 会混入 glb.y/scale 的偏移（上一轮 y 多平移 1.46 单位的根因）
-          const keep = importedModel.position.y;
+          // ⚠ 必须先把模型摘出场景再量：挂在组上时组的「世界」变换（玩家当前位置/朝向，
+          // 可见页每帧渲染后非恒等）会乘进 matrixWorld，盒子中心被污染成
+          // 绑定中心+玩家坐标——每次加载偏移都不同。隐藏页 rAF 冻结时恰好恒等，
+          // 这就是自动化测试全对、真机必错的原因
+          const parent = importedModel.parent;
+          const keepPos = importedModel.position.clone();
+          const keepRot = importedModel.rotation.clone();
+          parent?.remove(importedModel);
           importedModel.position.set(0, 0, 0);
+          importedModel.rotation.set(0, 0, 0);
           importedModel.updateMatrixWorld(true);
           const box = new THREE.Box3().setFromObject(importedModel);
           const bc = box.getCenter(new THREE.Vector3()).divideScalar(glb.scale);
-          importedModel.position.set(0, keep, 0);
+          importedModel.position.copy(keepPos);
+          importedModel.rotation.copy(keepRot);
+          parent?.add(importedModel);
           for (const child of importedModel.children) {
             child.position.x -= bc.x;
             child.position.y -= bc.y;
