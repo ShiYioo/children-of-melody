@@ -31,14 +31,20 @@ function findBone(root: THREE.Object3D, prefix: string): THREE.Bone | null {
 }
 
 /** retargetClip 要求传入的 Object3D 自带 .skeleton（SkinnedMesh 才有）——
- *  给场景根临时挂上第一个 SkinnedMesh 的骨架即可（根的子树里也有全部骨骼，轨道绑定能找到） */
+ *  给场景根临时挂上第一个 SkinnedMesh 的骨架即可（根的子树里也有全部骨骼，轨道绑定能找到）。
+ *  同时挂 .bones：重定向产物的轨道名是「.bones[名].xxx」， mixer 根需要 bones 数组才能绑定 */
 function withSkeleton(root: THREE.Object3D): THREE.Object3D {
-  if ((root as unknown as { skeleton?: THREE.Skeleton }).skeleton) return root;
-  let sk: THREE.Skeleton | null = null;
+  const r = root as unknown as { skeleton?: THREE.Skeleton; bones?: THREE.Bone[] };
+  if (r.skeleton) return root;
+  const found: THREE.Skeleton[] = [];
   root.traverse((o) => {
-    if (!sk && (o as THREE.SkinnedMesh).isSkinnedMesh) sk = (o as THREE.SkinnedMesh).skeleton;
+    if (found.length === 0 && (o as THREE.SkinnedMesh).isSkinnedMesh) found.push((o as THREE.SkinnedMesh).skeleton);
   });
-  if (sk) (root as unknown as { skeleton?: THREE.Skeleton }).skeleton = sk;
+  const sk = found[0];
+  if (sk) {
+    r.skeleton = sk;
+    r.bones = sk.bones;
+  }
   return root;
 }
 
@@ -199,16 +205,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             ];
             const names: Record<string, string> = {};
             let mapped = 0;
+            // 注意：GLTFLoader 会把骨骼名里的点号剥掉（arm.l → arml），
+            // 两端的骨骼名都必须按「无点」形式匹配（此前静默失败的根因）
+            const sane = (s: string) => s.replace(/[.[\]]/g, "");
             for (const [donorName, prefix] of pairs) {
-              const bone = findBone(model, prefix);
+              const bone = findBone(model, sane(prefix));
               if (bone) {
-                names[bone.name] = donorName;
+                names[bone.name] = sane(donorName);
                 mapped++;
               }
             }
-            if (mapped < 12) return; // 骨骼对不上就继续用展示动画
+            if (mapped < 12) {
+              console.warn("[avatar] 伊莱娜动画重定向：骨骼映射不足", mapped);
+              return; // 骨骼对不上就继续用展示动画
+            }
             const wanted = ["Unarmed_Idle", "Walking_A", "Running_A", "Jump_Idle", "Jump_Start", "Jump_Land", "Lie_Idle"];
             const sourceRoot = withSkeleton(donor.root);
+            let retargeted = 0;
             for (const name of wanted) {
               const src = donor.clips.find((c) => c.name === name);
               if (!src) continue;
@@ -218,17 +231,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
                   names,
                   hip: "hips",
                 });
+                if (clip.tracks.length === 0) {
+                  console.warn("[avatar] 重定向产物为空:", name);
+                  continue;
+                }
                 importedActions.set(name, importedMixer!.clipAction(clip));
-              } catch {
-                /* 单条失败跳过 */
+                retargeted++;
+              } catch (e) {
+                console.warn("[avatar] 重定向失败:", name, e);
               }
             }
+            if (retargeted === 0) return;
             // 停掉展示动画兜底，切到重定向好的 idle
             importedActions.get("Action")?.stop();
             importedCurrent = "";
             playImported("Unarmed_Idle", true);
           })
-          .catch(() => {/* 供体加载失败：维持展示动画 */});        // 展示动画先注册为 idle 兜底（重定向完成后停掉并切换）
+          .catch((e) => console.warn("[avatar] 动画供体加载失败，伊莱娜将只有展示动画", e));        // 展示动画先注册为 idle 兜底（重定向完成后停掉并切换）
         const clip = gltf.animations[0];
         if (clip) {
           const action = importedMixer.clipAction(clip);
