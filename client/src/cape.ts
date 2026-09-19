@@ -104,20 +104,28 @@ export class CapeSim {
             this.pos[ob + 2] += mz * (aPinned ? 2 : 1);
           }
         }
-        // 身体碰撞：近似球（躯干+头），把布推离（半径略小于视觉，避免把布拉离身体）
+        // 身体碰撞：躯干球 + 肩头球，把布推离；肩头球防止布翻越头顶到身前
         for (let v = this.cols; v < n; v++) {
           const o = v * 3;
-          const dx = this.pos[o];
-          const dy = this.pos[o + 1] - 0.8;
-          const dz = this.pos[o + 2];
-          const d2 = dx * dx + dy * dy + dz * dz;
-          const r = 0.36;
-          if (d2 < r * r && d2 > 1e-9) {
-            const d = Math.sqrt(d2);
-            const push = (r - d) / d;
-            this.pos[o] += dx * push;
-            this.pos[o + 1] += dy * push;
-            this.pos[o + 2] += dz * push;
+          for (let s = 0; s < 2; s++) {
+            const cy = s === 0 ? 0.8 : 1.16;
+            const r = s === 0 ? 0.36 : 0.33;
+            const dx = this.pos[o];
+            const dy = this.pos[o + 1] - cy;
+            const dz = this.pos[o + 2];
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < r * r && d2 > 1e-9) {
+              const d = Math.sqrt(d2);
+              const push = (r - d) / d;
+              this.pos[o] += dx * push;
+              this.pos[o + 1] += dy * push;
+              this.pos[o + 2] += dz * push;
+            }
+          }
+          // 单向前界：布面不能越过身体正面（防跳跃下落时被上掀风翻到身前穿模）
+          if (this.pos[o + 2] > -0.06) {
+            this.pos[o + 2] = -0.06;
+            this.prev[o + 2] = Math.min(this.prev[o + 2], -0.06); // 同步速度，防反冲
           }
           if (this.pos[o + 1] < 0.03) this.pos[o + 1] = 0.03; // 地面
         }
@@ -136,6 +144,13 @@ export class CapeSim {
     }
 
     (this.geo.attributes.position as THREE.BufferAttribute).copyArray(this.pos);
+    // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面
+    {
+      const attr = this.geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < attr.count; i++) {
+        if (attr.getZ(i) > -0.06) attr.setZ(i, -0.06);
+      }
+    }
     this.geo.attributes.position.needsUpdate = true;
     this.geo.computeVertexNormals();
   }

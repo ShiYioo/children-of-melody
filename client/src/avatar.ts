@@ -458,7 +458,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         const vz = state.vz ?? 0;
         windWorld.set(
           -vx * 0.55 + Math.sin(t * 0.7) * 0.35,
-          -vy * 0.6 + glideBlend * 8 - flapPulse * 4,
+          // 上升时布向下拖曳(物理正确)；下落的上掀风减半，防止把布掀过头顶
+          -vy * (vy > 0 ? 0.55 : 0.28) + glideBlend * 8 - flapPulse * 4,
           -vz * 0.55 + Math.cos(t * 0.5) * 0.25 - flapPulse * 2.5
         );
         windWorld.applyAxisAngle(UP_AXIS, -group.rotation.y); // 世界风 → 角色局部
