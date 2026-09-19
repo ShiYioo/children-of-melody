@@ -55,7 +55,9 @@ export async function connectIsland(
   avatar: AvatarModel = "classic",
   hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} }
 ): Promise<NetHandle | null> {
-  const endpoint = import.meta.env.DEV ? "http://localhost:2567" : window.location.origin;
+  // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
+  // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
+  const endpoint = import.meta.env.DEV ? `http://${window.location.hostname}:2567` : window.location.origin;
   const client = new Client(endpoint);
 
   let room: any;
