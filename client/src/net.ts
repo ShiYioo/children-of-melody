@@ -42,6 +42,7 @@ export interface NetHandle {
   clockOffset: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
   sendTrack: (trackId: number, name?: string, resumeMs?: number, url?: string) => void;
+  sendChat: (text: string) => void;
   sendHandInvite: (to: string) => void;
   sendHandAccept: (to: string) => void;
   sendHandReject: (to: string) => void;
@@ -53,7 +54,9 @@ export async function connectIsland(
   name: string,
   remotes: RemotePlayers,
   avatar: AvatarModel = "classic",
-  hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} }
+  hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} },
+  /** 收到聊天（自己发的也会回声回来；由调用方决定远近是否显示） */
+  onChat: (from: string, name: string, text: string) => void = () => {}
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
@@ -85,6 +88,7 @@ export async function connectIsland(
   room.onMessage("hand-reject", (m: any) => hand.onResult("reject", m?.name));
   room.onMessage("hand-busy", () => hand.onResult("busy"));
   room.onMessage("hand-far", () => hand.onResult("far"));
+  room.onMessage("chat", (m: any) => onChat(String(m?.id ?? ""), String(m?.name ?? ""), String(m?.text ?? "")));
 
   let selfHue: number | null = null;
   const getSelfHue = () => selfHue;
@@ -139,6 +143,9 @@ export async function connectIsland(
     },
     sendTrack(trackId, name, resumeMs, url) {
       room.send("track", { trackId, name, resumeMs, url });
+    },
+    sendChat(text) {
+      room.send("chat", { text });
     },
     sendHandInvite(to) {
       room.send("hand-invite", { to });

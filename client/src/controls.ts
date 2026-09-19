@@ -83,6 +83,8 @@ export class PlayerControls {
   constructor(private camera: THREE.PerspectiveCamera, dom: HTMLElement) {
     this.dom = dom;
     window.addEventListener("keydown", (e) => {
+      // 正在输入框里打字（聊天）时不当作游戏按键
+      if ((e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) return;
       const k = e.key.toLowerCase();
       if (k === " " || k.startsWith("arrow")) e.preventDefault();
       if (!this.enabled) return;

@@ -139,6 +139,17 @@ async function handleEnter(name: string) {
       hand.lead = lead;
       controls.setLed(!!withId && !lead);
     },
+  },
+  // 聊天气泡：自己的回声和别人的话都从这进；别人的话只有走近才看得见（光遇式就近可闻）
+  (from, fromName, text) => {
+    if (from === net?.sessionId) {
+      selfAvatar?.say(text);
+      return;
+    }
+    const av = remotes.avatarOf(from);
+    if (!av) return;
+    const dist = av.group.position.distanceTo(selfAvatar?.group.position ?? av.group.position);
+    if (dist <= 20) av.say(text);
   });
   if (net) {
     ui.setStatus("online");
@@ -211,10 +222,52 @@ if (import.meta.env.DEV) {
   };
 }
 
-// ---------------- 牵手按键：G 邀请/松手 · F 接受 ----------------
+// ---------------- 聊天气泡：回车打开输入，再回车发送，Esc 取消 ----------------
+const chatInput = document.createElement("input");
+chatInput.maxLength = 80;
+chatInput.placeholder = "说点什么…（Enter 发送，Esc 取消）";
+chatInput.autocomplete = "off";
+chatInput.style.cssText = [
+  "position:fixed", "left:50%", "bottom:13%", "transform:translateX(-50%)",
+  "width:min(430px,74vw)", "padding:11px 18px", "border-radius:999px",
+  "border:1.5px solid rgba(255,244,214,.55)", "background:rgba(26,18,42,.88)",
+  "color:#fff6e6", "font-size:16px", "letter-spacing:.5px", "outline:none",
+  "box-shadow:0 6px 24px rgba(10,6,20,.45)", "display:none", "z-index:40",
+].join(";");
+document.body.appendChild(chatInput);
+
+function openChat() {
+  chatInput.style.display = "block";
+  chatInput.value = "";
+  document.exitPointerLock?.();
+  chatInput.focus();
+}
+function closeChat() {
+  chatInput.style.display = "none";
+  chatInput.blur();
+}
+function submitChat() {
+  const text = chatInput.value.trim();
+  closeChat();
+  if (!text) return;
+  if (net) net.sendChat(text);
+  else selfAvatar?.say(text); // 独自漫游时也让自己说出来
+}
+chatInput.addEventListener("keydown", (e) => {
+  e.stopPropagation(); // 别让 W/E/空格漏给游戏按键
+  if (e.key === "Enter") submitChat();
+  else if (e.key === "Escape") closeChat();
+});
+
+// ---------------- 牵手按键：G 邀请/松手 · F 接受 · Enter 聊天 ----------------
 window.addEventListener("keydown", (e) => {
   if (!entered || e.repeat) return;
+  if ((e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) return;
   const k = e.key.toLowerCase();
+  if (k === "enter") {
+    if (chatInput.style.display === "none") openChat();
+    return;
+  }
   if (k === "f") {
     ui.acceptInvite();
   } else if (k === "g") {

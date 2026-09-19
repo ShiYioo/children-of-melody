@@ -20,6 +20,8 @@ export class IslandRoom extends Room {
   patchRate = 50; // 20Hz 状态广播
   /** 牵手邀请：被邀人 sessionId → { from, at }；15 秒未回应自动失效 */
   private pendingHands = new Map<string, { from: string; at: number }>();
+  /** 聊天防刷屏：sessionId → 上次发言时间 */
+  private lastChatOf = new Map<string, number>();
 
   onCreate() {
     this.maxClients = 64;
@@ -65,6 +67,7 @@ export class IslandRoom extends Room {
     this.unlinkHands(client.sessionId);
     for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
     this.state.players.delete(client.sessionId);
+    this.lastChatOf.delete(client.sessionId);
     // 随身曲库：离岛即带走——他上传的歌自动删除
     const removed = removeSongsOf(client.sessionId);
     if (removed > 0) console.log(`[island] ${player?.name ?? "旅人"} 离开，随身曲库的 ${removed} 首歌已收起`);
@@ -181,6 +184,19 @@ export class IslandRoom extends Room {
 
     "hand-release": (client: Client) => {
       this.unlinkHands(client.sessionId);
+    },
+
+    // 头顶聊天气泡：只广播给在场的人，不落任何历史（没有大厅）。
+    // 客户端按距离决定是否显示（光遇式就近可闻）；服务器只做长度与频率约束
+    chat: (client: Client, m: any) => {
+      const p = this.state.players.get(client.sessionId);
+      if (!p) return;
+      const text = typeof m?.text === "string" ? m.text.trim().slice(0, 80) : "";
+      if (!text) return;
+      const now = Date.now();
+      if (now - (this.lastChatOf.get(client.sessionId) ?? 0) < 900) return;
+      this.lastChatOf.set(client.sessionId, now);
+      this.broadcast("chat", { id: client.sessionId, name: p.name, text });
     },
   };
 }

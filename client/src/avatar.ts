@@ -28,6 +28,8 @@ export interface Avatar {
   flap: () => void;
   setRing: (color: THREE.Color | null, energy: number) => void;
   setName: (name: string) => void;
+  /** 头顶聊天气泡：显示一句话几秒后淡出（无聊天大厅，只活在头顶） */
+  say: (text: string) => void;
   /** 牵手姿势：传入牵手对象的方向（世界系，传 null 取消），内侧手臂会抬向对方 */
   setHand: (dir: THREE.Vector3 | null) => void;
   dispose: () => void;
@@ -51,6 +53,71 @@ function nameTexture(name: string): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+/**
+ * 聊天气泡纹理：自动换行、最多 3 行（超长截断加省略号）、底部小尾巴指向头顶。
+ * 返回纹理与建议的精灵尺寸（世界单位）。
+ */
+function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number; h: number } {
+  const cv = document.createElement("canvas");
+  cv.width = 512;
+  const ctx = cv.getContext("2d")!;
+  const font = "500 33px 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif";
+  ctx.font = font;
+  // 手动折行（measureText 对中英文混排都可靠），最多 3 行
+  const maxW = 430;
+  const lines: string[] = [];
+  for (const seg of text.split("\n")) {
+    let line = "";
+    for (const ch of seg) {
+      if (ctx.measureText(line + ch).width > maxW) {
+        lines.push(line);
+        line = ch;
+        if (lines.length === 3) break;
+      } else {
+        line += ch;
+      }
+    }
+    if (lines.length === 3) {
+      if (line) lines[2] = (lines[2] + line).slice(0, -1) + "…";
+      break;
+    }
+    lines.push(line);
+  }
+  const lineH = 44;
+  const padX = 26;
+  const padY = 20;
+  const tail = 16;
+  const textW = Math.max(...lines.map((l) => ctx.measureText(l).width), 60);
+  cv.height = Math.ceil(padY * 2 + lines.length * lineH + tail);
+  // 尺寸变了之后画布会重置，重新设字体
+  const c2 = cv.getContext("2d")!;
+  c2.font = font;
+  c2.textAlign = "center";
+  c2.textBaseline = "middle";
+  const boxW = textW + padX * 2;
+  c2.beginPath();
+  c2.roundRect((512 - boxW) / 2, 4, boxW, cv.height - tail - 4, 22);
+  c2.fillStyle = "rgba(255, 251, 241, 0.95)";
+  c2.fill();
+  c2.strokeStyle = "rgba(126, 104, 168, 0.4)";
+  c2.lineWidth = 2.5;
+  c2.stroke();
+  // 小尾巴
+  c2.beginPath();
+  c2.moveTo(256 - 14, cv.height - tail - 2);
+  c2.lineTo(256, cv.height - 2);
+  c2.lineTo(256 + 14, cv.height - tail - 2);
+  c2.closePath();
+  c2.fillStyle = "rgba(255, 251, 241, 0.95)";
+  c2.fill();
+  c2.fillStyle = "rgba(42, 33, 64, 0.92)";
+  lines.forEach((l, i) => c2.fillText(l, 256, 4 + padY + i * lineH + lineH / 2));
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const w = Math.min(2.6, 0.9 + (textW / 512) * 2.6);
+  return { texture: tex, w, h: w * (cv.height / 512) };
 }
 
 // 伊莱娜手写动作的复用临时量（避免每帧分配）
@@ -459,8 +526,27 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let elainaBones: { thighL: THREE.Bone | null; thighR: THREE.Bone | null; shinL: THREE.Bone | null; shinR: THREE.Bone | null; armL: THREE.Bone | null; armR: THREE.Bone | null; foreL: THREE.Bone | null; foreR: THREE.Bone | null } | null = null;
   let elainaBind = new Map<THREE.Bone, THREE.Quaternion>();
 
+  // ---- 聊天气泡（光遇式：只飘在头顶，无大厅无历史） ----
+  let bubbleSprite: THREE.Sprite | null = null;
+  let bubbleUntil = 0;
+  const say = (text: string) => {
+    if (!bubbleSprite) {
+      bubbleSprite = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+      group.add(bubbleSprite);
+    }
+    const { texture, w, h } = bubbleTexture(text);
+    bubbleSprite.material.map?.dispose();
+    bubbleSprite.material.map = texture;
+    bubbleSprite.material.needsUpdate = true;
+    bubbleSprite.material.opacity = 1;
+    bubbleSprite.visible = true;
+    bubbleSprite.scale.set(w, h, 1);
+    bubbleUntil = performance.now() + 6000;
+  };
+
   return {
     group,
+    say,
     land() {
       squash = 1;
       playImported("Jump_Land", false, 0.08);
@@ -593,6 +679,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         nameSprite.position.y = 2.35 - glideBlend * 0.6;
       }
       nameSprite.position.z = glideBlend * 0.3;
+
+      // 聊天气泡：跟在名牌上方（滑翔/躺平时随名牌一起降），到点淡出
+      if (bubbleSprite?.visible) {
+        const left = bubbleUntil - performance.now();
+        if (left <= 0) {
+          bubbleSprite.visible = false;
+        } else {
+          bubbleSprite.material.opacity = Math.min(1, left / 600);
+          bubbleSprite.position.set(nameSprite.position.x, nameSprite.position.y + nameSprite.scale.y * 0.55 + bubbleSprite.scale.y * 0.5, nameSprite.position.z);
+        }
+      }
 
       // 披风：Verlet 布料物理（GLB 模型用自己的外观，跳过程序化布料）
         if (!importedReady) {
@@ -782,6 +879,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         for (const mat of Array.isArray(material) ? material : [material]) mat?.dispose?.();
       });
       nameTex.dispose();
+      bubbleSprite?.material.map?.dispose();
+      bubbleSprite?.material.dispose();
       ringMat.dispose();
       discMat.dispose();
       moteMat.dispose();
