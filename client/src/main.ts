@@ -454,7 +454,6 @@ function tick(dt: number) {
   // 滑翔风线与瞬态光效
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);
   world.bursts.update(dt);
-  musicfx.update(dt);
 
   // 自己的光环 + 音乐动效（听歌且未暂停时）
   if (selfAvatar) {
@@ -469,6 +468,10 @@ function tick(dt: number) {
       selfAvatar.setRing(null, 0);
     }
   }
+  // musicfx.update 必须在「所有」drive 之后：它会把本帧没被驱动的发射器清掉，
+  // 自己的 drive 在上面才调用——放在 world.bursts.update 那里会把 self 每帧删建，
+  // 音符累积器永远归零（自己永远不吐音符）+ 踩点检测每帧误判
+  musicfx.update(dt);
 
   // UI 低频刷新 + 靠近提示 + 翼能
   uiTimer += dt;

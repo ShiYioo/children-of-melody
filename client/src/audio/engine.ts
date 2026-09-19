@@ -191,7 +191,7 @@ export class MusicEngine {
     const def = !custom && !urlTrack ? trackById(trackId) ?? null : null;
     if (custom || urlTrack) {
       analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
+      analyser.fftSize = 512; // 512 才能把鼓点段(0-180Hz)和旋律(220Hz+)分开——256 时一个 bin 187Hz，旋律会灌进低频段把节拍检测淹死
       bus.connect(analyser);
     }
 
@@ -603,9 +603,10 @@ export class MusicEngine {
         this.freqData = new Uint8Array(src.analyser.frequencyBinCount);
       }
       src.analyser.getByteFrequencyData(this.freqData);
-      const n = this.freqData.length; // fftSize 256 → 128 bin；48kHz 时每 bin ≈ 187Hz
-      const bassEnd = Math.max(2, Math.round(n * 0.045)); // ~0-430Hz：鼓点/贝斯
-      const midEnd = Math.round(n * 0.25); // ~430Hz-5.4kHz：主旋律/人声
+      const n = this.freqData.length; // fftSize 512 → 256 bin；48kHz 时每 bin ≈ 94Hz
+      const hzPerBin = this.ctx.sampleRate / 2 / n;
+      const bassEnd = Math.max(1, Math.round(180 / hzPerBin)); // 0-180Hz：底鼓/贝斯（旋律 220Hz+ 不许进）
+      const midEnd = Math.round(5500 / hzPerBin); // ~180Hz-5.5kHz：旋律/人声
       let b = 0;
       let m = 0;
       let tr = 0;
