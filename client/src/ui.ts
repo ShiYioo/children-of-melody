@@ -72,6 +72,7 @@ export function createUI(handlers: {
     { id: "owl", name: "小猫头鹰", desc: "夜色里的朋友" },
     { id: "platypus", name: "鸭嘴兽", desc: "圆脑袋旅行家" },
     { id: "minion", name: "圆滚精灵", desc: "软乎乎的小伙伴" },
+    { id: "elaina", name: "伊莱娜", desc: "灰之魔女来岛上小住" },
   ];
   avatarNames.forEach((choice, index) => {
     const card = document.createElement("button");

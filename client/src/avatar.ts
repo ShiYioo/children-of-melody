@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { createToonKit } from "./world/toon";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
 
@@ -15,7 +16,7 @@ import { CapeSim } from "./cape";
  *  - 身体带一圈淡淡的轮廓光
  */
 
-export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "platypus" | "seal" | "owl";
+export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "platypus" | "seal" | "owl" | "elaina";
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
@@ -66,6 +67,19 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
   const modelChoice = opts.model ?? "classic";
   const animalModels = new Set<AvatarModel>(["minion", "corgi", "duck", "platypus", "seal", "owl"]);
+  // 单动画模型：整段展示动画循环播放（伊莱娜：灰之魔女的 13 秒动作）
+  const singleAnimModels = new Set<AvatarModel>(["elaina"]);
+  // 各 GLB 的地址与摆放（缩放/落地高度/朝向修正）——模型在建模软件里原点/尺寸不统一
+  const glbOf: Partial<Record<AvatarModel, { url: string; scale: number; y: number; ry: number }>> = {
+    minion: { url: "/models/minion-a01.glb", scale: 1, y: 0, ry: 0 },
+    corgi: { url: "/models/corgi.glb", scale: 1, y: 0, ry: 0 },
+    duck: { url: "/models/duck.glb", scale: 1, y: 0, ry: 0 },
+    platypus: { url: "/models/platypus.glb", scale: 1, y: 0, ry: 0 },
+    seal: { url: "/models/seal.glb", scale: 1, y: 0, ry: 0 },
+    owl: { url: "/models/owl.glb", scale: 1, y: 0, ry: 0 },
+    hooded: { url: "/models/rogue-hooded.glb", scale: 1, y: 0, ry: 0 },
+    elaina: { url: "/models/elaina.glb", scale: 0.5, y: 0.765, ry: 0 }, // 居中后高 3.06，×0.5≈1.53，脚底抬回地面
+  };
   // 外部角色加载失败时继续使用下方程序化角色。
   let importedModel: THREE.Object3D | null = null;
   let importedMixer: THREE.AnimationMixer | null = null;
@@ -76,6 +90,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     if (!importedReady || importedCurrent === name) return;
     const next = importedActions.get(name);
     if (!next) return;
+    // 单动画模型的多个状态名指向同一个 action：只换名不重启
+    if (importedActions.get(importedCurrent) === next) {
+      importedCurrent = name;
+      return;
+    }
     importedActions.get(importedCurrent)?.fadeOut(fade);
     next.reset().fadeIn(fade);
     next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
@@ -83,10 +102,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     next.play();
     importedCurrent = name;
   };
-  if (modelChoice !== "classic") new GLTFLoader().load(
-    animalModels.has(modelChoice) ? `/models/${modelChoice === "minion" ? "minion-a01" : modelChoice}.glb` : "/models/rogue-hooded.glb",
+  if (modelChoice !== "classic") {
+    const glb = glbOf[modelChoice] ?? glbOf.hooded!;
+    const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder); // elaina.glb 用 meshopt 无损压缩
+    loader.load(
+    glb.url,
     (gltf) => {
       importedModel = SkeletonUtils.clone(gltf.scene);
+      importedModel.scale.setScalar(glb.scale);
+      importedModel.position.y = glb.y;
+      importedModel.rotation.y = glb.ry;
       importedModel.traverse((obj) => {
         obj.castShadow = true;
         obj.receiveShadow = true;
@@ -103,15 +129,25 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       if (outerCapeSim) outerCapeSim.mesh.visible = false;
       if (innerCape) innerCape.visible = false;
       importedMixer = new THREE.AnimationMixer(importedModel);
-      const clips = animalModels.has(modelChoice) && gltf.animations[0]
-        ? [
-            THREE.AnimationUtils.subclip(gltf.animations[0], "idle", 0, 30, 24),
-            ...(modelChoice !== "minion" ? [THREE.AnimationUtils.subclip(gltf.animations[0], "walk", 90, 120, 24)] : []),
-          ]
-        : gltf.animations;
+      let clips: THREE.AnimationClip[];
+      if (singleAnimModels.has(modelChoice)) {
+        // 单动画模型：整段循环，注册到所有状态名上（idle/走/跑/跳都用同一段）
+        const clip = gltf.animations[0];
+        if (clip) for (const alias of ["idle", "Unarmed_Idle", "Walking_A", "Running_A", "Jump_Idle", "Sit_Floor_Idle"]) {
+          importedActions.set(alias, importedMixer.clipAction(clip));
+        }
+        clips = [];
+      } else if (animalModels.has(modelChoice) && gltf.animations[0]) {
+        clips = [
+          THREE.AnimationUtils.subclip(gltf.animations[0], "idle", 0, 30, 24),
+          ...(modelChoice !== "minion" ? [THREE.AnimationUtils.subclip(gltf.animations[0], "walk", 90, 120, 24)] : []),
+        ];
+      } else {
+        clips = gltf.animations;
+      }
       for (const clip of clips) importedActions.set(clip.name, importedMixer.clipAction(clip));
       importedReady = true;
-      playImported(animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
+      playImported(singleAnimModels.has(modelChoice) ? "idle" : animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
     },
     undefined,
     () => {
@@ -120,6 +156,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       if (innerCape) innerCape.visible = true;
     }
   );
+  }
 
   // ---- 配色 ----
   const capeOuter = new THREE.Color().setHSL(opts.hue / 360, 0.46, 0.56);

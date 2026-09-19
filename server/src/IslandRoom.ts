@@ -4,7 +4,7 @@ import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
 const MAX_NAME_LEN = 12;
-const AVATARS = new Set(["classic", "hooded", "minion", "corgi", "duck", "platypus", "seal", "owl"]);
+const AVATARS = new Set(["classic", "hooded", "minion", "corgi", "duck", "platypus", "seal", "owl", "elaina"]);
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
