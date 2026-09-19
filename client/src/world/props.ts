@@ -66,15 +66,19 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
   return g;
 }
 
-// ---------- 岩石（半埋的圆润大卵石） ----------
+// ---------- 岩石（半埋的圆润大卵石，顶面可以跳上去站） ----------
 function makeRock(kit: ToonKit, x: number, z: number, s: number): THREE.Mesh {
   const geo = new THREE.SphereGeometry(s, 12, 10);
-  geo.scale(1.15, 0.62 + Math.random() * 0.25, 0.9 + Math.random() * 0.3);
+  const ry = 0.62 + Math.random() * 0.25;
+  geo.scale(1.15, ry, 0.9 + Math.random() * 0.3);
   const m = new THREE.Mesh(geo, kit.mat(Math.random() < 0.5 ? "#a79fd0" : "#9a94c4"));
-  m.position.set(x, terrainHeight(x, z) + s * 0.1, z); // 稍稍陷入地面
+  const h = terrainHeight(x, z);
+  m.position.set(x, h + s * 0.1, z); // 稍稍陷入地面
   m.rotation.y = Math.random() * Math.PI * 2;
   m.castShadow = true;
   m.receiveShadow = true;
+  const top = h + s * 0.1 + ry * s; // 视觉顶点高度（站立面）
+  addCollider({ x, z, r: 1.1 * s, y0: h - 0.2, y1: top, stand: true, standR: 0.85 * s });
   return m;
 }
 
@@ -409,16 +413,12 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
     addCollider({ x, z, r: 0.32 * s, y0: h - 0.2, y1: h + 2.4 * s });
   }
 
-  // 岩石（圆润卵石）
+  // 岩石（圆润卵石，碰撞体在 makeRock 里注册——顶面随随机形状精确可站）
   const rockSpots: [number, number, number][] = [
     [40, 6, 1.8], [44, -6, 1.4], [-44, -20, 2.0], [-20, 42, 1.5], [10, -48, 1.8],
     [34, 30, 1.2], [-12, -18, 0.8], [48, 14, 2.2], [-6, 48, 1.3], [20, -44, 1.5],
   ];
-  for (const [x, z, s] of rockSpots) {
-    group.add(makeRock(kit, x, z, s));
-    const h = terrainHeight(x, z);
-    addCollider({ x, z, r: 1.05 * s, y0: h + 0.1 * s - 0.6 * s, y1: h + 0.1 * s + 0.5 * s });
-  }
+  for (const [x, z, s] of rockSpots) group.add(makeRock(kit, x, z, s));
 
   group.add(makeFlowers());
 
@@ -430,9 +430,9 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
   group.add(lh.group);
   updates.push(lh.update);
   {
-    // 灯塔塔身（含顶层环廊）
+    // 灯塔塔身（含顶层环廊）——环廊顶面可以滑翔上去站着看海
     const h = terrainHeight(26, -28);
-    addCollider({ x: 26, z: -28, r: 1.45, y0: h - 0.6, y1: h + 8.6 });
+    addCollider({ x: 26, z: -28, r: 1.45, y0: h - 0.6, y1: h - 0.3 + 8.44, stand: true, standR: 1.25 });
   }
 
   const campfire = makeCampfire(kit);
@@ -441,7 +441,7 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
   {
     // 火堆本体不能踩进去（围坐区不受影响）
     addCollider({ x: 0, z: 0, r: 0.9, y0: campfire.position.y - 0.6, y1: campfire.position.y + 1.1 });
-    // 木凳：长凳用两段圆柱近似
+    // 木凳：长凳用两段圆柱近似，凳面可以小跳上去坐
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2 + 0.4;
       const dirX = Math.sin(a);
@@ -452,7 +452,9 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
           z: Math.sin(a) * 3.6 + dirZ * k,
           r: 0.3,
           y0: campfire.position.y - 0.5,
-          y1: campfire.position.y + 0.45,
+          y1: campfire.position.y + 0.35,
+          stand: true,
+          standR: 0.26,
         });
       }
     }

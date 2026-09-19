@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { terrainHeight, ISLAND_RADIUS, WATER_LEVEL } from "./heightfield";
-import { resolveColliders } from "./colliders";
+import { resolveColliders, standGroundHeight } from "./colliders";
 
 /**
  * 光遇式操控 · 二代
@@ -221,7 +221,8 @@ export class PlayerControls {
     }
 
     // ---- 垂直：跳跃 / 滑翔 / 扑翼 / 暖气流 ----
-    const ground = Math.max(terrainHeight(s.pos.x, s.pos.z), WATER_LEVEL - 0.25);
+    // 地面 = 地形高度，或已越过的实体顶面（岩石/灯塔环廊/木凳，站得上去）
+    const ground = Math.max(terrainHeight(s.pos.x, s.pos.z), WATER_LEVEL - 0.25, standGroundHeight(s.pos));
     const glideHeld = this.keys.has(" ");
 
     if (this.jumpQueued) {
