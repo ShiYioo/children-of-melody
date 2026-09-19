@@ -1,5 +1,6 @@
 import { TRACKS, trackMeta, CUSTOM_BASE, type TrackDef } from "./audio/tracks";
 import type { RemoteInfo } from "./remote";
+import type { AvatarModel } from "./avatar";
 
 /**
  * HUD 逻辑：入场、正在听、身边的人、换歌面板、提示气泡。
@@ -7,6 +8,7 @@ import type { RemoteInfo } from "./remote";
  */
 export function createUI(handlers: {
   onEnter: (name: string) => void;
+  onAvatarChange: (model: AvatarModel) => void;
   onPickTrack: (id: number, name?: string) => void;
   onTogglePlay: () => void;
 }) {
@@ -15,6 +17,7 @@ export function createUI(handlers: {
   const enter = $("enter");
   const enterName = $("enterName") as HTMLInputElement;
   const enterBtn = $("enterBtn");
+  const avatarGrid = $("avatarGrid");
   const statusDot = $("statusDot");
   const statusText = $("statusText");
   const npDot = $("npDot");
@@ -39,6 +42,24 @@ export function createUI(handlers: {
   const songGrid = $("songGrid");
   const uploadCard = $("uploadCard");
   const songFile = $("songFile") as HTMLInputElement;
+
+  const avatarNames: Array<{ id: AvatarModel; name: string; desc: string }> = [
+    { id: "classic", name: "云朵旅人", desc: "原生渐强小人" },
+    { id: "hooded", name: "兜帽旅人", desc: "披风与兜帽" },
+    { id: "minion", name: "圆滚精灵", desc: "软乎乎的小伙伴" },
+  ];
+  avatarNames.forEach((choice, index) => {
+    const card = document.createElement("button");
+    card.className = `avatar-card${index === 0 ? " active" : ""}`;
+    card.dataset.avatar = choice.id;
+    card.innerHTML = `<span class="avatar-swatch avatar-${choice.id}"></span><span><b>${choice.name}</b><small>${choice.desc}</small></span>`;
+    card.addEventListener("click", () => {
+      avatarGrid.querySelectorAll(".avatar-card").forEach((el) => el.classList.remove("active"));
+      card.classList.add("active");
+      handlers.onAvatarChange(choice.id);
+    });
+    avatarGrid.appendChild(card);
+  });
 
   // ---- 换歌面板 ----
   let currentTrackId = -1;

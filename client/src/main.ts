@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { createWorld } from "./world/scene";
 import { PlayerControls } from "./controls";
-import { createAvatar, type Avatar } from "./avatar";
+import { createAvatar, type Avatar, type AvatarModel } from "./avatar";
 import { MusicEngine, AUDIBLE_R } from "./audio/engine";
 import { trackById, trackMeta } from "./audio/tracks";
 import { RemotePlayers } from "./remote";
@@ -34,10 +34,14 @@ let net: NetHandle | null = null;
 let npcs: NpcDriver | null = null;
 let playerName = "旅人";
 let selfHue = Math.floor(Math.random() * 360);
+let selectedAvatar: AvatarModel = "classic";
 let entered = false;
 
 const ui = createUI({
   onEnter: handleEnter,
+  onAvatarChange: (model) => {
+    selectedAvatar = model;
+  },
   onPickTrack: (id, name) => {
     music.setOwnTrack(id, name ?? "");
     net?.sendTrack(id, name);
@@ -75,7 +79,7 @@ async function handleEnter(name: string) {
   spawnSelf();
 
   // 连接服务器；失败则进入独自漫游（NPC 陪伴）
-  net = await connectIsland(name, remotes);
+  net = await connectIsland(name, remotes, selectedAvatar);
   if (net) {
     ui.setStatus("online");
   } else {
@@ -98,7 +102,7 @@ function spawnSelf() {
   const a = Math.random() * Math.PI * 2;
   const x = Math.cos(a) * 8;
   const z = Math.sin(a) * 8;
-  selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true });
+  selfAvatar = createAvatar({ name: playerName, hue: selfHue, self: true, model: selectedAvatar });
   world.addToScene(selfAvatar.group);
   // 光遇式的动作反馈：动作 → 音效 + 瞬态光效
   const ringColor = () => new THREE.Color(trackMeta(music.ownTrackId, ui.currentSongName).color);

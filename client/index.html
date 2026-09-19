@@ -59,6 +59,19 @@
       filter: drop-shadow(0 2px 18px rgba(255, 180, 94, 0.35));
     }
     .enter-card .sub { margin: 14px 0 34px; font-size: 15px; color: var(--ink-dim); letter-spacing: 2px; }
+    .avatar-picker { margin: 0 auto 20px; max-width: 420px; text-align: left; }
+    .avatar-picker .label { margin-bottom: 8px; font-size: 11px; color: var(--ink-dim); letter-spacing: 2px; }
+    #avatarGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .avatar-card { min-height: 66px; display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid transparent; border-radius: 12px; color: var(--ink); background: rgba(255, 244, 230, 0.06); cursor: pointer; text-align: left; transition: transform .2s, background .2s, border-color .2s; }
+    .avatar-card:hover { transform: translateY(-2px); background: rgba(255, 244, 230, 0.12); }
+    .avatar-card.active { border-color: rgba(255, 217, 160, .68); background: rgba(255, 217, 160, .14); }
+    .avatar-card b, .avatar-card small { display: block; white-space: nowrap; }
+    .avatar-card b { font-size: 11px; font-weight: 500; }
+    .avatar-card small { margin-top: 3px; font-size: 9px; color: var(--ink-dim); }
+    .avatar-swatch { width: 28px; height: 38px; flex: none; border-radius: 48% 48% 40% 40%; box-shadow: inset 0 -9px rgba(35, 24, 54, .2), 0 3px 10px rgba(255, 180, 94, .22); }
+    .avatar-classic { background: linear-gradient(145deg, #ffe8c1 0 25%, #ffb45e 26% 70%, #ff8f9e 71%); }
+    .avatar-hooded { background: linear-gradient(145deg, #665b9d 0 30%, #9a7bc0 31% 68%, #ffd9a0 69%); }
+    .avatar-minion { border-radius: 45% 45% 38% 38%; background: linear-gradient(145deg, #fff0a8 0 42%, #ffb45e 43% 72%, #ff8f9e 73%); }
     .enter-card input {
       width: 260px; padding: 12px 18px; font-size: 16px; text-align: center;
       color: var(--ink); letter-spacing: 2px;
@@ -191,6 +204,8 @@
       #nearbyWrap { right: 12px; bottom: 86px; }
       #brand { top: 12px; left: 12px; }
       #trackModal .box { padding: 20px; }
+      #avatarGrid { grid-template-columns: 1fr; }
+      .avatar-card { min-height: 52px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -206,6 +221,10 @@
     <div class="enter-card panel">
       <h1>CRESCENDO</h1>
       <div class="sub">渐强之岛 —— 靠近一个人，他的歌会慢慢变得清晰</div>
+      <div class="avatar-picker">
+        <div class="label">选择你的旅人</div>
+        <div id="avatarGrid"></div>
+      </div>
       <input id="enterName" maxlength="12" placeholder="给自己起个名字" autocomplete="off" />
       <button id="enterBtn" class="btn-main">进入世界</button>
       <div class="enter-tip">🎧 建议佩戴耳机 · 岛上无需任何任务，去听歌就好</div>

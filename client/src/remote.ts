@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { createAvatar, type Avatar } from "./avatar";
 import { trackMeta } from "./audio/tracks";
 import { terrainHeight } from "./heightfield";
+import type { AvatarModel } from "./avatar";
 
 /**
  * 岛上的其他人（网络玩家与演示 NPC 共用同一套管线）：
@@ -42,9 +43,9 @@ export class RemotePlayers {
     this.fx = fx;
   }
 
-  spawn(key: string, data: { name: string; hue: number; trackId?: number; startedAt?: number; songName?: string; x: number; y: number; z: number; ry?: number }) {
+  spawn(key: string, data: { name: string; hue: number; avatar?: AvatarModel; trackId?: number; startedAt?: number; songName?: string; x: number; y: number; z: number; ry?: number }) {
     if (this.entries.has(key)) return;
-    const avatar = createAvatar({ name: data.name, hue: data.hue });
+    const avatar = createAvatar({ name: data.name, hue: data.hue, model: data.avatar });
     avatar.group.position.set(data.x, data.y, data.z);
     avatar.group.rotation.y = data.ry ?? 0;
     this.sceneAdd(avatar.group);

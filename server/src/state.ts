@@ -16,6 +16,7 @@ export class Player extends Schema {
   @type("number") startedAt: number = 0; // 服务器纪元的开始播放时间(ms)
   @type("string") songName: string = ""; // 自定义曲目的显示名
   @type("uint8") hue: number = 0; // 披风色相 0-359
+  @type("string") avatar: string = "classic"; // 角色外观
 }
 
 export class IslandState extends Schema {

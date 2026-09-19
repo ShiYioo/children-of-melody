@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { createToonKit } from "./world/toon";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 /**
  * 光遇风小人 · 二代
@@ -11,6 +13,8 @@ import { createToonKit } from "./world/toon";
  *  - 双层披风：外长内短，顶点级布料波动，随速度向后飘
  *  - 身体带一圈淡淡的轮廓光
  */
+
+export type AvatarModel = "classic" | "hooded" | "minion";
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
@@ -66,12 +70,60 @@ function makeCapeMaterial(color: THREE.Color, gradientMap: THREE.DataTexture | n
   return mat;
 }
 
-export function createAvatar(opts: { name: string; hue: number; self?: boolean }): Avatar {
+export function createAvatar(opts: { name: string; hue: number; self?: boolean; model?: AvatarModel }): Avatar {
   const kit = createToonKit();
   const group = new THREE.Group();
 
   const bodyGroup = new THREE.Group();
   group.add(bodyGroup);
+
+  const modelChoice = opts.model ?? "classic";
+  // 外部角色加载失败时继续使用下方程序化角色。
+  let importedModel: THREE.Object3D | null = null;
+  let importedMixer: THREE.AnimationMixer | null = null;
+  const importedActions = new Map<string, THREE.AnimationAction>();
+  let importedCurrent = "";
+  let importedReady = false;
+  const playImported = (name: string, loop: boolean, fade = 0.16) => {
+    if (!importedReady || importedCurrent === name) return;
+    const next = importedActions.get(name);
+    if (!next) return;
+    importedActions.get(importedCurrent)?.fadeOut(fade);
+    next.reset().fadeIn(fade);
+    next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    next.clampWhenFinished = !loop;
+    next.play();
+    importedCurrent = name;
+  };
+  if (modelChoice !== "classic") new GLTFLoader().load(
+    modelChoice === "minion" ? "/models/minion-a01.glb" : "/models/rogue-hooded.glb",
+    (gltf) => {
+      importedModel = SkeletonUtils.clone(gltf.scene);
+      importedModel.traverse((obj) => {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        if (obj.name.toLowerCase().includes("cape")) {
+          const material = (obj as THREE.Mesh).material;
+          for (const mat of Array.isArray(material) ? material : [material]) {
+            if (mat && "color" in mat) (mat as THREE.MeshStandardMaterial).color.setHSL(opts.hue / 360, 0.42, 0.52);
+          }
+        }
+      });
+      group.add(importedModel);
+      bodyGroup.visible = false;
+      importedMixer = new THREE.AnimationMixer(importedModel);
+      const clips = modelChoice === "minion" && gltf.animations[0]
+        ? [THREE.AnimationUtils.subclip(gltf.animations[0], "idle", 0, 30, 24)]
+        : gltf.animations;
+      for (const clip of clips) importedActions.set(clip.name, importedMixer.clipAction(clip));
+      importedReady = true;
+      playImported(modelChoice === "minion" ? "idle" : "Unarmed_Idle", true);
+    },
+    undefined,
+    () => {
+      importedModel = null;
+    }
+  );
 
   // ---- 配色 ----
   const capeOuter = new THREE.Color().setHSL(opts.hue / 360, 0.46, 0.56);
@@ -263,11 +315,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
     group,
     land() {
       squash = 1;
+      playImported("Jump_Land", false, 0.08);
     },
     flap() {
       flapPulse = 1;
+      playImported("Jump_Start", false, 0.08);
     },
     animate(dt, t, speed, sit, air = 0, yawVel = 0) {
+      importedMixer?.update(dt);
+      if (importedReady) {
+        if (modelChoice === "minion") playImported("idle", true);
+        else if (sit) playImported("Sit_Floor_Idle", true);
+        else if (air === 2) playImported("Jump_Idle", true);
+        else if (air === 1) playImported("Jump_Start", false);
+        else if (speed > 4.6) playImported("Running_A", true);
+        else if (speed > 0.2) playImported("Walking_A", true);
+        else playImported("Unarmed_Idle", true);
+      }
       const speedN = Math.min(1, speed / 7.2);
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
       walkPhase += dt * (3.2 + speed * 2.2);
@@ -368,6 +432,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean }
     },
     dispose() {
       kit.dispose();
+      importedMixer?.stopAllAction();
+      importedModel?.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        mesh.geometry?.dispose();
+        const material = mesh.material;
+        for (const mat of Array.isArray(material) ? material : [material]) mat?.dispose?.();
+      });
       nameTex.dispose();
       ringMat.dispose();
       discMat.dispose();

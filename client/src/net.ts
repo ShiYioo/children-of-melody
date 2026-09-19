@@ -1,6 +1,7 @@
 import { Client } from "@colyseus/sdk";
 import type { RemotePlayers } from "./remote";
 import { terrainHeight } from "./heightfield";
+import type { AvatarModel } from "./avatar";
 
 /**
  * Colyseus 联机：进入 "island" 房间，把 Schema 状态 diff 进 RemotePlayers。
@@ -19,6 +20,7 @@ interface PlayerLike {
   startedAt: number;
   songName: string;
   hue: number;
+  avatar: AvatarModel;
 }
 
 export interface NetHandle {
@@ -30,14 +32,14 @@ export interface NetHandle {
   close: () => void;
 }
 
-export async function connectIsland(name: string, remotes: RemotePlayers): Promise<NetHandle | null> {
+export async function connectIsland(name: string, remotes: RemotePlayers, avatar: AvatarModel = "classic"): Promise<NetHandle | null> {
   const endpoint = import.meta.env.DEV ? "http://localhost:2567" : window.location.origin;
   const client = new Client(endpoint);
 
   let room: any;
   try {
     room = await Promise.race([
-      client.joinOrCreate("island", { name }),
+      client.joinOrCreate("island", { name, avatar }),
       new Promise((_, rej) => setTimeout(() => rej(new Error("连接超时")), 6000)),
     ]);
   } catch (e) {
@@ -67,7 +69,7 @@ export async function connectIsland(name: string, remotes: RemotePlayers): Promi
       }
       if (!seen.has(key)) {
         seen.add(key);
-        remotes.spawn(key, { name: p.name, hue: p.hue, trackId: p.trackId, startedAt: p.startedAt, x: p.x, y: p.y, z: p.z, ry: p.ry });
+        remotes.spawn(key, { name: p.name, hue: p.hue, avatar: p.avatar, trackId: p.trackId, startedAt: p.startedAt, x: p.x, y: p.y, z: p.z, ry: p.ry });
       } else {
         remotes.update(key, p as any);
       }

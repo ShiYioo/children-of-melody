@@ -3,6 +3,7 @@ import { IslandState, Player } from "./state.js";
 
 const ISLAND_RADIUS = 58;
 const MAX_NAME_LEN = 12;
+const AVATARS = new Set(["classic", "hooded", "minion"]);
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
@@ -42,6 +43,7 @@ export class IslandRoom extends Room {
     player.x = Math.cos(angle) * r;
     player.z = Math.sin(angle) * r;
     player.hue = Math.floor(Math.random() * 360);
+    player.avatar = AVATARS.has(options?.avatar) ? options.avatar : "classic";
     this.state.players.set(client.sessionId, player);
 
     client.send("time", { t: Date.now() });
