@@ -51,10 +51,30 @@ export interface MixInfo {
   gain: number;
 }
 
+/** 一帧音乐特征（features() 的返回）：分频段包络 + 节拍脉冲，全部 0~1 */
+export interface MusicFeatureFrame {
+  level: number; // 总能量（慢包络）
+  bass: number; // 低频（鼓点/贝斯）
+  mid: number; // 中频（旋律/人声）
+  treble: number; // 高频（碎拍/镲片）
+  beat: number; // 节拍脉冲（检测到踩点时跳起，指数衰减）
+}
+
+interface FeatureState {
+  level: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  beat: number;
+  bassAvg: number;
+  lastBeat: number;
+}
+
 export class MusicEngine {
   ctx: AudioContext | null = null;
   private master!: GainNode;
   private sources = new Map<string, Source>();
+  private feat = new Map<string, FeatureState>(); // features() 的每源状态
   private ownKey = "self";
   ownTrackId = -1;
   /** 自己当前链接曲目的 URL（暂停恢复时带上） */
@@ -326,6 +346,7 @@ export class MusicEngine {
     const existing = this.sources.get(this.ownKey);
     if (existing) this.stopSource(existing);
     this.sources.delete(this.ownKey);
+    this.feat.delete(this.ownKey);
     if (trackId < 0 || !this.ctx) return;
     const src = this.makeSource(trackId, songName, Date.now(), false, url);
     src.gain.gain.value = 0.62;
@@ -340,6 +361,7 @@ export class MusicEngine {
     const src = this.sources.get(this.ownKey);
     if (src) this.stopSource(src);
     this.sources.delete(this.ownKey);
+    this.feat.delete(this.ownKey);
     return this.ownElapsedMs;
   }
 
@@ -411,6 +433,7 @@ export class MusicEngine {
     if (!src) return;
     this.stopSource(src);
     this.sources.delete(key);
+    this.feat.delete(key);
   }
 
   // ---------- 生成式调度 ----------
@@ -555,6 +578,77 @@ export class MusicEngine {
       clarityMap.set(l.key, l.clarity);
     }
     return clarityMap;
+  }
+
+  // ---------- 音乐特征提取（视觉动效的驱动源） ----------
+
+  /** 一帧音乐特征：分频段包络 + 节拍脉冲 */
+  features(key: string): MusicFeatureFrame {
+    const zero: MusicFeatureFrame = { level: 0, bass: 0, mid: 0, treble: 0, beat: 0 };
+    const src = this.sources.get(key);
+    if (!src || !this.ctx || this.ctx.state !== "running") return zero;
+    const dt = 1 / 60; // 每帧调一次，固定步长对包络足够
+    let st = this.feat.get(key);
+    if (!st) {
+      st = { level: 0, bass: 0, mid: 0, treble: 0, beat: 0, bassAvg: 0, lastBeat: -9 };
+      this.feat.set(key, st);
+    }
+
+    let bassRaw = 0;
+    let midRaw = 0;
+    let trebleRaw = 0;
+    let levelRaw = 0;
+    if ((src.kind === "file" || src.kind === "url") && src.analyser && !src.html) {
+      if (!this.freqData || this.freqData.length !== src.analyser.frequencyBinCount) {
+        this.freqData = new Uint8Array(src.analyser.frequencyBinCount);
+      }
+      src.analyser.getByteFrequencyData(this.freqData);
+      const n = this.freqData.length; // fftSize 256 → 128 bin；48kHz 时每 bin ≈ 187Hz
+      const bassEnd = Math.max(2, Math.round(n * 0.045)); // ~0-430Hz：鼓点/贝斯
+      const midEnd = Math.round(n * 0.25); // ~430Hz-5.4kHz：主旋律/人声
+      let b = 0;
+      let m = 0;
+      let tr = 0;
+      let all = 0;
+      for (let i = 0; i < n; i++) {
+        const v = this.freqData[i] / 255;
+        all += v;
+        if (i < bassEnd) b += v;
+        else if (i < midEnd) m += v;
+        else tr += v;
+      }
+      bassRaw = b / bassEnd;
+      midRaw = m / (midEnd - bassEnd);
+      trebleRaw = tr / Math.max(1, n - midEnd);
+      levelRaw = all / n;
+    } else if (src.def || src.html) {
+      // 无频谱（生成式曲目/降级链接）：用节拍相位合成同一套包络，
+      // 视觉上仍是「低频踩点、高频碎闪」而不是单一抖动
+      const beatSec = src.def ? 60 / src.def.bpm : 0.73;
+      const phase = ((this.ctx.currentTime - src.startCtx) / beatSec) % 1;
+      const pulse = Math.pow(1 - phase, 2.2);
+      bassRaw = pulse;
+      midRaw = pulse * 0.5 + 0.1;
+      trebleRaw = pulse * pulse * 0.75;
+      levelRaw = pulse * 0.55 + 0.18;
+    } else return zero;
+
+    // 快起慢落包络：敲下去立刻跟上，松开后缓缓退潮
+    const env = (cur: number, raw: number, up: number, down: number) => cur + (raw - cur) * Math.min(1, (raw > cur ? up : down) * dt);
+    st.bass = env(st.bass, bassRaw, 18, 7);
+    st.mid = env(st.mid, midRaw, 14, 6);
+    st.treble = env(st.treble, trebleRaw, 22, 9);
+    st.level = env(st.level, levelRaw, 12, 4);
+
+    // 自适应节拍检测：低频瞬时能量显著高于其长时均值 → 一次踩点
+    st.bassAvg += (bassRaw - st.bassAvg) * Math.min(1, dt * 0.7);
+    const now = this.ctx.currentTime;
+    st.beat *= Math.exp(-dt * 7);
+    if (bassRaw > st.bassAvg * 1.38 + 0.05 && bassRaw > 0.055 && now - st.lastBeat > 0.22) {
+      st.lastBeat = now;
+      st.beat = Math.min(1, 0.55 + (bassRaw - st.bassAvg) * 2.2);
+    }
+    return { level: st.level, bass: st.bass, mid: st.mid, treble: st.treble, beat: st.beat };
   }
 
   /** 光环节拍包络（0~1，每拍衰减）；文件/链接源用实时频谱能量 */

@@ -10,6 +10,7 @@ import { connectIsland, type NetHandle } from "./net";
 import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
 import { terrainHeight } from "./heightfield";
+import { createMusicFX } from "./world/musicfx";
 
 /**
  * 音遇 · 客户端主流程
@@ -21,6 +22,9 @@ const world = createWorld(app);
 const controls = new PlayerControls(world.camera, app);
 const music = new MusicEngine();
 music.onNotice = (msg) => ui && ui.toast(msg, 3600);
+// 音乐动效：分频段包络驱动的地面涟漪 + 音符粒子（挂在场景，主循环里驱动）
+const musicfx = createMusicFX();
+world.addToScene(musicfx.group);
 const remotes = new RemotePlayers();
 remotes.bindScene(
   (o) => world.addToScene(o),
@@ -49,6 +53,7 @@ const hand = { withId: "", lead: false };
 const wristA = new THREE.Vector3();
 const wristB = new THREE.Vector3();
 const tmpDir = new THREE.Vector3();
+const ringColor = new THREE.Color();
 const followTarget = new THREE.Vector3();
 
 /** 两人手腕位置：脚底 + 朝对方方向 0.42m + 高 0.98m */
@@ -376,9 +381,16 @@ function tick(dt: number) {
       songUrl: remotes.songUrlOf(i.key),
     }))
   );
-  // 光环节拍能量（文件源用实时频谱，生成式用相位）
+  // 音乐特征（分频段包络+节拍）→ 光环节拍能量 + 头顶动效（涟漪/音符）
   const beatMap = new Map<string, number>();
-  for (const i of infos) if (i.dist < AUDIBLE_R) beatMap.set(i.key, music.beatEnv(i.key));
+  musicfx.beginFrame();
+  for (const i of infos) {
+    if (i.dist >= AUDIBLE_R || i.trackId < 0) continue;
+    const f = music.features(i.key);
+    beatMap.set(i.key, Math.min(1, f.beat * 0.7 + f.level * 0.5));
+    const pos = remotes.posOf(i.key);
+    if (pos) musicfx.drive(i.key, pos, i.color, f, dt, i.clarity);
+  }
   remotes.animate(dt, t, clarity, beatMap);
 
   // ---- 牵手视觉：手臂朝向 + 光带（自己参与的与他人之间的都要画） ----
@@ -442,13 +454,20 @@ function tick(dt: number) {
   // 滑翔风线与瞬态光效
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);
   world.bursts.update(dt);
+  musicfx.update(dt);
 
-  // 自己的光环（听歌且未暂停时亮着）
+  // 自己的光环 + 音乐动效（听歌且未暂停时）
   if (selfAvatar) {
-    const beat = music.beatEnv("self");
     const meta = trackMeta(music.ownTrackId, ui.currentSongName, music.ownUrl);
     const active = music.ownTrackId >= 0 && !music.isOwnPaused;
-    selfAvatar.setRing(active ? new THREE.Color(meta.color) : null, active ? 0.5 + 0.4 * beat : 0);
+    if (active) {
+      const f = music.features("self");
+      ringColor.set(meta.color);
+      selfAvatar.setRing(ringColor, 0.3 + f.level * 0.45 + f.beat * 0.35);
+      musicfx.drive("self", controls.state.pos, ringColor, f, dt, 1);
+    } else {
+      selfAvatar.setRing(null, 0);
+    }
   }
 
   // UI 低频刷新 + 靠近提示 + 翼能
