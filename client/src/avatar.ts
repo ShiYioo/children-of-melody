@@ -99,9 +99,11 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
   const boxW = textW + padX * 2;
   c2.beginPath();
   c2.roundRect((512 - boxW) / 2, 4, boxW, cv.height - tail - 4, 22);
-  c2.fillStyle = "rgba(255, 251, 241, 0.95)";
+  // 深色半透明底：和名牌同一套 UI 语言；场景有 UnrealBloom（阈值 0.72），
+  // 浅色气泡会超过阈值被泛光点亮，像自带光源一样刺眼
+  c2.fillStyle = "rgba(26, 18, 42, 0.88)";
   c2.fill();
-  c2.strokeStyle = "rgba(126, 104, 168, 0.4)";
+  c2.strokeStyle = "rgba(255, 236, 200, 0.32)";
   c2.lineWidth = 2.5;
   c2.stroke();
   // 小尾巴
@@ -110,9 +112,9 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
   c2.lineTo(256, cv.height - 2);
   c2.lineTo(256 + 14, cv.height - tail - 2);
   c2.closePath();
-  c2.fillStyle = "rgba(255, 251, 241, 0.95)";
+  c2.fillStyle = "rgba(26, 18, 42, 0.88)";
   c2.fill();
-  c2.fillStyle = "rgba(42, 33, 64, 0.92)";
+  c2.fillStyle = "rgba(255, 244, 222, 0.96)";
   lines.forEach((l, i) => c2.fillText(l, 256, 4 + padY + i * lineH + lineH / 2));
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
