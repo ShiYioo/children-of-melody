@@ -6,6 +6,43 @@ import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
 
 /**
+ * 动画供体：KayKit 人形动画库（rogue-hooded.glb 里带了整套走/跑/跳/躺/坐）。
+ * 伊莱娜的 GLB 只有一段展示动画，跑/飞/躺等状态动作从这里运行时重定向
+ * （SkeletonUtils.retargetClip 按骨骼名映射，模块级缓存只下载一次）。
+ */
+let donorPromise: Promise<{ root: THREE.Object3D; clips: THREE.AnimationClip[] }> | null = null;
+function loadAnimDonor() {
+  donorPromise ??= new GLTFLoader()
+    .loadAsync("/models/rogue-hooded.glb")
+    .then((g) => {
+      g.scene.updateMatrixWorld(true);
+      return { root: g.scene, clips: g.animations };
+    });
+  return donorPromise;
+}
+
+/** 按前缀找骨骼（伊莱娜的骨骼名带唯一后缀，如 arm.l_0106） */
+function findBone(root: THREE.Object3D, prefix: string): THREE.Bone | null {
+  let hit: THREE.Bone | null = null;
+  root.traverse((o) => {
+    if (!hit && (o as THREE.Bone).isBone && o.name.startsWith(prefix)) hit = o as THREE.Bone;
+  });
+  return hit;
+}
+
+/** retargetClip 要求传入的 Object3D 自带 .skeleton（SkinnedMesh 才有）——
+ *  给场景根临时挂上第一个 SkinnedMesh 的骨架即可（根的子树里也有全部骨骼，轨道绑定能找到） */
+function withSkeleton(root: THREE.Object3D): THREE.Object3D {
+  if ((root as unknown as { skeleton?: THREE.Skeleton }).skeleton) return root;
+  let sk: THREE.Skeleton | null = null;
+  root.traverse((o) => {
+    if (!sk && (o as THREE.SkinnedMesh).isSkinnedMesh) sk = (o as THREE.SkinnedMesh).skeleton;
+  });
+  if (sk) (root as unknown as { skeleton?: THREE.Skeleton }).skeleton = sk;
+  return root;
+}
+
+/**
  * 光遇风小人 · 二代
  *
  * 建模参考 Sky: Children of the Light：
@@ -131,10 +168,72 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedMixer = new THREE.AnimationMixer(importedModel);
       let clips: THREE.AnimationClip[];
       if (singleAnimModels.has(modelChoice)) {
-        // 单动画模型：整段循环，注册到所有状态名上（idle/走/跑/跳都用同一段）
+        // 伊莱娜：本地只有一段 13 秒展示动画（作为 idle 兜底）；
+        // 走/跑/跳/飞/躺 从 KayKit 动画库运行时重定向到她的骨架
+        const model = importedModel;
+        importedModel.updateMatrixWorld(true);
+        loadAnimDonor()
+          .then((donor) => {
+            if (importedModel !== model) return; // 已被换掉
+            // KayKit 骨骼名 ↔ 伊莱娜骨骼前缀（她的骨骼名带唯一数字后缀，按前缀找主骨）。
+            // retargetClip 的 names 是「目标骨骼名 → 源骨骼名」（按实现，文档注释反了）
+            const pairs: Array<[string, string]> = [
+              ["hips", "root.x"],
+              ["spine", "spine_01.x"],
+              ["chest", "spine_02.x"],
+              ["head", "head.x"],
+              ["upperarm.l", "arm.l"],
+              ["lowerarm.l", "forearm.l"],
+              ["wrist.l", "hand.l"],
+              ["upperarm.r", "arm.r"],
+              ["lowerarm.r", "forearm.r"],
+              ["wrist.r", "hand.r"],
+              ["upperleg.l", "thigh.l"],
+              ["lowerleg.l", "leg.l"],
+              ["foot.l", "foot.l"],
+              ["toes.l", "toes_01.l"],
+              ["upperleg.r", "thigh.r"],
+              ["lowerleg.r", "leg.r"],
+              ["foot.r", "foot.r"],
+              ["toes.r", "toes_01.r"],
+            ];
+            const names: Record<string, string> = {};
+            let mapped = 0;
+            for (const [donorName, prefix] of pairs) {
+              const bone = findBone(model, prefix);
+              if (bone) {
+                names[bone.name] = donorName;
+                mapped++;
+              }
+            }
+            if (mapped < 12) return; // 骨骼对不上就继续用展示动画
+            const wanted = ["Unarmed_Idle", "Walking_A", "Running_A", "Jump_Idle", "Jump_Start", "Jump_Land", "Lie_Idle"];
+            const sourceRoot = withSkeleton(donor.root);
+            for (const name of wanted) {
+              const src = donor.clips.find((c) => c.name === name);
+              if (!src) continue;
+              try {
+                // preserveBonePositions(默认) 保留伊莱娜自身的骨骼比例，只借动作旋转
+                const clip = SkeletonUtils.retargetClip(withSkeleton(model), sourceRoot, src, {
+                  names,
+                  hip: "hips",
+                });
+                importedActions.set(name, importedMixer!.clipAction(clip));
+              } catch {
+                /* 单条失败跳过 */
+              }
+            }
+            // 停掉展示动画兜底，切到重定向好的 idle
+            importedActions.get("Action")?.stop();
+            importedCurrent = "";
+            playImported("Unarmed_Idle", true);
+          })
+          .catch(() => {/* 供体加载失败：维持展示动画 */});        // 展示动画先注册为 idle 兜底（重定向完成后停掉并切换）
         const clip = gltf.animations[0];
-        if (clip) for (const alias of ["idle", "Unarmed_Idle", "Walking_A", "Running_A", "Jump_Idle", "Sit_Floor_Idle"]) {
-          importedActions.set(alias, importedMixer.clipAction(clip));
+        if (clip) {
+          const action = importedMixer.clipAction(clip);
+          importedActions.set("Action", action);
+          if (!importedActions.has("Unarmed_Idle")) importedActions.set("Unarmed_Idle", action);
         }
         clips = [];
       } else if (animalModels.has(modelChoice) && gltf.animations[0]) {
@@ -147,7 +246,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       }
       for (const clip of clips) importedActions.set(clip.name, importedMixer.clipAction(clip));
       importedReady = true;
-      playImported(singleAnimModels.has(modelChoice) ? "idle" : animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
+      playImported(animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
     },
     undefined,
     () => {
@@ -410,7 +509,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedMixer?.update(dt);
       if (importedReady) {
         if (animalModels.has(modelChoice)) playImported(speed > 0.2 && modelChoice !== "minion" ? "walk" : "idle", true);
-        else if (sit) playImported("Sit_Floor_Idle", true);
+        else if (sit) playImported(singleAnimModels.has(modelChoice) ? "Lie_Idle" : "Sit_Floor_Idle", true);
         else if (air === 2) playImported("Jump_Idle", true);
         else if (air === 1) playImported("Jump_Start", false);
         else if (speed > 4.6) playImported("Running_A", true);
