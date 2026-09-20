@@ -78,7 +78,56 @@ function stowInstrument() {
     });
     selfInstrumentMesh = null;
   }
+  instrumentHint.style.display = "none";
   controls.setEnabled(true);
+}
+
+// ---- 琴键提示条：拿琴时常驻屏幕下方，按下哪个键亮哪个 ----
+const SOLFEGE = ["do", "re", "mi", "fa", "sol", "la", "si"];
+const instrumentHint = document.createElement("div");
+instrumentHint.style.cssText = [
+  "position:fixed", "left:50%", "bottom:7%", "transform:translateX(-50%)",
+  "display:none", "gap:8px", "align-items:flex-end", "z-index:35", "user-select:none",
+].join(";");
+const keyCaps: HTMLDivElement[] = [];
+for (let i = 0; i < 7; i++) {
+  const cap = document.createElement("div");
+  cap.innerHTML = `<div style="font-size:17px;font-weight:600;color:#fff2df">${NOTE_KEYS[i].toUpperCase()}</div><div style="font-size:11px;opacity:.75;color:#ffe9c8">${SOLFEGE[i]}</div>`;
+  cap.style.cssText = [
+    "width:52px", "padding:8px 0 6px", "text-align:center", "border-radius:10px",
+    "border:1.5px solid rgba(255,236,200,.4)", "background:rgba(26,18,42,.82)",
+    "transition:background .08s, box-shadow .08s",
+  ].join(";");
+  instrumentHint.appendChild(cap);
+  keyCaps.push(cap);
+}
+const octLabel = document.createElement("div");
+octLabel.style.cssText = [
+  "position:absolute", "left:50%", "top:-24px", "transform:translateX(-50%)",
+  "font-size:12px", "color:#ffe9c8", "white-space:nowrap", "letter-spacing:.5px",
+].join("");
+instrumentHint.appendChild(octLabel);
+document.body.appendChild(instrumentHint);
+
+function flashKey(i: number, shift: boolean) {
+  const cap = keyCaps[i];
+  if (!cap) return;
+  const hot = shift ? "#ffb46e" : "#ffd98e";
+  cap.style.background = `rgba(255,214,130,.55)`;
+  cap.style.boxShadow = `0 0 14px ${hot}`;
+  setTimeout(() => {
+    cap.style.background = "rgba(26,18,42,.82)";
+    cap.style.boxShadow = "none";
+  }, 140);
+}
+
+function refreshOctLabel() {
+  const parts: string[] = [];
+  parts.push(INSTRUMENTS[playingIdx]?.label ?? "");
+  const oct = baseOctave;
+  parts.push(oct === 0 ? "本八度" : `${oct > 0 ? "+" : ""}${oct} 八度`);
+  parts.push("Shift 高八度 · Z/X 变调 · Esc 收起");
+  octLabel.textContent = parts.join(" · ");
 }
 
 function takeOutInstrument(idx: number) {
@@ -96,12 +145,14 @@ function takeOutInstrument(idx: number) {
   selfInstrumentMesh = makeInstrumentMesh(INSTRUMENTS[idx].kind, furnKit);
   selfInstrumentMesh.position.set(0, 0.95, 0.34);
   selfAvatar?.group.add(selfInstrumentMesh);
-  ui.toast(`${INSTRUMENTS[idx].label}：Q W E R T Y U 弹 do~si · Shift 高八度 · Z/X 变调 · 再按 ${idx + 3} 收起`, 5000);
+  refreshOctLabel();
+  instrumentHint.style.display = "flex";
 }
 
 function strikeNote(keyIdx: number, shift: boolean) {
   const midi = 60 + keyIdx + (baseOctave + (shift ? 1 : 0)) * 12;
   instruments.play(INSTRUMENTS[playingIdx].kind, midi, 1);
+  flashKey(keyIdx, shift);
   noteColor.setHSL(selfHue / 360, 0.55, 0.72);
   musicfx.noteBurst(controls.state.pos, noteColor, 0.9);
   net?.sendNote(playingIdx, midi, 0.9);
@@ -467,12 +518,12 @@ window.addEventListener("keydown", (e) => {
     }
     if (k === "z" && !e.repeat) {
       baseOctave = Math.max(-2, baseOctave - 1);
-      ui.toast(`变调：${baseOctave >= 0 ? "+" : ""}${baseOctave} 八度`);
+      refreshOctLabel();
       return;
     }
     if (k === "x" && !e.repeat) {
       baseOctave = Math.min(2, baseOctave + 1);
-      ui.toast(`变调：${baseOctave >= 0 ? "+" : ""}${baseOctave} 八度`);
+      refreshOctLabel();
       return;
     }
     if (k === "escape") {
