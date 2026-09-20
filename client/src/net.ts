@@ -48,6 +48,8 @@ export interface NetHandle {
   sessionId: string;
   /** 服务器时间 - 本地时间（把别人的 startedAt 换算到本地时钟） */
   clockOffset: number;
+  /** 最近一次探针的往返毫秒数（0 = 还没测到） */
+  ping: number;
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
   sendTrack: (trackId: number, name?: string, resumeMs?: number, url?: string) => void;
   sendChat: (text: string) => void;
@@ -74,7 +76,11 @@ export async function connectIsland(
   /** 别人弹了一个乐器音符（弹的人本地已响，不回声） */
   onNote: (from: string, kind: number, midi: number, vel: number) => void = () => {},
   /** 家具增删：data 为 null 表示删除 */
-  onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {}
+  onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {},
+  /** 非主动关闭的掉线（网络闪断/服务器重启），主循环据此自动重连 */
+  onDrop: () => void = () => {},
+  /** 延迟探针：每 2 秒回报一次往返毫秒数 */
+  onPing: (ms: number) => void = () => {}
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
@@ -93,12 +99,46 @@ export async function connectIsland(
   }
 
   let clockOffset = 0;
+  // ---- 对时：中位数滤波 + ping 探针 ----
+  // 单样本会被网络尖峰污染（音乐相位瞬间错半拍），取最近 5 个样本的中位数
+  const offsetSamples: number[] = [];
   const applyTime = (t: number) => {
-    const sample = t - Date.now();
-    // 取延迟最小（绝对值最大偏保守，这里取最新即可）的样本
-    clockOffset = sample;
+    offsetSamples.push(t - Date.now());
+    if (offsetSamples.length > 5) offsetSamples.shift();
+    const sorted = [...offsetSamples].sort((a, b) => a - b);
+    clockOffset = sorted[Math.floor(sorted.length / 2)];
   };
-  room.onMessage("time", ({ t }: { t: number }) => applyTime(t));
+  let pingSentAt = 0;
+  let pingMs = 0;
+  let lastPongAt = performance.now();
+  let dropped = false;
+  room.onMessage("time", ({ t }: { t: number }) => {
+    lastPongAt = performance.now();
+    if (pingSentAt > 0) {
+      pingMs = Math.max(1, Math.round(performance.now() - pingSentAt));
+      pingSentAt = 0;
+      onPing(pingMs);
+    }
+    applyTime(t);
+  });
+  // 心跳死信检测：TCP 半开连接（拔网线/切 Wi-Fi/服务器被杀）可能永远收不到 close 事件，
+  // 靠应用层探针超时来判定掉线
+  const pingTimer = setInterval(() => {
+    if (performance.now() - lastPongAt > 7000) {
+      if (!closedByUs && !dropped) {
+        dropped = true;
+        clearInterval(pingTimer);
+        onDrop();
+      }
+      return;
+    }
+    try {
+      pingSentAt = performance.now();
+      room.send("time");
+    } catch {
+      /* 掉线时发送会抛，忽略 */
+    }
+  }, 2000);
 
   let lastHandWith = "";
   let lastHandLead = false;
@@ -158,7 +198,11 @@ export async function connectIsland(
   };
   room.onStateChange(ingest);
 
-  room.onLeave(() => console.warn("[net] 已离开房间"));
+  let closedByUs = false;
+  room.onLeave(() => {
+    clearInterval(pingTimer);
+    if (!closedByUs) onDrop();
+  });
   room.onError((code: number, msg: string) => console.warn("[net] 房间错误", code, msg));
 
   // 请求一次对时
@@ -207,7 +251,12 @@ export async function connectIsland(
       room.send("hand-release", {});
     },
     close() {
+      closedByUs = true;
+      clearInterval(pingTimer);
       room.leave(true);
+    },
+    get ping() {
+      return pingMs;
     },
   };
 }

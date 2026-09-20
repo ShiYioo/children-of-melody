@@ -245,74 +245,7 @@ async function handleEnter(name: string) {
   spawnSelf();
 
   // 连接服务器；失败则进入独自漫游（NPC 陪伴）
-  net = await connectIsland(name, remotes, selectedAvatar, {
-    onInvite: (from, fromName) => {
-      if (hand.withId) {
-        // 已牵着别人：直接婉拒
-        net?.sendHandReject(from);
-        return;
-      }
-      music.sfxChime();
-      ui.showInvite(
-        fromName,
-        () => net?.sendHandAccept(from),
-        () => net?.sendHandReject(from)
-      );
-    },
-    onResult: (kind, who) => {
-      if (kind === "busy") ui.toast("对方已经牵着别人了");
-      else if (kind === "far") ui.toast("走近一点再伸手吧");
-      else if (kind === "reject") ui.toast(`${who ?? "对方"} 婉拒了牵手`);
-    },
-    onHandChange: (withId, lead) => {
-      if (withId && !hand.withId) {
-        const other = remotes.statsOf(withId);
-        ui.toast(`和 ${other?.name ?? "旅人"} 手牵着手`);
-        music.sfxChime();
-      } else if (!withId && hand.withId) {
-        ui.toast("松开了手");
-        selfAvatar?.setHand(null);
-      }
-      hand.withId = withId;
-      hand.lead = lead;
-      controls.setLed(!!withId && !lead);
-    },
-  },
-  // 聊天气泡：自己的回声和别人的话都从这进；别人的话只有走近才看得见（光遇式就近可闻）
-  (from, fromName, text) => {
-    if (from === net?.sessionId) {
-      selfAvatar?.say(text);
-      return;
-    }
-    const av = remotes.avatarOf(from);
-    if (!av) return;
-    const dist = av.group.position.distanceTo(selfAvatar?.group.position ?? av.group.position);
-    if (dist <= 20) av.say(text);
-  },
-  // 别人做表情：30 米内可见
-  (from, name) => {
-    const av = remotes.avatarOf(from);
-    if (!av || !selfAvatar) return;
-    if (av.group.position.distanceTo(selfAvatar.group.position) <= 30) av.playEmote(name);
-  },
-  // 别人弹琴：28 米内听到（按距离衰减）+ 光效 + 乐器显形 3 秒
-  (from, kindIdx, midi, vel) => {
-    const av = remotes.avatarOf(from);
-    if (!av || !selfAvatar) return;
-    const d = av.group.position.distanceTo(selfAvatar.group.position);
-    if (d > 28) return;
-    instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel);
-    musicfx.noteBurst(av.group.position, remoteNoteColor, vel);
-    attachInstrument(av.group, kindIdx);
-  },
-  // 家具增删（服务器权威：每人一个）
-  (key, data) => {
-    if (data) furniture.upsert(key, data);
-    else {
-      if (seatedOn?.key === key) seatedOn = null;
-      furniture.remove(key);
-    }
-  });
+  net = await connectToIsland(name);
   if (net) {
     ui.setStatus("online");
     ui.setSongOwner(net.sessionId);
@@ -332,6 +265,139 @@ async function handleEnter(name: string) {
   controls.setEnabled(true);
   ui.entered();
   ui.toast("欢迎来到音遇——选一首歌，或安静地走走", 4200);
+}
+
+/** 连接（与重连共用同一套事件处理）；name 为进入时的名字 */
+async function connectToIsland(name: string): Promise<NetHandle | null> {
+  return connectIsland(
+    name,
+    remotes,
+    selectedAvatar,
+    {
+      onInvite: (from, fromName) => {
+        if (hand.withId) {
+          // 已牵着别人：直接婉拒
+          net?.sendHandReject(from);
+          return;
+        }
+        music.sfxChime();
+        ui.showInvite(
+          fromName,
+          () => net?.sendHandAccept(from),
+          () => net?.sendHandReject(from)
+        );
+      },
+      onResult: (kind, who) => {
+        if (kind === "busy") ui.toast("对方已经牵着别人了");
+        else if (kind === "far") ui.toast("走近一点再伸手吧");
+        else if (kind === "reject") ui.toast(`${who ?? "对方"} 婉拒了牵手`);
+      },
+      onHandChange: (withId, lead) => {
+        if (withId && !hand.withId) {
+          const other = remotes.statsOf(withId);
+          ui.toast(`和 ${other?.name ?? "旅人"} 手牵着手`);
+          music.sfxChime();
+        } else if (!withId && hand.withId) {
+          ui.toast("松开了手");
+          selfAvatar?.setHand(null);
+        }
+        hand.withId = withId;
+        hand.lead = lead;
+        controls.setLed(!!withId && !lead);
+      },
+    },
+    // 聊天气泡：自己的回声和别人的话都从这进；别人的话只有走近才看得见（光遇式就近可闻）
+    (from, _fromName, text) => {
+      if (from === net?.sessionId) {
+        selfAvatar?.say(text);
+        return;
+      }
+      const av = remotes.avatarOf(from);
+      if (!av) return;
+      const dist = av.group.position.distanceTo(selfAvatar?.group.position ?? av.group.position);
+      if (dist <= 20) av.say(text);
+    },
+    // 别人做表情：30 米内可见
+    (from, emoteName) => {
+      const av = remotes.avatarOf(from);
+      if (!av || !selfAvatar) return;
+      if (av.group.position.distanceTo(selfAvatar.group.position) <= 30) av.playEmote(emoteName);
+    },
+    // 别人弹琴：28 米内听到（按距离衰减）+ 光效 + 乐器显形 3 秒
+    (from, kindIdx, midi, vel) => {
+      const av = remotes.avatarOf(from);
+      if (!av || !selfAvatar) return;
+      const d = av.group.position.distanceTo(selfAvatar.group.position);
+      if (d > 28) return;
+      instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel);
+      musicfx.noteBurst(av.group.position, remoteNoteColor, vel);
+      attachInstrument(av.group, kindIdx);
+    },
+    // 家具增删（服务器权威：每人一个）
+    (key, data) => {
+      if (data) furniture.upsert(key, data);
+      else {
+        if (seatedOn?.key === key) seatedOn = null;
+        furniture.remove(key);
+      }
+    },
+    // 非主动掉线 → 自动重连
+    startReconnect,
+    // ping 探针回报
+    updatePingBadge
+  );
+}
+
+// ---------------- 断线自动重连 ----------------
+let reconnecting = false;
+function startReconnect() {
+  if (reconnecting || !entered) return;
+  reconnecting = true;
+  net = null;
+  pingBadge.style.display = "none";
+  // 旧会话的家具在服务器端已被清掉，本地也清（重连后从新状态重建别人的）
+  seatedOn = null;
+  for (const k of [...furniture.entries.keys()]) furniture.remove(k);
+  ui.toast("连接闪断了，正在重连…", 2400);
+  void (async () => {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((r) => setTimeout(r, 2600));
+      const h = await connectToIsland(playerName);
+      if (h) {
+        net = h;
+        reconnecting = false;
+        ui.setStatus("online");
+        ui.setSongOwner(net.sessionId);
+        pingBadge.style.display = "block";
+        // 新会话：把自己正在放的歌重新上报（按已播进度续上）
+        if (music.ownTrackId >= 0 && !music.isOwnPaused) {
+          const resumeMs = Math.max(0, Date.now() - (music as unknown as { ownStartWall: number }).ownStartWall);
+          net.sendTrack(music.ownTrackId, ui.currentSongName, resumeMs, music.ownUrl);
+        }
+        ui.toast("重新连上了", 2200);
+        return;
+      }
+    }
+    reconnecting = false;
+    ui.toast("一直连不上服务器，先独自漫游吧（刷新页面可再试）", 5000);
+    ui.setStatus("solo");
+    npcs = new NpcDriver(remotes);
+  })();
+}
+
+// ---------------- 延迟徽章（右下角） ----------------
+const pingBadge = document.createElement("div");
+pingBadge.style.cssText = [
+  "position:fixed", "right:16px", "bottom:12px", "z-index:30",
+  "font-size:12px", "letter-spacing:.5px", "opacity:.85", "display:none",
+  "color:#9ff0b2", "text-shadow:0 1px 3px rgba(10,6,20,.7)", "pointer-events:none",
+].join(";");
+document.body.appendChild(pingBadge);
+
+function updatePingBadge(ms: number) {
+  pingBadge.textContent = `📡 ${ms} ms`;
+  pingBadge.style.color = ms < 80 ? "#9ff0b2" : ms < 200 ? "#ffd98e" : "#ff9d8a";
+  pingBadge.style.display = "block";
 }
 
 function spawnSelf() {

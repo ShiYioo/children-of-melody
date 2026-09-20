@@ -24,6 +24,8 @@ export class IslandRoom extends Room {
   private lastChatOf = new Map<string, number>();
   /** 表情防刷屏 */
   private lastEmoteOf = new Map<string, number>();
+  /** 移动校验：sessionId → 上次接受的位置与时间 */
+  private lastPosAt = new Map<string, { x: number; y: number; z: number; t: number }>();
   /** 乐器音符限流窗口：sessionId → {窗口起点, 计数} */
   private noteWindow = new Map<string, { at: number; n: number }>();
 
@@ -74,6 +76,7 @@ export class IslandRoom extends Room {
     this.lastChatOf.delete(client.sessionId);
     this.lastEmoteOf.delete(client.sessionId);
     this.noteWindow.delete(client.sessionId);
+    this.lastPosAt.delete(client.sessionId);
     // 背包家具随人离岛收回
     this.state.furniture.delete(`${client.sessionId}:0`);
     this.state.furniture.delete(`${client.sessionId}:1`);
@@ -103,6 +106,15 @@ export class IslandRoom extends Room {
     pos: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || typeof m?.x !== "number") return;
+      // 移动合法性：合法极速 ~15m/s（滑翔/被牵飞行），40 是宽松上限，超了当瞬移丢弃
+      const now = Date.now();
+      const last = this.lastPosAt.get(client.sessionId);
+      if (last) {
+        const dt = Math.max(0.05, (now - last.t) / 1000);
+        const dist = Math.hypot(m.x - last.x, (m.y ?? p.y) - last.y, m.z - last.z);
+        if (dist / dt > 40) return;
+      }
+      this.lastPosAt.set(client.sessionId, { x: m.x, y: m.y ?? p.y, z: m.z, t: now });
       const r = Math.hypot(m.x, m.z);
       if (r > ISLAND_RADIUS) {
         m.x = (m.x / r) * ISLAND_RADIUS;
