@@ -214,10 +214,12 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
             if (d < bestD) {
               bestD = d;
               // 从乘坐者位置反推摆角。必须用「家具组」的朝向取逆（只含底座 ry）——
-              // 枢轴自己的四元数带着当前摆角，会把待求解的信号一起逆掉，local.z 恒为 0
+              // 枢轴自己的四元数带着当前摆角，会把待求解的信号一起逆掉，local.z 恒为 0。
+              // 座位挂在枢轴 −Y 方向：Rx(θ) 后偏移 z 分量 = −L·sinθ，所以 z 要取负——
+              // 正号会让秋千镜像人物运动，人和座椅差出两倍弧长
               e.group.getWorldQuaternion(tmpQ);
               const local = tmpV.copy(p.pos).sub(pivot.getWorldPosition(new THREE.Vector3())).applyQuaternion(tmpQ.clone().invert());
-              angle = Math.max(-1.0, Math.min(1.0, Math.atan2(local.z, -local.y)));
+              angle = Math.max(-1.0, Math.min(1.0, Math.atan2(-local.z, -local.y)));
             }
           }
         }
