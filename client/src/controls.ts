@@ -140,6 +140,26 @@ export class PlayerControls {
     return this.keys.has(key.toLowerCase());
   }
 
+  /** 虚拟摇杆输入（触屏层写入；屏幕系 x 右 z 下，与 WASD 同约定） */
+  touchMove = { x: 0, z: 0 };
+
+  /** 触屏按钮模拟按键：down=true 走与物理键盘同一套逻辑（E 切坐、空格跳/按住滑翔） */
+  virtualKey(key: string, down: boolean) {
+    const k = key.toLowerCase();
+    if (down) {
+      if (this.enabled) {
+        if (k === "e") {
+          this.state.sit = !this.state.sit;
+          this.onSit?.(this.state.sit);
+        }
+        if (k === " ") this.jumpQueued = true;
+        this.keys.add(k);
+      }
+    } else {
+      this.keys.delete(k);
+    }
+  }
+
   setEnabled(v: boolean) {
     this.enabled = v;
     if (!v) this.keys.clear();
@@ -194,10 +214,17 @@ export class PlayerControls {
       if (this.keys.has("s") || this.keys.has("arrowdown")) iz += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) ix -= 1;
       if (this.keys.has("d") || this.keys.has("arrowright")) ix += 1;
+      // 虚拟摇杆覆盖键盘方向（触屏玩家）
+      const joyLen = Math.hypot(this.touchMove.x, this.touchMove.z);
+      if (joyLen > 0.08) {
+        ix = this.touchMove.x;
+        iz = this.touchMove.z;
+      }
     }
     const inputLen = Math.hypot(ix, iz);
     const moving = inputLen > 0.01 && !s.sit;
-    const running = moving && this.keys.has("shift");
+    const joyFull = Math.hypot(this.touchMove.x, this.touchMove.z) > 0.88;
+    const running = moving && (this.keys.has("shift") || joyFull);
 
     // ---- 水平动量（腾空时转向收敛，像布一样飘） ----
     const targetSpeed = s.airborne ? (this.keys.has(" ") ? 9.2 : 6.0) : running ? 7.2 : 3.6;

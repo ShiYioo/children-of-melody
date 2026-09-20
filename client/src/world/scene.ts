@@ -12,6 +12,7 @@ import { createToonKit } from "./toon";
 import { createMotes, createFireflies, createEmbers } from "./particles";
 import { createWindLines } from "./windlines";
 import { createBursts } from "./bursts";
+import { isTouchDevice } from "../touch";
 
 export interface World {
   scene: THREE.Scene;
@@ -28,9 +29,10 @@ export interface World {
 }
 
 export function createWorld(container: HTMLElement): World {
-  // ---- 渲染器 ----
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // ---- 渲染器（移动端降载：像素比 1.5 + 半分辨率阴影，保住手机帧率） ----
+  const mobile = isTouchDevice();
+  const renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -55,7 +57,7 @@ export function createWorld(container: HTMLElement): World {
   const sun = new THREE.DirectionalLight(0xffd6a0, 1.65);
   sun.position.set(-37, 16, -25);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(mobile ? 1024 : 2048, mobile ? 1024 : 2048);
   sun.shadow.camera.left = -80;
   sun.shadow.camera.right = 80;
   sun.shadow.camera.top = 80;

@@ -16,6 +16,7 @@ import { createToonKit } from "./world/toon";
 import { insideAnyCollider } from "./colliders";
 import { Instruments, INSTRUMENTS } from "./audio/instruments";
 import { makeInstrumentMesh } from "./world/instruments";
+import { createTouchUI, isTouchDevice } from "./touch";
 
 /**
  * 音遇 · 客户端主流程
@@ -96,8 +97,13 @@ for (let i = 0; i < 7; i++) {
   cap.style.cssText = [
     "width:52px", "padding:8px 0 6px", "text-align:center", "border-radius:10px",
     "border:1.5px solid rgba(255,236,200,.4)", "background:rgba(26,18,42,.82)",
-    "transition:background .08s, box-shadow .08s",
+    "transition:background .08s, box-shadow .08s", "cursor:pointer", "touch-action:none",
   ].join(";");
+  // 触屏/鼠标直接点键帽弹奏（手机没有 QWERTYU 行）
+  cap.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (playingIdx >= 0) strikeNote(i, false);
+  });
   instrumentHint.appendChild(cap);
   keyCaps.push(cap);
 }
@@ -131,6 +137,10 @@ function refreshOctLabel() {
 }
 
 function takeOutInstrument(idx: number) {
+  if (idx < 0) {
+    if (playingIdx >= 0) stowInstrument(); // 触屏菜单的「收起乐器」
+    return;
+  }
   if (playingIdx === idx) {
     stowInstrument();
     return;
@@ -264,6 +274,9 @@ async function handleEnter(name: string) {
 
   controls.setEnabled(true);
   ui.entered();
+  document.getElementById("enterName")?.blur(); // 焦点别留在入场框（会挡住游戏按键/摇杆）
+  // 触屏设备（手机/平板）：显示虚拟摇杆与按钮簇
+  touchUI.setVisible(isTouchDevice());
   ui.toast("欢迎来到音遇——选一首歌，或安静地走走", 4200);
 }
 
@@ -449,6 +462,9 @@ if (import.meta.env.DEV) {
     remotes,
     world,
     furniture,
+    get touchUI() {
+      return touchUI;
+    },
     get net() {
       return net;
     },
@@ -556,6 +572,41 @@ function closeWheel() {
 emoteWheel.tabIndex = -1;
 
 // ---------------- 牵手按键：G 邀请/松手 · F 接受 · Enter 聊天 · Tab 动作 ----------------
+// ---------------- 触屏操控（手机/平板）：摇杆 + 按钮簇 ----------------
+const touchUI = createTouchUI(controls, {
+  openChat,
+  openWheel,
+  toggleFurniture,
+  takeInstrument: (idx) => takeOutInstrument(idx),
+});
+
+/** 背包家具：放着就收回，没放就放在面前（键盘 1/2 与触屏菜单共用） */
+function toggleFurniture(kind: number) {
+  const key = ownFurnKey(kind);
+  if (furniture.has(key)) {
+    if (seatedOn?.key === key) {
+      seatedOn = null;
+      controls.state.sit = false;
+    }
+    furniture.remove(key);
+    net?.sendFurnRemove(kind);
+    ui.toast(kind === 0 ? "椅子收回了" : "秋千收回了");
+  } else {
+    const s = controls.state;
+    const yaw = s.yaw;
+    const x = s.pos.x + Math.sin(yaw) * 2.1;
+    const z = s.pos.z + Math.cos(yaw) * 2.1;
+    const y = terrainHeight(x, z);
+    if (insideAnyCollider(x, z, y + 0.3, 0.25)) {
+      ui.toast("这里太挤了，放不下");
+    } else {
+      furniture.upsert(key, { owner: net ? net.sessionId : "solo", kind, x, y, z, ry: yaw });
+      net?.sendFurnPlace(kind, x, y, z, yaw);
+      ui.toast(kind === 0 ? "放下了椅子——走近点「坐」坐下" : "放下了双人秋千——走近点「坐」荡起来");
+    }
+  }
+}
+
 window.addEventListener("keydown", (e) => {
   if (!entered || e.repeat) return;
   if ((e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) return;
@@ -606,31 +657,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (k === "1" || k === "2") {
-    // 背包家具：1 椅子 2 双人秋千——放着就收回，没放就放在面前
-    const kind = k === "1" ? 0 : 1;
-    const key = ownFurnKey(kind);
-    if (furniture.has(key)) {
-      if (seatedOn?.key === key) {
-        seatedOn = null;
-        controls.state.sit = false;
-      }
-      furniture.remove(key);
-      net?.sendFurnRemove(kind);
-      ui.toast(kind === 0 ? "椅子收回了" : "秋千收回了");
-    } else {
-      const s = controls.state;
-      const yaw = s.yaw;
-      const x = s.pos.x + Math.sin(yaw) * 2.1;
-      const z = s.pos.z + Math.cos(yaw) * 2.1;
-      const y = terrainHeight(x, z);
-      if (insideAnyCollider(x, z, y + 0.3, 0.25)) {
-        ui.toast("这里太挤了，放不下");
-      } else {
-        furniture.upsert(key, { owner: net ? net.sessionId : "solo", kind, x, y, z, ry: yaw });
-        net?.sendFurnPlace(kind, x, y, z, yaw);
-        ui.toast(kind === 0 ? "放下了椅子——靠近按 E 坐下" : "放下了双人秋千——靠近按 E 坐上去，W/S 蹬秋千");
-      }
-    }
+    toggleFurniture(k === "1" ? 0 : 1);
     return;
   }
   if (k === "f") {
