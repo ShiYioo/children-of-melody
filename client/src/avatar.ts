@@ -20,8 +20,8 @@ export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "
 
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
-  /** air: 0 地面 / 1 腾空 / 2 滑翔；state 提供速度分量（披风的风）与 vy（姿势分层） */
-  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, state?: { vy?: number; vx?: number; vz?: number }) => void;
+  /** air: 0 地面 / 1 腾空 / 2 滑翔；state 提供速度分量（披风的风）、vy（姿势分层）与 seated（坐家具） */
+  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, state?: { vy?: number; vx?: number; vz?: number; seated?: boolean }) => void;
   /** 落地缓冲（着地瞬间调用） */
   land: () => void;
   /** 扑翼脉冲（腾空按跳时调用，披风向后上方一抖） */
@@ -764,9 +764,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         const kk = Math.min(1, dt * 6);
         let pitch = 0.08 * speedN + THREE.MathUtils.clamp(accelSm * 0.012, -0.12, 0.2); // 跑动前倾
         let lift = 0;
-        if (sit) {
+        const seated = !!state?.seated;
+        if (sit && !seated) {
           pitch = -Math.PI / 2; // 绕身体中心向后放平
           lift = -0.44; // 轴心已居中：把中心压到离地 ~0.13（背部厚度的一半）
+        } else if (sit && seated) {
+          pitch = -0.12; // 坐椅子/秋千：上身微后靠，身体立着（座位高度由外部驱动）
+          lift = 0.06;
         } else if (air === 2) {
           pitch = 0.85; // 滑翔俯冲角，与程序化小人一致
           lift = -0.05;
@@ -792,10 +796,18 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             _eq2.setFromAxisAngle(_ev3, ang);
             bone.quaternion.copy(bind).multiply(_eq2);
           };
-          if (sit) {
+          if (sit && !seated) {
             // 躺平：双臂微微张开
             swing(elainaBones.armL, _ev2, 0.35);
             swing(elainaBones.armR, _ev2, -0.35);
+          } else if (sit && seated) {
+            // 坐姿：大腿前伸水平、小腿垂下，双手搭在腿上
+            swing(elainaBones.thighL, _ev2, 1.45);
+            swing(elainaBones.thighR, _ev2, 1.45);
+            swing(elainaBones.shinL, _ev2, -1.5);
+            swing(elainaBones.shinR, _ev2, -1.5);
+            swing(elainaBones.armL, _ev2, 0.5);
+            swing(elainaBones.armR, _ev2, -0.5);
           } else if (air === 2) {
             // 滑翔：双臂向侧上方展开，双腿并拢微后掠
             swing(elainaBones.armL, _ev2, 1.25);

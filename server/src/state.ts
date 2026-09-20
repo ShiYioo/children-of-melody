@@ -22,6 +22,17 @@ export class Player extends Schema {
   @type("boolean") handLead: boolean = false; // 是否牵头（带着对方走/飞）
 }
 
+/** 放置在岛上的背包家具（椅子 / 双人秋千）。key = `${owner}:${kind}`，每人每件唯一 */
+export class Furniture extends Schema {
+  @type("string") owner: string = "";
+  @type("uint8") kind: number = 0; // 0 椅子 / 1 双人秋千
+  @type("number") x: number = 0;
+  @type("number") y: number = 0;
+  @type("number") z: number = 0;
+  @type("number") ry: number = 0;
+}
+
 export class IslandState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
+  @type({ map: Furniture }) furniture = new MapSchema<Furniture>();
 }

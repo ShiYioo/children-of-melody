@@ -1,5 +1,5 @@
 import { Room, Client } from "colyseus";
-import { IslandState, Player } from "./state.js";
+import { IslandState, Player, Furniture } from "./state.js";
 import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
@@ -68,6 +68,9 @@ export class IslandRoom extends Room {
     for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
     this.state.players.delete(client.sessionId);
     this.lastChatOf.delete(client.sessionId);
+    // 背包家具随人离岛收回
+    this.state.furniture.delete(`${client.sessionId}:0`);
+    this.state.furniture.delete(`${client.sessionId}:1`);
     // 随身曲库：离岛即带走——他上传的歌自动删除
     const removed = removeSongsOf(client.sessionId);
     if (removed > 0) console.log(`[island] ${player?.name ?? "旅人"} 离开，随身曲库的 ${removed} 首歌已收起`);
@@ -197,6 +200,31 @@ export class IslandRoom extends Room {
       if (now - (this.lastChatOf.get(client.sessionId) ?? 0) < 900) return;
       this.lastChatOf.set(client.sessionId, now);
       this.broadcast("chat", { id: client.sessionId, name: p.name, text });
+    },
+
+    // ---- 背包家具（椅子/双人秋千）：每人每件只能放一个，收回才能再放 ----
+    "furn-place": (client: Client, m: any) => {
+      const kind = m?.kind | 0;
+      if (kind !== 0 && kind !== 1) return;
+      if (typeof m?.x !== "number" || typeof m?.z !== "number") return;
+      const r = Math.hypot(m.x, m.z);
+      if (r > ISLAND_RADIUS - 2) return; // 别放到岛外
+      const key = `${client.sessionId}:${kind}`;
+      if (this.state.furniture.has(key)) return; // 已放着：必须先收回
+      const f = new Furniture();
+      f.owner = client.sessionId;
+      f.kind = kind;
+      f.x = m.x;
+      f.y = clamp(m.y, 0, 40);
+      f.z = m.z;
+      f.ry = typeof m?.ry === "number" ? m.ry : 0;
+      this.state.furniture.set(key, f);
+    },
+
+    "furn-remove": (client: Client, m: any) => {
+      const kind = m?.kind | 0;
+      if (kind !== 0 && kind !== 1) return;
+      this.state.furniture.delete(`${client.sessionId}:${kind}`);
     },
   };
 }

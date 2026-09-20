@@ -11,6 +11,9 @@ import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
 import { terrainHeight } from "./heightfield";
 import { createMusicFX } from "./world/musicfx";
+import { createFurniture } from "./world/furniture";
+import { createToonKit } from "./world/toon";
+import { insideAnyCollider } from "./colliders";
 
 /**
  * 音遇 · 客户端主流程
@@ -25,6 +28,20 @@ music.onNotice = (msg) => ui && ui.toast(msg, 3600);
 // 音乐动效：分频段包络驱动的地面涟漪 + 音符粒子（挂在场景，主循环里驱动）
 const musicfx = createMusicFX();
 world.addToScene(musicfx.group);
+
+// ---- 背包家具：椅子 & 双人荡秋千（每人每件放一个，1/2 键放收，靠近 E 坐） ----
+const furnKit = createToonKit();
+const furniture = createFurniture(furnKit, world.addToScene, (o) => world.scene.remove(o));
+/** 自己正坐着的座位 */
+let seatedOn: { key: string; seat: number } | null = null;
+/** 秋千摆动物理（自己的座位） */
+const swingSim = { angle: 0, vel: 0 };
+const SWING_ROPE = 1.64; // 绳长（横杆 2.15 − 座面 0.51）
+let seatHintAt = -99;
+
+function ownFurnKey(kind: number) {
+  return `${net ? net.sessionId : "solo"}:${kind}`;
+}
 const remotes = new RemotePlayers();
 remotes.bindScene(
   (o) => world.addToScene(o),
@@ -155,6 +172,14 @@ async function handleEnter(name: string) {
     if (!av) return;
     const dist = av.group.position.distanceTo(selfAvatar?.group.position ?? av.group.position);
     if (dist <= 20) av.say(text);
+  },
+  // 家具增删（服务器权威：每人每件一个）
+  (key, data) => {
+    if (data) furniture.upsert(key, data);
+    else {
+      if (seatedOn?.key === key) seatedOn = null;
+      furniture.remove(key);
+    }
   });
   if (net) {
     ui.setStatus("online");
@@ -199,6 +224,20 @@ function spawnSelf() {
     music.sfxJump();
   };
   controls.onSit = (sitting) => {
+    if (sitting && !seatedOn && !controls.state.airborne) {
+      // 光遇式互动：靠近椅子/秋千按 E 是「坐上去」，而不是原地躺下
+      const near = furniture.nearestSeat(controls.state.pos, 1.7);
+      if (near) {
+        seatedOn = { key: near.key, seat: near.seat };
+        swingSim.angle = furniture.pivotAngle(near.key, near.seat);
+        swingSim.vel = 0;
+        music.sfxSit();
+        return;
+      }
+    }
+    if (!sitting && seatedOn) {
+      seatedOn = null; // E 起身（走动/跳跃起身由 tick 里的兜底清理）
+    }
     if (sitting) music.sfxSit();
   };
   controls.spawnAt(x, z);
@@ -211,6 +250,7 @@ if (import.meta.env.DEV) {
     music,
     remotes,
     world,
+    furniture,
     get net() {
       return net;
     },
@@ -271,6 +311,34 @@ window.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === "enter") {
     if (chatInput.style.display === "none") openChat();
+    return;
+  }
+  if (k === "1" || k === "2") {
+    // 背包家具：1 椅子 2 双人秋千——放着就收回，没放就放在面前
+    const kind = k === "1" ? 0 : 1;
+    const key = ownFurnKey(kind);
+    if (furniture.has(key)) {
+      if (seatedOn?.key === key) {
+        seatedOn = null;
+        controls.state.sit = false;
+      }
+      furniture.remove(key);
+      net?.sendFurnRemove(kind);
+      ui.toast(kind === 0 ? "椅子收回了" : "秋千收回了");
+    } else {
+      const s = controls.state;
+      const yaw = s.yaw;
+      const x = s.pos.x + Math.sin(yaw) * 2.1;
+      const z = s.pos.z + Math.cos(yaw) * 2.1;
+      const y = terrainHeight(x, z);
+      if (insideAnyCollider(x, z, y + 0.3, 0.25)) {
+        ui.toast("这里太挤了，放不下");
+      } else {
+        furniture.upsert(key, { owner: net ? net.sessionId : "solo", kind, x, y, z, ry: yaw });
+        net?.sendFurnPlace(kind, x, y, z, yaw);
+        ui.toast(kind === 0 ? "放下了椅子——靠近按 E 坐下" : "放下了双人秋千——靠近按 E 坐上去，W/S 蹬秋千");
+      }
+    }
     return;
   }
   if (k === "f") {
@@ -351,13 +419,50 @@ function tick(dt: number) {
   }
 
   controls.update(dt);
+
+  // ---- 家具乘坐 ----
+  if (seatedOn && !controls.state.sit) seatedOn = null; // 走动/跳跃起身的兜底清理
+  if (seatedOn) {
+    const entry = furniture.entries.get(seatedOn.key);
+    if (!entry) {
+      seatedOn = null; // 家具被主人收走了
+    } else {
+      const s = controls.state;
+      if (entry.kind === 1) {
+        // 秋千：重力摆 + W/S 蹬踏（自己的物理自己做，别人看着你的位置反推摆角）
+        const pump = (controls.isKeyDown("w") ? 1 : 0) - (controls.isKeyDown("s") ? 1 : 0);
+        swingSim.vel += (-9.8 / SWING_ROPE) * Math.sin(swingSim.angle) * dt;
+        swingSim.vel -= swingSim.vel * 0.055 * dt;
+        if (pump !== 0) swingSim.vel += pump * 1.9 * Math.cos(swingSim.angle) * dt * Math.max(0.35, Math.abs(Math.cos(swingSim.angle)));
+        swingSim.vel = Math.max(-3.2, Math.min(3.2, swingSim.vel));
+        swingSim.angle = Math.max(-1.05, Math.min(1.05, swingSim.angle + swingSim.vel * dt));
+        furniture.setPivotAngle(seatedOn.key, seatedOn.seat, swingSim.angle);
+      }
+      if (furniture.seatAnchor(seatedOn.key, seatedOn.seat, tmpDir)) {
+        s.pos.copy(tmpDir);
+        s.mov = 0;
+        // 面向家具前方
+        s.yaw = entry.group.rotation.y;
+      }
+    }
+  }
+  // 家具摆动：跟随所有坐着的人（自己 + 远端）；顺手标记谁坐在家具上（远端坐姿用）
+  const sittersAll = [{ key: "self", pos: controls.state.pos, sit: controls.state.sit }, ...remotes.sitters()];
+  furniture.update(sittersAll);
+  const seatedRemotes = new Set<string>();
+  for (const p of sittersAll) {
+    if (!p.sit) continue;
+    if (p.key === "self") continue;
+    if (furniture.nearestSeat(p.pos, 0.75)) seatedRemotes.add(p.key);
+  }
+
   if (selfAvatar) {
     const s = controls.state;
     selfAvatar.group.position.copy(s.pos);
     selfAvatar.group.rotation.y = s.yaw;
     const speed = controls.horizSpeed;
     const air = s.mov === 3 || s.mov === 4 ? 2 : s.airborne ? 1 : 0;
-    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel, vx: controls.horizVel.x, vz: controls.horizVel.z });
+    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel, vx: controls.horizVel.x, vz: controls.horizVel.z, seated: !!seatedOn });
     net?.sendPos({ x: s.pos.x, y: s.pos.y, z: s.pos.z, ry: s.yaw, mov: s.mov, sit: s.sit });
   }
 
@@ -391,7 +496,7 @@ function tick(dt: number) {
     const pos = remotes.posOf(i.key);
     if (pos) musicfx.drive(i.key, pos, i.color, f, dt, i.clarity);
   }
-  remotes.animate(dt, t, clarity, beatMap);
+  remotes.animate(dt, t, clarity, beatMap, seatedRemotes);
 
   // ---- 牵手视觉：手臂朝向 + 光带（自己参与的与他人之间的都要画） ----
   {
@@ -479,6 +584,15 @@ function tick(dt: number) {
     uiTimer = 0;
     ui.setNearby(infos);
     ui.setFlaps(controls.state.flaps);
+    // 家具靠近提示（节流 6 秒）
+    if (!controls.state.sit && t - seatHintAt > 6) {
+      const near = furniture.nearestSeat(controls.state.pos, 1.7);
+      if (near) {
+        seatHintAt = t;
+        const e = furniture.entries.get(near.key);
+        ui.toast(e?.kind === 1 ? "按 E 坐上秋千（W/S 蹬起来）" : "按 E 坐下歇会儿");
+      }
+    }
     for (const i of infos) {
       const near = i.dist < AUDIBLE_R;
       const before = nearBefore.get(i.key) ?? false;

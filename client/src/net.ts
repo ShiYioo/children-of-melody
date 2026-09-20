@@ -8,8 +8,16 @@ import type { AvatarModel } from "./avatar";
  * 连不上时返回 null，主流程自动降级为 NPC 漫游演示模式。
  */
 
-interface PlayerLike {
-  name: string;
+interface FurnLike {
+  owner: string;
+  kind: number;
+  x: number;
+  y: number;
+  z: number;
+  ry: number;
+}
+
+interface PlayerLike {  name: string;
   x: number;
   y: number;
   z: number;
@@ -43,6 +51,8 @@ export interface NetHandle {
   sendPos: (p: { x: number; y: number; z: number; ry: number; mov: number; sit: boolean }) => void;
   sendTrack: (trackId: number, name?: string, resumeMs?: number, url?: string) => void;
   sendChat: (text: string) => void;
+  sendFurnPlace: (kind: number, x: number, y: number, z: number, ry: number) => void;
+  sendFurnRemove: (kind: number) => void;
   sendHandInvite: (to: string) => void;
   sendHandAccept: (to: string) => void;
   sendHandReject: (to: string) => void;
@@ -56,7 +66,9 @@ export async function connectIsland(
   avatar: AvatarModel = "classic",
   hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} },
   /** 收到聊天（自己发的也会回声回来；由调用方决定远近是否显示） */
-  onChat: (from: string, name: string, text: string) => void = () => {}
+  onChat: (from: string, name: string, text: string) => void = () => {},
+  /** 家具增删：data 为 null 表示删除 */
+  onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {}
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
@@ -94,6 +106,7 @@ export async function connectIsland(
   const getSelfHue = () => selfHue;
 
   const seen = new Set<string>();
+  const seenFurn = new Set<string>();
 
   const ingest = () => {
     const players: Map<string, PlayerLike> = room.state.players;
@@ -118,6 +131,20 @@ export async function connectIsland(
       if (!players.has(key)) {
         seen.delete(key);
         remotes.remove(key);
+      }
+    }
+    // 家具（放置后位置不变，只处理增删）
+    const furn = room.state.furniture as Map<string, FurnLike>;
+    furn.forEach((f, key) => {
+      if (!seenFurn.has(key)) {
+        seenFurn.add(key);
+        onFurn(key, { owner: f.owner, kind: f.kind, x: f.x, y: f.y, z: f.z, ry: f.ry });
+      }
+    });
+    for (const key of seenFurn) {
+      if (!furn.has(key)) {
+        seenFurn.delete(key);
+        onFurn(key, null);
       }
     }
   };
@@ -146,6 +173,12 @@ export async function connectIsland(
     },
     sendChat(text) {
       room.send("chat", { text });
+    },
+    sendFurnPlace(kind, x, y, z, ry) {
+      room.send("furn-place", { kind, x, y, z, ry });
+    },
+    sendFurnRemove(kind) {
+      room.send("furn-remove", { kind });
     },
     sendHandInvite(to) {
       room.send("hand-invite", { to });

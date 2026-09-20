@@ -27,6 +27,12 @@ export function addCollider(c: CylinderCollider) {
   colliders.push(c);
 }
 
+/** 撤掉一个动态加进来的碰撞体（背包家具回收时用；不在列表里则忽略） */
+export function removeCollider(c: CylinderCollider) {
+  const i = colliders.indexOf(c);
+  if (i >= 0) colliders.splice(i, 1);
+}
+
 export function clearColliders() {
   colliders.length = 0;
 }

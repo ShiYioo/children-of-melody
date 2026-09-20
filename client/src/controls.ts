@@ -95,8 +95,8 @@ export class PlayerControls {
       if (k === " " && !e.repeat) this.jumpQueued = true;
       this.keys.add(k);
     });
-    window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
-    window.addEventListener("blur", () => this.keys.clear());
+  window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
+  window.addEventListener("blur", () => this.keys.clear());
 
     dom.addEventListener("pointerdown", (e) => {
       this.dragging = true;
@@ -133,6 +133,11 @@ export class PlayerControls {
       },
       { passive: true }
     );
+  }
+
+  /** 某个键当前是否按住（秋千蹬踏等外围系统用） */
+  isKeyDown(key: string) {
+    return this.keys.has(key.toLowerCase());
   }
 
   setEnabled(v: boolean) {

@@ -90,6 +90,13 @@ export class RemotePlayers {
     return this.entries.get(key)?.avatar ?? null;
   }
 
+  /** 所有远端的位置+坐姿（秋千摆角反推、坐姿判断用） */
+  sitters(): { key: string; pos: THREE.Vector3; sit: boolean }[] {
+    const out: { key: string; pos: THREE.Vector3; sit: boolean }[] = [];
+    for (const [key, e] of this.entries) out.push({ key, pos: e.avatar.group.position, sit: e.target.sit });
+    return out;
+  }
+
   startedAtOf(key: string): number {
     return this.entries.get(key)?.startedAt ?? 0;
   }
@@ -178,7 +185,7 @@ export class RemotePlayers {
   }
 
   /** 每帧：插值 + 动画 + 光环（beatMap 提供每个 key 的实时节拍能量） */
-  animate(dt: number, t: number, clarityMap: Map<string, number>, beatMap?: Map<string, number>): RemoteInfo[] {
+  animate(dt: number, t: number, clarityMap: Map<string, number>, beatMap?: Map<string, number>, seatedKeys?: Set<string>): RemoteInfo[] {
     const k = Math.min(1, dt * 10);
     for (const e of this.entries.values()) {
       const g = e.avatar.group;
@@ -229,6 +236,7 @@ export class RemotePlayers {
         vy: vyEst,
         vx: clampV(Math.sin(g.rotation.y) * e.speed),
         vz: clampV(Math.cos(g.rotation.y) * e.speed),
+        seated: seatedKeys?.has(e.key) ?? false,
       });
     }
     return [];
