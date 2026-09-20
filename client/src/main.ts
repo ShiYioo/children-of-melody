@@ -14,6 +14,8 @@ import { createMusicFX } from "./world/musicfx";
 import { createFurniture } from "./world/furniture";
 import { createToonKit } from "./world/toon";
 import { insideAnyCollider } from "./colliders";
+import { Instruments, INSTRUMENTS } from "./audio/instruments";
+import { makeInstrumentMesh } from "./world/instruments";
 
 /**
  * 音遇 · 客户端主流程
@@ -41,6 +43,68 @@ let seatHintAt = -99;
 
 function ownFurnKey(kind: number) {
   return `${net ? net.sessionId : "solo"}:${kind}`;
+}
+
+// ---- 手持乐器：3 竖琴 / 4 长笛 / 5 风铃，Q W E R T Y U 弹奏 ----
+const instruments = new Instruments();
+let playingIdx = -1; // -1 没拿乐器
+let baseOctave = 0; // Z/X 变调（-2..2 个八度）
+let selfInstrumentMesh: THREE.Group | null = null;
+/** 远端身上短暂显示的乐器（收到音符后挂 3 秒） */
+const remoteInstruments = new Map<THREE.Group, { mesh: THREE.Group; until: number }>();
+const NOTE_KEYS = "qwertyu"; // C 大调 do~si
+const noteColor = new THREE.Color();
+const remoteNoteColor = new THREE.Color("#ffe9b8");
+
+function attachInstrument(avatarGroup: THREE.Group, kindIdx: number) {
+  const until = performance.now() + 3000;
+  const hit = remoteInstruments.get(avatarGroup);
+  if (hit) {
+    hit.until = until;
+    return;
+  }
+  const mesh = makeInstrumentMesh(INSTRUMENTS[kindIdx].kind, furnKit);
+  mesh.position.set(0, 0.95, 0.34);
+  avatarGroup.add(mesh);
+  remoteInstruments.set(avatarGroup, { mesh, until });
+}
+
+function stowInstrument() {
+  playingIdx = -1;
+  if (selfInstrumentMesh) {
+    selfAvatar?.group.remove(selfInstrumentMesh);
+    selfInstrumentMesh.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose();
+    });
+    selfInstrumentMesh = null;
+  }
+  controls.setEnabled(true);
+}
+
+function takeOutInstrument(idx: number) {
+  if (playingIdx === idx) {
+    stowInstrument();
+    return;
+  }
+  if (playingIdx >= 0) stowInstrument();
+  if (controls.state.sit) {
+    ui.toast("站起来再弹琴吧");
+    return;
+  }
+  playingIdx = idx;
+  controls.setEnabled(false); // 弹琴时不动，镜头还能转
+  selfInstrumentMesh = makeInstrumentMesh(INSTRUMENTS[idx].kind, furnKit);
+  selfInstrumentMesh.position.set(0, 0.95, 0.34);
+  selfAvatar?.group.add(selfInstrumentMesh);
+  ui.toast(`${INSTRUMENTS[idx].label}：Q W E R T Y U 弹 do~si · Shift 高八度 · Z/X 变调 · 再按 ${idx + 3} 收起`, 5000);
+}
+
+function strikeNote(keyIdx: number, shift: boolean) {
+  const midi = 60 + keyIdx + (baseOctave + (shift ? 1 : 0)) * 12;
+  instruments.play(INSTRUMENTS[playingIdx].kind, midi, 1);
+  noteColor.setHSL(selfHue / 360, 0.55, 0.72);
+  musicfx.noteBurst(controls.state.pos, noteColor, 0.9);
+  net?.sendNote(playingIdx, midi, 0.9);
 }
 const remotes = new RemotePlayers();
 remotes.bindScene(
@@ -124,6 +188,7 @@ async function handleEnter(name: string) {
 
   // 音频必须在用户手势里解锁
   await music.unlock();
+  instruments.init(music);
 
   // 先放好自己
   spawnSelf();
@@ -173,7 +238,23 @@ async function handleEnter(name: string) {
     const dist = av.group.position.distanceTo(selfAvatar?.group.position ?? av.group.position);
     if (dist <= 20) av.say(text);
   },
-  // 家具增删（服务器权威：每人每件一个）
+  // 别人做表情：30 米内可见
+  (from, name) => {
+    const av = remotes.avatarOf(from);
+    if (!av || !selfAvatar) return;
+    if (av.group.position.distanceTo(selfAvatar.group.position) <= 30) av.playEmote(name);
+  },
+  // 别人弹琴：28 米内听到（按距离衰减）+ 光效 + 乐器显形 3 秒
+  (from, kindIdx, midi, vel) => {
+    const av = remotes.avatarOf(from);
+    if (!av || !selfAvatar) return;
+    const d = av.group.position.distanceTo(selfAvatar.group.position);
+    if (d > 28) return;
+    instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel);
+    musicfx.noteBurst(av.group.position, remoteNoteColor, vel);
+    attachInstrument(av.group, kindIdx);
+  },
+  // 家具增删（服务器权威：每人一个）
   (key, data) => {
     if (data) furniture.upsert(key, data);
     else {
@@ -304,11 +385,105 @@ chatInput.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") closeChat();
 });
 
-// ---------------- 牵手按键：G 邀请/松手 · F 接受 · Enter 聊天 ----------------
+// ---------------- 动作轮盘：Tab 打开，点选或按 1-6 ----------------
+const EMOTES: { key: string; label: string; icon: string }[] = [
+  { key: "wave", label: "招手", icon: "👋" },
+  { key: "bow", label: "鞠躬", icon: "🙇" },
+  { key: "nod", label: "点头", icon: "🙂" },
+  { key: "stretch", label: "伸懒腰", icon: "🫸" },
+  { key: "cheer", label: "欢呼", icon: "🙌" },
+  { key: "heart", label: "比心", icon: "💗" },
+];
+let wheelOpen = false;
+const emoteWheel = document.createElement("div");
+emoteWheel.style.cssText = [
+  "position:fixed", "left:50%", "top:50%", "transform:translate(-50%,-50%)",
+  "display:none", "gap:10px", "flex-wrap:wrap", "justify-content:center",
+  "width:340px", "padding:18px", "border-radius:22px", "z-index:50",
+  "background:rgba(26,18,42,.9)", "border:1.5px solid rgba(255,236,200,.35)",
+  "box-shadow:0 10px 40px rgba(10,6,20,.5)",
+].join(";");
+emoteWheel.addEventListener("keydown", (e) => e.stopPropagation());
+const emoteBtns: HTMLButtonElement[] = [];
+EMOTES.forEach((em, i) => {
+  const btn = document.createElement("button");
+  btn.textContent = `${em.icon} ${em.label} ${i + 1}`;
+  btn.style.cssText = [
+    "width:150px", "padding:12px 8px", "border-radius:14px", "cursor:pointer",
+    "border:1px solid rgba(255,236,200,.3)", "background:rgba(255,244,222,.08)",
+    "color:#fff2df", "font-size:15px",
+  ].join(";");
+  btn.onclick = () => {
+    doEmote(em.key);
+    closeWheel();
+  };
+  emoteWheel.appendChild(btn);
+  emoteBtns.push(btn);
+});
+document.body.appendChild(emoteWheel);
+
+function doEmote(name: string) {
+  selfAvatar?.playEmote(name);
+  net?.sendEmote(name);
+}
+function openWheel() {
+  wheelOpen = true;
+  emoteWheel.style.display = "flex";
+  document.exitPointerLock?.();
+  (emoteBtns[0] ?? emoteWheel).focus?.();
+}
+function closeWheel() {
+  wheelOpen = false;
+  emoteWheel.style.display = "none";
+}
+emoteWheel.tabIndex = -1;
+
+// ---------------- 牵手按键：G 邀请/松手 · F 接受 · Enter 聊天 · Tab 动作 ----------------
 window.addEventListener("keydown", (e) => {
   if (!entered || e.repeat) return;
   if ((e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) return;
   const k = e.key.toLowerCase();
+  if (k === "tab") {
+    e.preventDefault();
+    if (wheelOpen) closeWheel();
+    else openWheel();
+    return;
+  }
+  if (wheelOpen) {
+    // 轮盘开着：1-6 选动作，Esc 关
+    e.preventDefault();
+    if (/^[1-6]$/.test(k)) {
+      doEmote(EMOTES[Number(k) - 1].key);
+      closeWheel();
+    } else if (k === "escape") closeWheel();
+    return;
+  }
+  // 乐器弹奏键（拿出乐器后，Q W E R T Y U 是琴键）
+  if (playingIdx >= 0) {
+    const ni = NOTE_KEYS.indexOf(k);
+    if (ni >= 0 && !e.repeat) {
+      strikeNote(ni, e.shiftKey);
+      return;
+    }
+    if (k === "z" && !e.repeat) {
+      baseOctave = Math.max(-2, baseOctave - 1);
+      ui.toast(`变调：${baseOctave >= 0 ? "+" : ""}${baseOctave} 八度`);
+      return;
+    }
+    if (k === "x" && !e.repeat) {
+      baseOctave = Math.min(2, baseOctave + 1);
+      ui.toast(`变调：${baseOctave >= 0 ? "+" : ""}${baseOctave} 八度`);
+      return;
+    }
+    if (k === "escape") {
+      stowInstrument();
+      return;
+    }
+  }
+  if (k === "3" || k === "4" || k === "5") {
+    takeOutInstrument(Number(k) - 3);
+    return;
+  }
   if (k === "enter") {
     if (chatInput.style.display === "none") openChat();
     return;
@@ -559,6 +734,22 @@ function tick(dt: number) {
   // 滑翔风线与瞬态光效
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);
   world.bursts.update(dt);
+
+  // 昼夜循环：10 分钟一轮，按服务器时钟对齐（所有玩家看到同一片天）
+  const serverNow = Date.now() + (net?.clockOffset ?? 0);
+  world.setDayPhase((serverNow % 600000) / 600000);
+
+  // 远端乐器显形过期回收
+  const nowMs = performance.now();
+  for (const [g, hit] of remoteInstruments) {
+    if (hit.until < nowMs) {
+      g.remove(hit.mesh);
+      hit.mesh.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose();
+      });
+      remoteInstruments.delete(g);
+    }
+  }
 
   // 自己的光环 + 音乐动效（听歌且未暂停时）
   if (selfAvatar) {

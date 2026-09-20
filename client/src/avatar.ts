@@ -30,6 +30,8 @@ export interface Avatar {
   setName: (name: string) => void;
   /** 头顶聊天气泡：显示一句话几秒后淡出（无聊天大厅，只活在头顶） */
   say: (text: string) => void;
+  /** 动作轮盘表情：招手/鞠躬/点头/伸懒腰/欢呼/比心（1~2 秒程序化时间线） */
+  playEmote: (name: string) => void;
   /** 牵手姿势：传入牵手对象的方向（世界系，传 null 取消），内侧手臂会抬向对方 */
   setHand: (dir: THREE.Vector3 | null) => void;
   dispose: () => void;
@@ -531,6 +533,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // ---- 聊天气泡（光遇式：只飘在头顶，无大厅无历史） ----
   let bubbleSprite: THREE.Sprite | null = null;
   let bubbleUntil = 0;
+
+  // ---- 动作轮盘表情 ----
+  const EMOTE_DUR: Record<string, number> = { wave: 1.7, bow: 1.9, nod: 1.1, stretch: 2.1, cheer: 1.6, heart: 1.8 };
+  let emoteName: string | null = null;
+  let emoteT = 0;
+  const playEmote = (name: string) => {
+    if (!EMOTE_DUR[name]) return;
+    emoteName = name;
+    emoteT = 0;
+  };
+
   const say = (text: string) => {
     if (!bubbleSprite) {
       bubbleSprite = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
@@ -549,6 +562,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   return {
     group,
     say,
+    playEmote,
     land() {
       squash = 1;
       playImported("Jump_Land", false, 0.08);
@@ -671,6 +685,63 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.y = (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26;
       headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7;
+
+      // ---- 动作轮盘：时间推进（经典/伊莱娜共用） ----
+      if (emoteName) {
+        emoteT += dt;
+        if (emoteT >= (EMOTE_DUR[emoteName] ?? 1.4)) {
+          emoteName = null;
+          bodyGroup.position.y = 0; // cheer 的小跳结束后复位
+        }
+      }
+      const emoteP = emoteName ? emoteT / (EMOTE_DUR[emoteName] ?? 1.4) : 0;
+      const emoteEnv = emoteName ? Math.sin(Math.PI * Math.min(1, emoteP * 1.12)) : 0;
+
+      // ---- 动作轮盘：经典小人覆盖手臂/头/上身 ----
+      if (emoteName && !elainaRoot) {
+        {
+          const p = emoteP;
+          const env = emoteEnv;
+          const grounded = air === 0 && speed < 0.4;
+          switch (emoteName) {
+            case "wave": // 招手：右臂举高摆动
+              armR.root.rotation.z = -0.16 - env * 2.15;
+              armR.root.rotation.x = -env * 0.2;
+              armR.joint.rotation.z = Math.sin(p * Math.PI * 5) * 0.5 * env;
+              headGroup.rotation.z = env * 0.12;
+              break;
+            case "bow": // 鞠躬：上身前倾，双手贴身
+              if (grounded && !sit) {
+                bodyGroup.rotation.x = env * 0.6;
+                armL.root.rotation.x = armR.root.rotation.x = env * 0.3;
+              }
+              break;
+            case "nod": // 点头：两连点
+              headGroup.rotation.x += Math.sin(p * Math.PI * 4) * 0.3;
+              break;
+            case "stretch": // 伸懒腰：双臂上举后仰
+              armL.root.rotation.z += env * 2.3;
+              armR.root.rotation.z -= env * 2.3;
+              if (grounded && !sit) {
+                bodyGroup.rotation.x -= env * 0.14;
+                headGroup.rotation.x -= env * 0.22;
+              }
+              break;
+            case "cheer": // 欢呼：双臂高举小跳
+              armL.root.rotation.z += env * (2.2 + Math.sin(p * Math.PI * 6) * 0.25);
+              armR.root.rotation.z -= env * (2.2 + Math.cos(p * Math.PI * 6) * 0.25);
+              if (grounded && !sit) bodyGroup.position.y = Math.abs(Math.sin(p * Math.PI * 2.5)) * 0.16 * env;
+              headGroup.rotation.x -= env * 0.18;
+              break;
+            case "heart": // 比心：双手收到胸前
+              armL.root.rotation.x = armR.root.rotation.x = -env * 1.15;
+              armL.root.rotation.z += env * 0.55;
+              armR.root.rotation.z -= env * 0.55;
+              headGroup.rotation.z = Math.sin(p * Math.PI * 2) * 0.15;
+              break;
+          }
+        }
+      }
 
       // 滑翔时名牌随肩线下压并前移：身体前倾后固定高度的名牌会飘在半空，远看像和角色脱开
       if (elainaRoot) {
@@ -831,6 +902,37 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             swing(elainaBones.foreR, _ev1, 0.25 + Math.max(0, s) * 0.3);
           }
           // 待机：不碰四肢，展示动画的抬头段自然摆
+
+          // ---- 动作轮盘：只覆盖手臂（走路时腿照常迈，边走边招手） ----
+          if (emoteName) {
+            const p = emoteP;
+            const env = emoteEnv;
+            switch (emoteName) {
+              case "wave":
+                swing(elainaBones.armR, _ev2, 1.6 * env + 0.1);
+                swing(elainaBones.foreR, _ev1, Math.sin(p * Math.PI * 5) * 0.55 * env);
+                break;
+              case "bow":
+                swing(elainaBones.armL, _ev2, 0.55 * env);
+                swing(elainaBones.armR, _ev2, 0.55 * env);
+                break;
+              case "nod":
+                break; // 头骨不单独抓，点头以双臂轻垂示意
+              case "stretch":
+              case "cheer":
+                swing(elainaBones.armL, _ev2, 2.1 * env + 0.1);
+                swing(elainaBones.armR, _ev2, -(2.1 * env + 0.1));
+                swing(elainaBones.foreL, _ev2, 0.3 * env);
+                swing(elainaBones.foreR, _ev2, -0.3 * env);
+                break;
+              case "heart":
+                swing(elainaBones.armL, _ev2, 0.85 * env);
+                swing(elainaBones.armR, _ev2, -0.85 * env);
+                swing(elainaBones.foreL, _ev1, 1.15 * env);
+                swing(elainaBones.foreR, _ev1, 1.15 * env);
+                break;
+            }
+          }
         }
       }
 

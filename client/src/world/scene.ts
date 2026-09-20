@@ -3,7 +3,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { createSky } from "./sky";
+import { createSky, type SkyPalette } from "./sky";
 import { createTerrain } from "./terrain";
 import { createWater } from "./water";
 import { createClouds } from "./clouds";
@@ -23,6 +23,8 @@ export interface World {
   addToScene: (obj: THREE.Object3D) => void;
   render: (dt: number, t: number) => void;
   resize: () => void;
+  /** 昼夜循环：phase 0~1（0 黄昏 → 0.25 夜 → 0.5 黎明 → 0.75 白昼），全部客户端按同一时钟对齐 */
+  setDayPhase: (phase: number) => void;
 }
 
 export function createWorld(container: HTMLElement): World {
@@ -140,6 +142,107 @@ export function createWorld(container: HTMLElement): World {
   };
   window.addEventListener("resize", resize);
 
+  // ---- 昼夜循环：四阶段关键帧（黄昏→夜→黎明→白昼），平滑插值 ----
+  const C = (hex: string) => new THREE.Color(hex);
+  interface Phase {
+    sky: SkyPalette;
+    fogColor: THREE.Color;
+    fogDensity: number;
+    hemiSky: THREE.Color;
+    hemiGround: THREE.Color;
+    hemiInt: number;
+    ambientColor: THREE.Color;
+    ambientInt: number;
+    sunColor: THREE.Color;
+    sunInt: number;
+    sunPos: THREE.Vector3;
+    shaftOpacity: number;
+    exposure: number;
+  }
+  const PHASES: Phase[] = [
+    {
+      // 黄昏（原本的永恒黄昏）
+      sky: { zenith: C("#3b4a8f"), mid: C("#9a7bc0"), rose: C("#f2a48f"), horizon: C("#ffd9a3"), sea: C("#e8c9a8"), night: 0, sunEl: 0.22 },
+      fogColor: C("#eecfa4"), fogDensity: 0.0046,
+      hemiSky: C("#ffe2c0"), hemiGround: C("#6a8fa0"), hemiInt: 0.82,
+      ambientColor: C("#8a7bd0"), ambientInt: 0.36,
+      sunColor: C("#ffd6a0"), sunInt: 1.65, sunPos: new THREE.Vector3(-37, 16, -25),
+      shaftOpacity: 0.05, exposure: 1.12,
+    },
+    {
+      // 夜：星空铺满、月光清冷、萤火虫登场
+      sky: { zenith: C("#0c1230"), mid: C("#1a2248"), rose: C("#2c3560"), horizon: C("#43507e"), sea: C("#26304f"), night: 1, sunEl: 0.5 },
+      fogColor: C("#2a3354"), fogDensity: 0.0055,
+      hemiSky: C("#4a5a9a"), hemiGround: C("#1c2a4a"), hemiInt: 0.5,
+      ambientColor: C("#2c3a6e"), ambientInt: 0.3,
+      sunColor: C("#9fb4e8"), sunInt: 0.4, sunPos: new THREE.Vector3(24, 34, -14),
+      shaftOpacity: 0.012, exposure: 0.98,
+    },
+    {
+      // 黎明：粉玫瑰色渐亮
+      sky: { zenith: C("#5a6ab8"), mid: C("#9a90c8"), rose: C("#e8a8c0"), horizon: C("#ffc9d8"), sea: C("#d8b0c0"), night: 0.15, sunEl: 0.14 },
+      fogColor: C("#dcc4d4"), fogDensity: 0.005,
+      hemiSky: C("#ffd8e0"), hemiGround: C("#5a7a8a"), hemiInt: 0.75,
+      ambientColor: C("#8a7bc0"), ambientInt: 0.36,
+      sunColor: C("#ffd0b0"), sunInt: 1.2, sunPos: new THREE.Vector3(-34, 10, -25),
+      shaftOpacity: 0.04, exposure: 1.06,
+    },
+    {
+      // 白昼：明亮清透
+      sky: { zenith: C("#4a7ac8"), mid: C("#7aa4d8"), rose: C("#b8d0e8"), horizon: C("#d8ecf4"), sea: C("#9ac8d8"), night: 0, sunEl: 0.85 },
+      fogColor: C("#cfe0e8"), fogDensity: 0.0038,
+      hemiSky: C("#eaf4ff"), hemiGround: C("#6a8fa0"), hemiInt: 0.9,
+      ambientColor: C("#8a9ad0"), ambientInt: 0.42,
+      sunColor: C("#fff2d8"), sunInt: 1.9, sunPos: new THREE.Vector3(-30, 38, -20),
+      shaftOpacity: 0.06, exposure: 1.15,
+    },
+  ];
+  const skyPal: SkyPalette = {
+    zenith: PHASES[0].sky.zenith.clone(),
+    mid: PHASES[0].sky.mid.clone(),
+    rose: PHASES[0].sky.rose.clone(),
+    horizon: PHASES[0].sky.horizon.clone(),
+    sea: PHASES[0].sky.sea.clone(),
+    night: 0,
+    sunEl: 0.22,
+  };
+  const fireflyMat = fireflies.points.material as THREE.PointsMaterial;
+
+  function setDayPhase(phase: number) {
+    const p = ((phase % 1) + 1) % 1;
+    const seg = Math.min(3, Math.floor(p * 4));
+    const next = (seg + 1) % 4;
+    let u = p * 4 - seg;
+    u = u * u * (3 - 2 * u); // smoothstep：阶段交界处过渡更柔
+    const a = PHASES[seg];
+    const b = PHASES[next];
+    const mixC = (ca: THREE.Color, cb: THREE.Color, out: THREE.Color) => out.copy(ca).lerp(cb, u);
+    mixC(a.sky.zenith, b.sky.zenith, skyPal.zenith);
+    mixC(a.sky.mid, b.sky.mid, skyPal.mid);
+    mixC(a.sky.rose, b.sky.rose, skyPal.rose);
+    mixC(a.sky.horizon, b.sky.horizon, skyPal.horizon);
+    mixC(a.sky.sea, b.sky.sea, skyPal.sea);
+    skyPal.night = THREE.MathUtils.lerp(a.sky.night, b.sky.night, u);
+    skyPal.sunEl = THREE.MathUtils.lerp(a.sky.sunEl, b.sky.sunEl, u);
+    sky.apply(skyPal);
+
+    mixC(a.fogColor, b.fogColor, (scene.fog as THREE.FogExp2).color);
+    (scene.fog as THREE.FogExp2).density = THREE.MathUtils.lerp(a.fogDensity, b.fogDensity, u);
+    mixC(a.hemiSky, b.hemiSky, hemi.color);
+    mixC(a.hemiGround, b.hemiGround, hemi.groundColor);
+    hemi.intensity = THREE.MathUtils.lerp(a.hemiInt, b.hemiInt, u);
+    mixC(a.ambientColor, b.ambientColor, ambient.color);
+    ambient.intensity = THREE.MathUtils.lerp(a.ambientInt, b.ambientInt, u);
+    mixC(a.sunColor, b.sunColor, sun.color);
+    sun.intensity = THREE.MathUtils.lerp(a.sunInt, b.sunInt, u);
+    sun.position.lerpVectors(a.sunPos, b.sunPos, u);
+    shaftMat.opacity = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u);
+    renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
+    // 萤火虫入夜点亮（白天几乎看不见）
+    fireflyMat.opacity = 0.75 * THREE.MathUtils.clamp(skyPal.night * 1.6, 0.04, 1);
+  }
+  setDayPhase(0);
+
   return {
     scene,
     camera,
@@ -159,5 +262,6 @@ export function createWorld(container: HTMLElement): World {
       composer.render();
     },
     resize,
+    setDayPhase,
   };
 }

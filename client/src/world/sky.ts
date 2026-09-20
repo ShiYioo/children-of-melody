@@ -1,10 +1,21 @@
 import * as THREE from "three";
 
+/** 一套天空调色（昼夜循环用） */
+export interface SkyPalette {
+  zenith: THREE.Color;
+  mid: THREE.Color;
+  rose: THREE.Color;
+  horizon: THREE.Color;
+  sea: THREE.Color;
+  night: number; // 0 白昼 → 1 深夜（星星亮度/日光余晖切换）
+  sunEl: number; // 太阳高度（0~1）
+}
+
 /**
  * 黄昏天空穹顶：暖金地平线 → 玫瑰 → 紫罗兰 → 暮蓝天顶，
- * 低垂的太阳与最早亮起的几颗星。光遇的"永恒黄昏"。
+ * 低垂的太阳与最早亮起的几颗星。昼夜循环时整套调色由 setDayPhase 驱动。
  */
-export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void } {
+export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; apply: (p: SkyPalette) => void } {
   const sunDir = new THREE.Vector3(-0.62, 0.17, -0.42).normalize();
 
   const mat = new THREE.ShaderMaterial({
@@ -14,6 +25,7 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void } {
     uniforms: {
       uTime: { value: 0 },
       uSunDir: { value: sunDir },
+      uNight: { value: 0 },
       cZenith: { value: new THREE.Color("#3b4a8f") },
       cMid: { value: new THREE.Color("#9a7bc0") },
       cRose: { value: new THREE.Color("#f2a48f") },
@@ -29,6 +41,7 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void } {
     `,
     fragmentShader: /* glsl */ `
       uniform float uTime;
+      uniform float uNight;
       uniform vec3 uSunDir;
       uniform vec3 cZenith, cMid, cRose, cHorizon, cSea;
       varying vec3 vDir;
@@ -49,17 +62,17 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void } {
         // 地平线以下沉入海面的暖雾
         col = mix(cSea, col, smoothstep(-0.12, 0.02, h));
 
-        // 太阳：大范围柔光 + 亮核
+        // 太阳：大范围柔光 + 亮核（夜里换成月光，余晖收掉）
         float sd = max(dot(d, uSunDir), 0.0);
-        col += vec3(1.0, 0.85, 0.6) * pow(sd, 20.0) * 0.55;
-        col += vec3(1.0, 0.95, 0.8) * pow(sd, 300.0) * 1.1;
+        col += vec3(1.0, 0.85, 0.6) * pow(sd, 20.0) * 0.55 * (1.0 - uNight * 0.8);
+        col += vec3(0.85, 0.92, 1.0) * pow(sd, 300.0) * (mix(1.1, 0.5, uNight));
 
-        // 初升的星星（天顶侧才可见，缓慢闪烁）
-        float starZone = smoothstep(0.3, 0.65, h);
+        // 星星：入夜后铺满天空，缓慢闪烁
+        float starZone = smoothstep(0.18, 0.5, h);
         vec3 cell = floor(d * 220.0);
         float star = step(0.9975, hash(cell));
         float tw = 0.5 + 0.5 * sin(uTime * (1.0 + hash(cell + 7.0) * 2.0) + hash(cell) * 40.0);
-        col += vec3(0.9, 0.9, 1.0) * star * starZone * tw * 0.55;
+        col += vec3(0.9, 0.9, 1.0) * star * starZone * tw * mix(0.55, 2.6, uNight);
 
         gl_FragColor = vec4(col, 1.0);
       }
@@ -70,13 +83,23 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void } {
   mesh.frustumCulled = false;
   mesh.renderOrder = -10;
 
+  let sunElBase = 0.17;
   return {
     mesh,
     update: (t: number) => {
       mat.uniforms.uTime.value = t;
-      // 太阳极缓慢地呼吸，黄昏永远不落幕
-      const el = 0.17 + Math.sin(t * 0.02) * 0.015;
+      // 太阳极缓慢地呼吸（基准高度由昼夜循环的 apply 设定）
+      const el = sunElBase + Math.sin(t * 0.02) * 0.015;
       sunDir.set(-0.62, el, -0.42).normalize();
+    },
+    apply: (p: SkyPalette) => {
+      mat.uniforms.uNight.value = p.night;
+      (mat.uniforms.cZenith.value as THREE.Color).copy(p.zenith);
+      (mat.uniforms.cMid.value as THREE.Color).copy(p.mid);
+      (mat.uniforms.cRose.value as THREE.Color).copy(p.rose);
+      (mat.uniforms.cHorizon.value as THREE.Color).copy(p.horizon);
+      (mat.uniforms.cSea.value as THREE.Color).copy(p.sea);
+      sunElBase = 0.05 + p.sunEl * 0.55;
     },
   };
 }

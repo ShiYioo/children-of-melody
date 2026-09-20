@@ -118,6 +118,12 @@ export function createMusicFX() {
     for (const e of emitters.values()) e.touched = false;
   }
 
+  /** 单音符光效（乐器弹奏）：一个升起的大音符 + 一圈小涟漪 */
+  function noteBurst(pos: THREE.Vector3, color: THREE.Color, strength = 1) {
+    spawnNote(pos, color, 0.3 + 0.08 * strength, 0.8);
+    if (strength > 0.45) spawnRipple(pos, color, strength * 0.7);
+  }
+
   /** 驱动一个正在播放音乐的人的动效（自己 clarity=1；远端按听感清晰度衰减） */
   function drive(key: string, pos: THREE.Vector3, color: THREE.Color, f: MusicFeatureFrame, dt: number, clarity: number) {
     if (f.level <= 0.01 && f.beat <= 0.01) return;
@@ -176,5 +182,5 @@ export function createMusicFX() {
     }
   }
 
-  return { group, beginFrame, drive, update };
+  return { group, beginFrame, drive, update, noteBurst };
 }

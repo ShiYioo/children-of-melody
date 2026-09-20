@@ -22,6 +22,10 @@ export class IslandRoom extends Room {
   private pendingHands = new Map<string, { from: string; at: number }>();
   /** 聊天防刷屏：sessionId → 上次发言时间 */
   private lastChatOf = new Map<string, number>();
+  /** 表情防刷屏 */
+  private lastEmoteOf = new Map<string, number>();
+  /** 乐器音符限流窗口：sessionId → {窗口起点, 计数} */
+  private noteWindow = new Map<string, { at: number; n: number }>();
 
   onCreate() {
     this.maxClients = 64;
@@ -68,6 +72,8 @@ export class IslandRoom extends Room {
     for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
     this.state.players.delete(client.sessionId);
     this.lastChatOf.delete(client.sessionId);
+    this.lastEmoteOf.delete(client.sessionId);
+    this.noteWindow.delete(client.sessionId);
     // 背包家具随人离岛收回
     this.state.furniture.delete(`${client.sessionId}:0`);
     this.state.furniture.delete(`${client.sessionId}:1`);
@@ -200,6 +206,33 @@ export class IslandRoom extends Room {
       if (now - (this.lastChatOf.get(client.sessionId) ?? 0) < 900) return;
       this.lastChatOf.set(client.sessionId, now);
       this.broadcast("chat", { id: client.sessionId, name: p.name, text });
+    },
+
+    // 动作轮盘表情：转发给附近的人（自己不回声，本地直接播）
+    emote: (client: Client, m: any) => {
+      const name = typeof m?.name === "string" ? m.name : "";
+      if (!/^(wave|bow|nod|stretch|cheer|heart)$/.test(name)) return;
+      const now = Date.now();
+      if (now - (this.lastEmoteOf.get(client.sessionId) ?? 0) < 300) return;
+      this.lastEmoteOf.set(client.sessionId, now);
+      this.broadcast("emote", { id: client.sessionId, name }, { except: client });
+    },
+
+    // 乐器音符：转发给其他人（弹的人本地已经响过）；每秒最多 20 个音
+    note: (client: Client, m: any) => {
+      const k = m?.k | 0;
+      const midi = m?.m | 0;
+      if (k < 0 || k > 2 || midi < 21 || midi > 108) return;
+      const now = Date.now();
+      const w = this.noteWindow.get(client.sessionId) ?? { at: now, n: 0 };
+      if (now - w.at > 1000) {
+        w.at = now;
+        w.n = 0;
+      }
+      w.n++;
+      this.noteWindow.set(client.sessionId, w);
+      if (w.n > 20) return;
+      this.broadcast("note", { id: client.sessionId, k, m: midi, v: Math.min(1, Math.max(0, +m?.v || 0.8)) }, { except: client });
     },
 
     // ---- 背包家具（椅子/双人秋千）：每人每件只能放一个，收回才能再放 ----
