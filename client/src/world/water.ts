@@ -65,9 +65,10 @@ export function createWater(camera: THREE.Camera): {
       void main() {
         vec3 pos = position;
         vec2 xz = (modelMatrix * vec4(pos, 1.0)).xz;
-        // 波浪随水深衰减：湖面/浅滩是静水（光遇的湖不涨潮），只有开阔海域起浪
+        // 波浪随水深衰减：水线附近 0.55m 以内完全死水——岸坡很平，残余 7cm 的波
+        // 也能把水线推出几米"呼吸"（上一版阈值太低没治住）。湖面/浅滩是镜子，只有外海起浪
         float depth = clamp((0.55 - terrainH(xz)) / 2.2, 0.0, 1.0);
-        float amp = smoothstep_(0.08, 0.5, depth);
+        float amp = smoothstep_(0.25, 0.62, depth);
         pos.y += waveH(xz, uTime) * amp;
         vWorld = (modelMatrix * vec4(pos, 1.0)).xyz;
 
@@ -135,7 +136,7 @@ export function createWater(camera: THREE.Camera): {
 
         // 海岸泡沫：贴着等高线的一条柔和亮带（静水带不脉动，跟着浪一起安静）
         float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));
-        float waveAmpF = smoothstep_(0.08, 0.5, depth);
+        float waveAmpF = smoothstep_(0.25, 0.62, depth);
         float band = 0.5 + 0.5 * sin(depth * 20.0 - uTime * 1.8) * waveAmpF;
         float foam = shoreline * (0.42 + 0.38 * band);
         col = mix(col, vec3(1.0, 0.97, 0.9), foam * 0.6);
