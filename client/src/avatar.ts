@@ -148,15 +148,15 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // 单动画模型：整段展示动画循环播放（伊莱娜：灰之魔女的 13 秒动作）
   const singleAnimModels = new Set<AvatarModel>(["elaina"]);
   // 各 GLB 的地址与摆放（缩放/落地高度/朝向修正）——模型在建模软件里原点/尺寸不统一
-  const glbOf: Partial<Record<AvatarModel, { url: string; scale: number; y: number; ry: number }>> = {
-    minion: { url: "/models/minion-a01.glb", scale: 1, y: 0, ry: 0 },
-    corgi: { url: "/models/corgi.glb", scale: 1, y: 0, ry: 0 },
-    duck: { url: "/models/duck.glb", scale: 1, y: 0, ry: 0 },
-    platypus: { url: "/models/platypus.glb", scale: 1, y: 0, ry: 0 },
-    seal: { url: "/models/seal.glb", scale: 1, y: 0, ry: 0 },
-    owl: { url: "/models/owl.glb", scale: 1, y: 0, ry: 0 },
-    hooded: { url: "/models/rogue-hooded.glb", scale: 1, y: 0, ry: 0 },
-    elaina: { url: "/models/elaina.glb", scale: 0.39, y: 0.57, ry: 0 }, // 模型原点=身体中心（载入时内部居中），脚底在中心下方 0.57
+  const glbOf: Partial<Record<AvatarModel, { url: string; scale: number; y: number; ry: number; targetHeight: number }>> = {
+    minion: { url: "/models/minion-a01.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.25 },
+    corgi: { url: "/models/corgi.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.15 },
+    duck: { url: "/models/duck.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.32 },
+    platypus: { url: "/models/platypus.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.18 },
+    seal: { url: "/models/seal.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.12 },
+    owl: { url: "/models/owl.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.32 },
+    hooded: { url: "/models/rogue-hooded.glb", scale: 1, y: 0, ry: 0, targetHeight: 1.72 },
+    elaina: { url: "/models/elaina.glb", scale: 0.39, y: 0.57, ry: 0, targetHeight: 1.72 },
   };
   // 外部角色加载失败时继续使用下方程序化角色。
   let importedModel: THREE.Object3D | null = null;
@@ -164,6 +164,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const importedActions = new Map<string, THREE.AnimationAction>();
   let importedCurrent = "";
   let importedReady = false;
+  let importedDisplayHeight = 1.72;
   const playImported = (name: string, loop: boolean, fade = 0.16) => {
     if (!importedReady || importedCurrent === name) return;
     const next = importedActions.get(name);
@@ -274,6 +275,24 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         clips = gltf.animations;
       }
       for (const clip of clips) importedActions.set(clip.name, importedMixer.clipAction(clip));
+
+      // 各资源的建模单位从厘米到米不等。按真实包围盒统一视觉高度，并把最低点贴到角色根节点。
+      group.updateMatrixWorld(true);
+      importedModel.updateMatrixWorld(true);
+      let bounds = new THREE.Box3().setFromObject(importedModel);
+      const rawHeight = bounds.max.y - bounds.min.y;
+      if (Number.isFinite(rawHeight) && rawHeight > 1e-4) {
+        const normalize = glb.targetHeight / rawHeight;
+        importedModel.scale.multiplyScalar(normalize);
+        group.updateMatrixWorld(true);
+        importedModel.updateMatrixWorld(true);
+        bounds = new THREE.Box3().setFromObject(importedModel);
+        const rootY = group.getWorldPosition(new THREE.Vector3()).y;
+        importedModel.position.y += rootY - bounds.min.y + 0.015;
+        importedDisplayHeight = glb.targetHeight;
+        if (elainaRoot) elainaBaseY = importedModel.position.y;
+      }
+
       importedReady = true;
       playImported(animalModels.has(modelChoice) ? "idle" : "Unarmed_Idle", true);
     },
@@ -465,6 +484,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   );
   nameSprite.scale.set(1.9, 0.53, 1);
   nameSprite.position.y = 2.35;
+  nameSprite.visible = !opts.self;
   group.add(nameSprite);
 
   // ---- 音乐光环 ----
@@ -574,10 +594,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     animate(dt, t, speed, sit, air = 0, yawVel = 0, state = {}) {
       importedMixer?.update(dt);
       if (importedReady) {
-        if (animalModels.has(modelChoice)) playImported(speed > 0.2 && modelChoice !== "minion" ? "walk" : "idle", true);
-        else if (sit) playImported(singleAnimModels.has(modelChoice) ? "Lie_Idle" : "Sit_Floor_Idle", true);
+        if (sit) playImported(singleAnimModels.has(modelChoice) ? "Lie_Idle" : "Sit_Floor_Idle", true);
         else if (air === 2) playImported("Jump_Idle", true);
         else if (air === 1) playImported("Jump_Start", false);
+        else if (animalModels.has(modelChoice)) playImported(speed > 0.2 && modelChoice !== "minion" ? "walk" : "idle", true);
         else if (speed > 4.6) playImported("Running_A", true);
         else if (speed > 0.2) playImported("Walking_A", true);
         else playImported("Unarmed_Idle", true);
@@ -622,10 +642,12 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       bodyGroup.rotation.x =
         -0.5 * sitLerp +
         (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
-        0.92 * glideBlend +
+        0.76 * glideBlend +
         0.15 * jumpBlend * (1 - glideBlend);
       // 压弯（整体侧倾）
-      group.rotation.z = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
+      const groundBank = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
+      const glideBank = THREE.MathUtils.clamp(-yawVel * 0.035, -0.22, 0.22) * glideBlend;
+      group.rotation.z = groundBank + glideBank;
       // 重心左右晃（跳跳步的步感）
       bodyGroup.rotation.z = (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp);
 
@@ -743,10 +765,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         }
       }
 
+      // 没有专用飞行动画的导入模型也随状态调整整体姿态，避免在空中直立行走。
+      if (importedModel && !elainaRoot) {
+        const importedPitch = air === 2 ? 0.38 : air === 1 ? -0.08 : 0;
+        importedModel.rotation.x = THREE.MathUtils.lerp(importedModel.rotation.x, importedPitch, Math.min(1, dt * 5));
+        importedModel.rotation.z = THREE.MathUtils.lerp(importedModel.rotation.z, air === 2 ? THREE.MathUtils.clamp(-yawVel * 0.025, -0.14, 0.14) : 0, Math.min(1, dt * 5));
+      }
+
       // 滑翔时名牌随肩线下压并前移：身体前倾后固定高度的名牌会飘在半空，远看像和角色脱开
-      if (elainaRoot) {
-        // 伊莱娜实际身高 ~1.14（含帽），名牌跟到 1.5；躺平时身体贴地，名牌也要落下来
-        const tagY = 1.5 - glideBlend * 0.35 - (sit ? 0.85 : 0);
+      if (importedReady) {
+        const sitDrop = sit ? Math.min(0.82, importedDisplayHeight * 0.5) : 0;
+        const tagY = importedDisplayHeight + 0.38 - glideBlend * 0.35 - sitDrop;
         nameSprite.position.y = THREE.MathUtils.lerp(nameSprite.position.y, tagY, Math.min(1, dt * 5));
       } else {
         nameSprite.position.y = 2.35 - glideBlend * 0.6;

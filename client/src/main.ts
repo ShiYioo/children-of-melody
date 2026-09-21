@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { Armchair, Bell, createIcons, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } from "lucide";
 import { createWorld } from "./world/scene";
 import { HandLinks } from "./world/handlink";
 import { PlayerControls } from "./controls";
@@ -81,24 +82,18 @@ function stowInstrument() {
   }
   instrumentHint.style.display = "none";
   controls.setEnabled(true);
+  syncDesktopActions();
 }
 
 // ---- 琴键提示条：拿琴时常驻屏幕下方，按下哪个键亮哪个 ----
 const SOLFEGE = ["do", "re", "mi", "fa", "sol", "la", "si"];
 const instrumentHint = document.createElement("div");
-instrumentHint.style.cssText = [
-  "position:fixed", "left:50%", "bottom:7%", "transform:translateX(-50%)",
-  "display:none", "gap:8px", "align-items:flex-end", "z-index:35", "user-select:none",
-].join(";");
+instrumentHint.className = "instrument-keys";
 const keyCaps: HTMLDivElement[] = [];
 for (let i = 0; i < 7; i++) {
   const cap = document.createElement("div");
-  cap.innerHTML = `<div style="font-size:17px;font-weight:600;color:#fff2df">${NOTE_KEYS[i].toUpperCase()}</div><div style="font-size:11px;opacity:.75;color:#ffe9c8">${SOLFEGE[i]}</div>`;
-  cap.style.cssText = [
-    "width:52px", "padding:8px 0 6px", "text-align:center", "border-radius:10px",
-    "border:1.5px solid rgba(255,236,200,.4)", "background:rgba(26,18,42,.82)",
-    "transition:background .08s, box-shadow .08s", "cursor:pointer", "touch-action:none",
-  ].join(";");
+  cap.className = "instrument-key";
+  cap.innerHTML = `<strong>${NOTE_KEYS[i].toUpperCase()}</strong><small>${SOLFEGE[i]}</small>`;
   // 触屏/鼠标直接点键帽弹奏（手机没有 QWERTYU 行）
   cap.addEventListener("pointerdown", (e) => {
     e.preventDefault();
@@ -108,10 +103,7 @@ for (let i = 0; i < 7; i++) {
   keyCaps.push(cap);
 }
 const octLabel = document.createElement("div");
-octLabel.style.cssText = [
-  "position:absolute", "left:50%", "top:-24px", "transform:translateX(-50%)",
-  "font-size:12px", "color:#ffe9c8", "white-space:nowrap", "letter-spacing:.5px",
-].join("");
+octLabel.className = "octave-label";
 instrumentHint.appendChild(octLabel);
 document.body.appendChild(instrumentHint);
 
@@ -122,7 +114,7 @@ function flashKey(i: number, shift: boolean) {
   cap.style.background = `rgba(255,214,130,.55)`;
   cap.style.boxShadow = `0 0 14px ${hot}`;
   setTimeout(() => {
-    cap.style.background = "rgba(26,18,42,.82)";
+    cap.style.background = "";
     cap.style.boxShadow = "none";
   }, 140);
 }
@@ -157,6 +149,7 @@ function takeOutInstrument(idx: number) {
   selfAvatar?.group.add(selfInstrumentMesh);
   refreshOctLabel();
   instrumentHint.style.display = "flex";
+  syncDesktopActions();
 }
 
 function strikeNote(keyIdx: number, shift: boolean) {
@@ -400,15 +393,11 @@ function startReconnect() {
 
 // ---------------- 延迟徽章（右下角） ----------------
 const pingBadge = document.createElement("div");
-pingBadge.style.cssText = [
-  "position:fixed", "right:16px", "bottom:12px", "z-index:30",
-  "font-size:12px", "letter-spacing:.5px", "opacity:.85", "display:none",
-  "color:#9ff0b2", "text-shadow:0 1px 3px rgba(10,6,20,.7)", "pointer-events:none",
-].join(";");
+pingBadge.className = "ping-badge";
 document.body.appendChild(pingBadge);
 
 function updatePingBadge(ms: number) {
-  pingBadge.textContent = `📡 ${ms} ms`;
+  pingBadge.textContent = `${ms} ms`;
   pingBadge.style.color = ms < 80 ? "#9ff0b2" : ms < 200 ? "#ffd98e" : "#ff9d8a";
   pingBadge.style.display = "block";
 }
@@ -433,6 +422,9 @@ function spawnSelf() {
   };
   controls.onJump = () => {
     music.sfxJump();
+  };
+  controls.onGlide = (open) => {
+    if (open) music.sfxGlideOpen();
   };
   controls.onSit = (sitting) => {
     if (sitting && !seatedOn && !controls.state.airborne) {
@@ -486,16 +478,11 @@ const chatInput = document.createElement("input");
 chatInput.maxLength = 80;
 chatInput.placeholder = "说点什么…（Enter 发送，Esc 取消）";
 chatInput.autocomplete = "off";
-chatInput.style.cssText = [
-  "position:fixed", "left:50%", "bottom:13%", "transform:translateX(-50%)",
-  "width:min(430px,74vw)", "padding:11px 18px", "border-radius:999px",
-  "border:1.5px solid rgba(255,244,214,.55)", "background:rgba(26,18,42,.88)",
-  "color:#fff6e6", "font-size:16px", "letter-spacing:.5px", "outline:none",
-  "box-shadow:0 6px 24px rgba(10,6,20,.45)", "display:none", "z-index:40",
-].join(";");
+chatInput.className = "chat-input";
 document.body.appendChild(chatInput);
 
 function openChat() {
+  closeDesktopActions();
   chatInput.style.display = "block";
   chatInput.value = "";
   document.exitPointerLock?.();
@@ -529,23 +516,13 @@ const EMOTES: { key: string; label: string; icon: string }[] = [
 ];
 let wheelOpen = false;
 const emoteWheel = document.createElement("div");
-emoteWheel.style.cssText = [
-  "position:fixed", "left:50%", "top:50%", "transform:translate(-50%,-50%)",
-  "display:none", "gap:10px", "flex-wrap:wrap", "justify-content:center",
-  "width:340px", "padding:18px", "border-radius:22px", "z-index:50",
-  "background:rgba(26,18,42,.9)", "border:1.5px solid rgba(255,236,200,.35)",
-  "box-shadow:0 10px 40px rgba(10,6,20,.5)",
-].join(";");
+emoteWheel.className = "emote-wheel";
 emoteWheel.addEventListener("keydown", (e) => e.stopPropagation());
 const emoteBtns: HTMLButtonElement[] = [];
 EMOTES.forEach((em, i) => {
   const btn = document.createElement("button");
-  btn.textContent = `${em.icon} ${em.label} ${i + 1}`;
-  btn.style.cssText = [
-    "width:150px", "padding:12px 8px", "border-radius:14px", "cursor:pointer",
-    "border:1px solid rgba(255,236,200,.3)", "background:rgba(255,244,222,.08)",
-    "color:#fff2df", "font-size:15px",
-  ].join(";");
+  btn.className = "emote-btn";
+  btn.innerHTML = `<span>${em.icon}</span>${em.label} ${i + 1}`;
   btn.onclick = () => {
     doEmote(em.key);
     closeWheel();
@@ -560,8 +537,9 @@ function doEmote(name: string) {
   net?.sendEmote(name);
 }
 function openWheel() {
+  closeDesktopActions();
   wheelOpen = true;
-  emoteWheel.style.display = "flex";
+  emoteWheel.style.display = "grid";
   document.exitPointerLock?.();
   (emoteBtns[0] ?? emoteWheel).focus?.();
 }
@@ -605,12 +583,83 @@ function toggleFurniture(kind: number) {
       ui.toast(kind === 0 ? "放下了椅子——走近点「坐」坐下" : "放下了双人秋千——走近点「坐」荡起来");
     }
   }
+  syncDesktopActions();
+}
+
+// ---------------- 桌面操作入口：收纳 Enter / Tab / 1-5，可点击也可看键位 ----------------
+const desktopActions = document.createElement("div");
+desktopActions.className = "desktop-actions";
+desktopActions.innerHTML = `
+  <div class="action-menu panel" role="menu" aria-label="旅人操作">
+    <section class="action-section">
+      <div class="action-section-title">互动</div>
+      <div class="action-grid">
+        <button class="action-item" data-action="chat"><i data-lucide="message-circle"></i><span class="label">说话</span><kbd>Enter</kbd></button>
+        <button class="action-item" data-action="emote"><i data-lucide="sparkles"></i><span class="label">动作</span><kbd>Tab</kbd></button>
+      </div>
+    </section>
+    <section class="action-section">
+      <div class="action-section-title">家具</div>
+      <div class="action-grid">
+        <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
+        <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
+      </div>
+    </section>
+    <section class="action-section">
+      <div class="action-section-title">乐器</div>
+      <div class="action-grid instruments">
+        <button class="action-item" data-instrument="0"><i data-lucide="music-2"></i><span class="label">竖琴</span><kbd>3</kbd></button>
+        <button class="action-item" data-instrument="1"><i data-lucide="wind"></i><span class="label">长笛</span><kbd>4</kbd></button>
+        <button class="action-item" data-instrument="2"><i data-lucide="bell"></i><span class="label">风铃</span><kbd>5</kbd></button>
+      </div>
+    </section>
+  </div>
+  <button class="action-trigger" title="旅人操作" aria-label="展开旅人操作" aria-expanded="false"><i data-lucide="menu"></i></button>`;
+document.body.appendChild(desktopActions);
+createIcons({ icons: { Armchair, Bell, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } });
+desktopActions.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
+
+const actionTrigger = desktopActions.querySelector(".action-trigger") as HTMLButtonElement;
+actionTrigger.addEventListener("click", () => {
+  const open = desktopActions.classList.toggle("open");
+  actionTrigger.setAttribute("aria-expanded", String(open));
+  if (open) document.exitPointerLock?.();
+});
+desktopActions.querySelector<HTMLElement>("[data-action=chat]")?.addEventListener("click", openChat);
+desktopActions.querySelector<HTMLElement>("[data-action=emote]")?.addEventListener("click", openWheel);
+desktopActions.querySelectorAll<HTMLElement>("[data-furniture]").forEach((button) => {
+  button.addEventListener("click", () => toggleFurniture(Number(button.dataset.furniture)));
+});
+desktopActions.querySelectorAll<HTMLElement>("[data-instrument]").forEach((button) => {
+  button.addEventListener("click", () => {
+    takeOutInstrument(Number(button.dataset.instrument));
+    closeDesktopActions();
+  });
+});
+window.addEventListener("pointerdown", (e) => {
+  if (!desktopActions.contains(e.target as Node)) closeDesktopActions();
+});
+
+function closeDesktopActions() {
+  desktopActions?.classList.remove("open");
+  actionTrigger?.setAttribute("aria-expanded", "false");
+}
+
+function syncDesktopActions() {
+  if (!desktopActions) return;
+  desktopActions.querySelectorAll<HTMLElement>("[data-instrument]").forEach((button) => {
+    button.classList.toggle("active", Number(button.dataset.instrument) === playingIdx);
+  });
+  desktopActions.querySelectorAll<HTMLElement>("[data-furniture]").forEach((button) => {
+    button.classList.toggle("active", furniture.has(ownFurnKey(Number(button.dataset.furniture))));
+  });
 }
 
 window.addEventListener("keydown", (e) => {
   if (!entered || e.repeat) return;
   if ((e.target as HTMLElement | null)?.matches?.("input, textarea, [contenteditable]")) return;
   const k = e.key.toLowerCase();
+  if (k === "escape") closeDesktopActions();
   if (k === "tab") {
     e.preventDefault();
     if (wheelOpen) closeWheel();
@@ -873,7 +922,8 @@ function tick(dt: number) {
     world.campfire.position.distanceTo(controls.state.pos),
     controls.state.airborne ? controls.horizSpeed : 0,
     controls.state.airborne,
-    controls.verticalVel
+    controls.verticalVel,
+    controls.state.mov === 3 || controls.state.mov === 4
   );
   // 滑翔风线与瞬态光效
   world.wind.update(dt, t, controls.state.pos, controls.horizVel);

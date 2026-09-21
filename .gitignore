@@ -5,3 +5,5 @@ dist/
 *.log
 .env
 server/songs/
+.data
+bun.lock

@@ -3,318 +3,406 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#a9bfcb" />
   <title>音遇 · Children of the Melody</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='%23ffb45e'/><circle cx='50' cy='50' r='20' fill='%23ff8f9e'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='%23f2c989'/><circle cx='50' cy='50' r='20' fill='%23fff8e8'/></svg>" />
   <style>
     :root {
-      --ink: #fff4e6;
-      --ink-dim: rgba(255, 244, 230, 0.62);
-      --panel: rgba(40, 29, 56, 0.55);
-      --panel-border: rgba(255, 220, 180, 0.16);
-      --accent: #ffd9a0;
-      --warm: #ffb45e;
-      --coral: #ff8f9e;
+      --ink: #fffaf0;
+      --ink-soft: rgba(255, 250, 240, 0.72);
+      --ink-faint: rgba(255, 250, 240, 0.44);
+      --glass: rgba(25, 37, 49, 0.44);
+      --glass-strong: rgba(23, 33, 45, 0.78);
+      --line: rgba(255, 248, 225, 0.18);
+      --line-active: rgba(255, 241, 199, 0.58);
+      --light: #fff1c7;
+      --sun: #f2c989;
+      --coral: #df9185;
+      --green: #9bd6b1;
+      --shadow: 0 12px 38px rgba(16, 28, 39, 0.2);
+      --safe-top: max(14px, env(safe-area-inset-top));
+      --safe-right: max(14px, env(safe-area-inset-right));
+      --safe-bottom: max(14px, env(safe-area-inset-bottom));
+      --safe-left: max(14px, env(safe-area-inset-left));
     }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; overflow: hidden; }
     body {
-      font-family: "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Microsoft YaHei", ui-rounded, system-ui, sans-serif;
-      background: linear-gradient(180deg, #3b4a8f 0%, #9a7bc0 45%, #f2a48f 78%, #ffd9a3 100%);
       color: var(--ink);
+      background: #a9bfcb;
+      font-family: "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      letter-spacing: 0;
       user-select: none;
     }
+    button, input { font: inherit; letter-spacing: 0; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--light); outline-offset: 3px; }
+    svg { display: block; }
     #app { position: fixed; inset: 0; }
     #app canvas { display: block; touch-action: none; }
 
     .panel {
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      border-radius: 18px;
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      box-shadow: 0 8px 32px rgba(20, 12, 40, 0.35);
+      border: 1px solid var(--line);
+      background: var(--glass);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px) saturate(1.08);
+      -webkit-backdrop-filter: blur(14px) saturate(1.08);
     }
+    .icon-btn {
+      width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+      border: 0; border-radius: 50%; color: var(--ink);
+      background: rgba(255, 250, 240, 0.08); cursor: pointer;
+      transition: background .2s ease, transform .2s ease;
+    }
+    .icon-btn:hover { background: rgba(255, 250, 240, 0.18); transform: translateY(-1px); }
+    .icon-btn svg { width: 16px; height: 16px; stroke-width: 1.8; }
 
-    /* ---------- 入场 ---------- */
+    /* 入场：让世界保持可见，选择器只占画面中央的一小块。 */
     #enter {
-      position: fixed; inset: 0; z-index: 50;
-      display: flex; align-items: center; justify-content: center;
-      background: radial-gradient(ellipse at 50% 70%, rgba(60, 38, 80, 0) 0%, rgba(30, 18, 48, 0.55) 100%);
-      transition: opacity 0.9s ease; 
+      position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+      padding: 24px; background: rgba(21, 35, 48, 0.2);
+      transition: opacity .8s ease, visibility .8s;
     }
-    #enter.hidden { opacity: 0; pointer-events: none; }
-    .enter-card { position: relative; text-align: center; padding: 44px 56px; animation: floatIn 1.2s ease both; }
-    .enter-card::before, .enter-card::after {
-      position: absolute; color: rgba(255, 217, 160, 0.72); font-size: 26px; pointer-events: none;
-      animation: noteFloat 3.8s ease-in-out infinite;
+    #enter::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: linear-gradient(180deg, rgba(18, 35, 48, .2), transparent 32%, transparent 64%, rgba(18, 31, 44, .32));
     }
-    .enter-card::before { content: "♪"; left: 22px; top: 24px; transform: rotate(-12deg); }
-    .enter-card::after { content: "♫"; right: 22px; bottom: 24px; animation-delay: -1.7s; transform: rotate(12deg); }
-    @keyframes noteFloat { 0%,100% { opacity: .35; translate: 0 4px; } 50% { opacity: .9; translate: 0 -5px; } }
-    @keyframes floatIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
-    .enter-card h1 {
-      font-size: 44px; letter-spacing: 6px; font-weight: 300;
-      background: linear-gradient(120deg, #ffe9c8 20%, #ffb45e 55%, #ff8f9e 85%);
-      -webkit-background-clip: text; background-clip: text; color: transparent;
-      filter: drop-shadow(0 2px 18px rgba(255, 180, 94, 0.35));
+    #enter.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+    .enter-card {
+      position: relative; z-index: 1; width: min(560px, 92vw); text-align: center;
+      animation: enter-rise .9s ease both;
     }
-    .enter-card .sub { margin: 14px 0 34px; font-size: 15px; color: var(--ink-dim); letter-spacing: 2px; }
-    .avatar-picker { margin: 0 auto 20px; max-width: 420px; text-align: left; }
-    .avatar-picker .label { margin-bottom: 8px; font-size: 11px; color: var(--ink-dim); letter-spacing: 2px; }
-    #avatarGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .avatar-card { min-height: 66px; display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid transparent; border-radius: 12px; color: var(--ink); background: rgba(255, 244, 230, 0.06); cursor: pointer; text-align: left; transition: transform .2s, background .2s, border-color .2s; }
-    .avatar-card:hover { transform: translateY(-2px); background: rgba(255, 244, 230, 0.12); }
-    .avatar-card.active { border-color: rgba(255, 217, 160, .68); background: rgba(255, 217, 160, .14); }
-    .avatar-card b, .avatar-card small { display: block; white-space: nowrap; }
-    .avatar-card b { font-size: 11px; font-weight: 500; }
-    .avatar-card small { margin-top: 3px; font-size: 9px; color: var(--ink-dim); }
-    .avatar-swatch { width: 28px; height: 38px; flex: none; border-radius: 48% 48% 40% 40%; box-shadow: inset 0 -9px rgba(35, 24, 54, .2), 0 3px 10px rgba(255, 180, 94, .22); }
-    .avatar-classic { background: linear-gradient(145deg, #ffe8c1 0 25%, #ffb45e 26% 70%, #ff8f9e 71%); }
-    .avatar-hooded { background: linear-gradient(145deg, #665b9d 0 30%, #9a7bc0 31% 68%, #ffd9a0 69%); }
-    .avatar-minion, .avatar-duck { border-radius: 45% 45% 38% 38%; background: linear-gradient(145deg, #fff0a8 0 42%, #ffb45e 43% 72%, #ff8f9e 73%); }
-    .avatar-corgi { background: linear-gradient(145deg, #fff0d2 0 38%, #c9865e 39% 70%, #ffd9a0 71%); }
-    .avatar-seal { border-radius: 48% 48% 42% 42%; background: linear-gradient(145deg, #d9edff 0 42%, #94b9d6 43% 72%, #8fa8c4 73%); }
-    .avatar-elaina { background: linear-gradient(145deg, #efeff6 0 30%, #3b3750 31% 62%, #9b93c9 63% 84%, #6e6689 85%); }
-    .avatar-owl { border-radius: 50% 50% 38% 38%; background: linear-gradient(145deg, #f5d7b5 0 38%, #9b6f62 39% 72%, #6a4f65 73%); }
-    .avatar-platypus { border-radius: 48% 48% 42% 42%; background: linear-gradient(145deg, #d4f0df 0 42%, #83b99c 43% 72%, #f4bf87 73%); }
+    @keyframes enter-rise { from { opacity: 0; transform: translateY(16px); } }
+    .sigil {
+      width: 42px; height: 42px; margin: 0 auto 14px; border-radius: 50%;
+      background: radial-gradient(circle, #fffbe9 0 12%, #f6d599 28%, rgba(246, 213, 153, .16) 31% 48%, transparent 50%);
+      filter: drop-shadow(0 0 13px rgba(255, 233, 185, .72));
+    }
+    .enter-card h1 { font-size: clamp(32px, 6vh, 48px); font-weight: 300; text-shadow: 0 2px 18px rgba(25, 34, 44, .3); }
+    .enter-card > .sub { margin: 6px 0 24px; color: var(--ink-soft); font-size: 13px; }
+    .avatar-picker { margin: 0 auto 18px; }
+    .avatar-picker .label { margin-bottom: 9px; color: var(--ink-faint); font-size: 11px; }
+    #avatarGrid {
+      display: flex; gap: 8px; width: 100%; padding: 4px 2px 8px;
+      overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none;
+    }
+    #avatarGrid::-webkit-scrollbar { display: none; }
+    .avatar-card {
+      width: 54px; min-width: 54px; min-height: 70px; display: grid; justify-items: center; align-content: start; gap: 5px;
+      border: 0; color: var(--ink-soft); background: transparent; cursor: pointer;
+    }
+    .avatar-card b { display: block; width: 58px; overflow: hidden; font-size: 10px; font-weight: 400; white-space: nowrap; text-overflow: ellipsis; }
+    .avatar-card small { display: none; }
+    .avatar-swatch {
+      width: 38px; height: 38px; border: 1px solid transparent; border-radius: 50%;
+      box-shadow: inset 0 -8px rgba(25, 37, 49, .12), 0 3px 12px rgba(20, 30, 38, .14);
+      transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .avatar-card:hover .avatar-swatch { transform: translateY(-2px); }
+    .avatar-card.active { color: var(--ink); }
+    .avatar-card.active .avatar-swatch { border-color: var(--light); box-shadow: 0 0 0 3px rgba(255, 241, 199, .14), 0 0 18px rgba(255, 232, 174, .48); transform: translateY(-2px); }
+    .avatar-classic { background: linear-gradient(145deg, #fff0cf 0 28%, #eeb36d 29% 68%, #dc8d83 69%); }
+    .avatar-hooded { background: linear-gradient(145deg, #6f7291 0 34%, #a09ab0 35% 70%, #efd29f 71%); }
+    .avatar-minion, .avatar-duck { background: linear-gradient(145deg, #fff0a8 0 42%, #e9bd6d 43% 72%, #d9877f 73%); }
+    .avatar-corgi { background: linear-gradient(145deg, #fff0d2 0 38%, #c9865e 39% 70%, #efd29f 71%); }
+    .avatar-seal { background: linear-gradient(145deg, #d9edff 0 42%, #94b9d6 43% 72%, #829caf 73%); }
+    .avatar-elaina { background: linear-gradient(145deg, #efeff6 0 30%, #4a465b 31% 62%, #9b93c9 63% 84%, #6e6689 85%); }
+    .avatar-owl { background: linear-gradient(145deg, #f5d7b5 0 38%, #9b6f62 39% 72%, #6a4f65 73%); }
+    .avatar-platypus { background: linear-gradient(145deg, #d4f0df 0 42%, #83b99c 43% 72%, #f4bf87 73%); }
+    .enter-row { display: flex; justify-content: center; gap: 8px; }
     .enter-card input {
-      width: 260px; padding: 12px 18px; font-size: 16px; text-align: center;
-      color: var(--ink); letter-spacing: 2px;
-      background: rgba(255, 244, 230, 0.08); border: 1px solid var(--panel-border);
-      border-radius: 999px; outline: none; transition: border-color 0.3s;
+      width: min(240px, 58vw); height: 42px; padding: 0 18px; text-align: center;
+      color: var(--ink); background: rgba(25, 37, 49, .4); border: 1px solid var(--line); border-radius: 21px;
+      outline: none; backdrop-filter: blur(12px);
     }
-    .enter-card input:focus { border-color: rgba(255, 217, 160, 0.55); }
-    .enter-card input::placeholder { color: rgba(255, 244, 230, 0.35); }
+    .enter-card input::placeholder { color: var(--ink-faint); }
     .btn-main {
-      display: inline-block; margin-left: 14px; padding: 12px 30px;
-      font-size: 16px; letter-spacing: 3px; color: #4a2c38; font-weight: 600;
-      background: linear-gradient(120deg, var(--warm), var(--coral));
-      border: none; border-radius: 999px; cursor: pointer;
-      box-shadow: 0 4px 22px rgba(255, 163, 120, 0.45);
-      transition: transform 0.25s, box-shadow 0.25s;
+      height: 42px; padding: 0 20px; border: 1px solid rgba(255, 246, 218, .55); border-radius: 21px;
+      color: #3d4344; font-size: 13px; font-weight: 600; background: rgba(255, 241, 199, .92);
+      box-shadow: 0 4px 18px rgba(255, 224, 165, .26); cursor: pointer;
     }
-    .btn-main:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(255, 163, 120, 0.6); }
-    .enter-tip { margin-top: 26px; font-size: 12px; color: rgba(255, 244, 230, 0.4); letter-spacing: 1px; }
+    .btn-main:hover { background: #fff5d7; }
+    .enter-tip { margin-top: 13px; color: var(--ink-faint); font-size: 10px; }
 
-    /* ---------- HUD ---------- */
-    .hud { position: fixed; z-index: 20; opacity: 0; transition: opacity 1s ease 0.4s; }
-    body.playing .hud { opacity: 1; }
-
-    #brand { top: 20px; left: 22px; padding: 12px 18px; display: flex; align-items: center; gap: 12px; }
-    #brand .logo { width: 30px; height: 30px; border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #ffe9c8, #ffb45e 60%, #ff8f9e);
-      box-shadow: 0 0 16px rgba(255, 180, 94, 0.8); animation: breathe 4s ease-in-out infinite; }
-    @keyframes breathe { 0%,100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.12); opacity: 1; } }
-    #brand .t1 { font-size: 15px; letter-spacing: 3px; }
-    #brand .t2 { font-size: 11px; color: var(--ink-dim); letter-spacing: 1px; margin-top: 2px; }
-    #status { display: flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 11px; color: var(--ink-dim); }
-    #statusDot { width: 7px; height: 7px; border-radius: 50%; background: #8fd6a0; box-shadow: 0 0 8px #8fd6a0; }
-    #statusDot.solo { background: #ffd27f; box-shadow: 0 0 8px #ffd27f; }
-    #statusDot.off { background: #ff8f9e; box-shadow: 0 0 8px #ff8f9e; }
-
-    #nowPlaying { left: 22px; bottom: 22px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; min-width: 240px; }
-    #npDot { width: 14px; height: 14px; border-radius: 50%; background: var(--warm); box-shadow: 0 0 12px var(--warm); flex: none; }
-    #npName { font-size: 14px; letter-spacing: 1px; }
-    #npSub { font-size: 11px; color: var(--ink-dim); margin-top: 2px; }
-    #npBtn, #npPlay {
-      margin-left: 8px; padding: 7px 16px; font-size: 12px; letter-spacing: 2px; cursor: pointer;
-      color: var(--accent); background: rgba(255, 217, 160, 0.1); border: 1px solid rgba(255, 217, 160, 0.3);
-      border-radius: 999px; transition: background 0.25s;
+    /* 游戏内只保留三个图形锚点：连接、翼能、音乐。 */
+    .hud { position: fixed; z-index: 20; opacity: 0; pointer-events: none; transition: opacity .7s ease .25s; }
+    body.playing .hud { opacity: 1; pointer-events: auto; }
+    #connectionStatus {
+      top: var(--safe-top); right: var(--safe-right); width: 32px; height: 32px; display: grid; place-items: center;
+      color: var(--green); border: 0; border-radius: 50%; background: rgba(25, 37, 49, .22); box-shadow: none;
     }
-    #npBtn:hover, #npPlay:hover { background: rgba(255, 217, 160, 0.22); }
-    #npPlay { padding: 7px 12px; font-size: 13px; }
-
-    #nearbyWrap { right: 22px; bottom: 22px; padding: 14px 16px; width: 252px; }
-    #nearbyWrap h3 { font-size: 12px; font-weight: 400; letter-spacing: 2px; color: var(--ink-dim); margin-bottom: 10px; }
-    .nb-item { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
-    .nb-item + .nb-item { border-top: 1px dashed rgba(255, 220, 180, 0.1); }
-    .nb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-    .nb-info { flex: 1; min-width: 0; }
-    .nb-name { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .nb-track { font-size: 11px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .nb-bar { width: 52px; height: 4px; border-radius: 2px; background: rgba(255, 244, 230, 0.12); overflow: hidden; flex: none; }
-    .nb-bar i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--warm), var(--coral)); width: 0%; transition: width 0.4s; }
-    .nb-empty { font-size: 12px; color: rgba(255, 244, 230, 0.35); padding: 4px 0; letter-spacing: 1px; }
-
-    #hints { right: 22px; top: 20px; padding: 10px 16px; font-size: 11.5px; color: var(--ink-dim); letter-spacing: 1.5px; }
-    #hints b { color: var(--ink); font-weight: 500; background: rgba(255, 244, 230, 0.1); border-radius: 5px; padding: 1px 6px; margin-right: 2px; }
+    #connectionStatus svg { width: 14px; height: 14px; stroke-width: 1.8; }
+    #connectionStatus.solo { color: var(--sun); }
+    #connectionStatus.off { color: var(--coral); }
 
     #flaps {
-      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
-      z-index: 21; display: flex; gap: 8px; padding: 8px 14px;
+      top: var(--safe-top); left: 50%; transform: translateX(-50%); display: flex; gap: 6px;
+      padding: 8px 10px; border: 0; border-radius: 16px; background: rgba(25, 37, 49, .18); box-shadow: none;
     }
-    #flaps i {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: rgba(255, 244, 230, 0.14); transition: all 0.35s;
-    }
-    #flaps i.on {
-      background: radial-gradient(circle at 35% 35%, #fff2cf, #ffb45e 70%);
-      box-shadow: 0 0 10px rgba(255, 180, 94, 0.9);
-    }
+    #flaps i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 250, 240, .2); transition: background .3s, box-shadow .3s; }
+    #flaps i.on { background: var(--light); box-shadow: 0 0 8px rgba(255, 233, 184, .9); }
 
-    /* ---------- 换歌面板 ---------- */
+    #musicButton {
+      left: 50%; bottom: var(--safe-bottom); width: 44px; height: 44px; display: grid; place-items: center;
+      color: var(--ink); border-radius: 50%; transform: translateX(-50%); cursor: pointer;
+      box-shadow: 0 5px 18px rgba(16, 28, 39, .2), 0 0 14px color-mix(in srgb, var(--track-color, var(--sun)) 52%, transparent);
+    }
+    #musicButton svg { width: 18px; height: 18px; stroke-width: 1.7; }
+    #musicButton.playing { color: var(--track-color, var(--light)); border-color: color-mix(in srgb, var(--track-color, var(--light)) 62%, transparent); }
+    #musicButton.paused { opacity: .68; }
+    #npPlay { display: none; }
+    #npPlay.available { display: grid; }
+
+    #nearbyWrap {
+      right: var(--safe-right); top: calc(var(--safe-top) + 44px); width: 188px; padding: 10px 12px; border-radius: 8px;
+      transform: translateX(10px); visibility: hidden; opacity: 0 !important;
+      transition: opacity .3s ease, transform .3s ease, visibility .3s;
+    }
+    #nearbyWrap.has-people { visibility: visible; opacity: 1 !important; transform: none; }
+    #nearbyWrap h3 { margin-bottom: 5px; color: var(--ink-faint); font-size: 9px; font-weight: 400; }
+    .nb-item { display: grid; grid-template-columns: 6px minmax(0, 1fr); align-items: center; gap: 7px; padding: 4px 0; }
+    .nb-dot { width: 5px; height: 5px; border-radius: 50%; }
+    .nb-name { overflow: hidden; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+    .nb-track { overflow: hidden; color: var(--ink-faint); font-size: 8px; white-space: nowrap; text-overflow: ellipsis; }
+    .nb-bar, .nb-empty { display: none; }
+
+    #hints {
+      top: var(--safe-top); left: var(--safe-left); padding: 8px 12px; border-radius: 8px;
+      color: var(--ink-soft); font-size: 10px; line-height: 1.7;
+    }
+    #hints b { color: var(--ink); font-weight: 500; }
+    body.playing #hints { animation: hint-away .8s ease 8s forwards; }
+    @keyframes hint-away { to { opacity: 0; visibility: hidden; } }
+
+    /* 曲库底部抽屉。 */
     #trackModal {
-      position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
-      background: rgba(24, 14, 40, 0.45); backdrop-filter: blur(4px);
-      opacity: 0; pointer-events: none; transition: opacity 0.3s;
+      position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center;
+      padding: 18px; background: rgba(15, 26, 37, .18); opacity: 0; visibility: hidden; pointer-events: none;
+      transition: opacity .25s ease, visibility .25s;
     }
-    #trackModal.open { opacity: 1; pointer-events: auto; }
-    #trackModal .box { padding: 26px; width: min(660px, 94vw); max-height: 86vh; overflow-y: auto; }
-    #trackModal h2 { font-size: 17px; font-weight: 400; letter-spacing: 3px; margin-bottom: 4px; }
-    #trackModal .sub { font-size: 12px; color: var(--ink-dim); margin-bottom: 18px; letter-spacing: 1px; }
-    #trackGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-    .section-title { font-size: 12px; color: var(--ink-dim); letter-spacing: 2px; margin: 20px 0 10px; }
-    .upload-card {
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      padding: 16px 14px; border-radius: 14px; cursor: pointer; text-align: center;
-      background: rgba(255, 244, 230, 0.05); border: 1px dashed rgba(255, 217, 160, 0.35);
-      color: var(--accent); font-size: 13px; letter-spacing: 1px;
-      transition: background 0.2s, border-color 0.2s;
+    #trackModal.open { opacity: 1; visibility: visible; pointer-events: auto; }
+    #trackModal .box {
+      width: min(680px, 100%); max-height: min(72vh, 620px); padding: 18px; overflow-y: auto;
+      border-radius: 8px; background: var(--glass-strong); transform: translateY(18px); transition: transform .3s ease;
     }
-    .upload-card:hover { background: rgba(255, 217, 160, 0.12); border-color: rgba(255, 217, 160, 0.6); }
-    .upload-card.uploading { opacity: 0.5; pointer-events: none; }
-    .songs-empty { font-size: 12px; color: rgba(255, 244, 230, 0.35); padding: 6px 2px; letter-spacing: 1px; }
+    #trackModal.open .box { transform: none; }
+    .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .modal-head > div { flex: 1; min-width: 0; }
+    #trackModal h2 { font-size: 15px; font-weight: 500; }
+    #trackModal .sub { margin-top: 2px; color: var(--ink-faint); font-size: 10px; }
+    #trackGrid, #songGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
     .track-card {
-      padding: 16px 14px; border-radius: 14px; cursor: pointer; text-align: left;
-      background: rgba(255, 244, 230, 0.05); border: 1px solid transparent; color: var(--ink);
-      transition: transform 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+      min-height: 64px; padding: 10px; text-align: left; color: var(--ink); background: rgba(255, 250, 240, .04);
+      border: 1px solid transparent; border-radius: 6px; cursor: pointer; transition: background .2s, border-color .2s;
     }
-    .track-card:hover { transform: translateY(-4px) rotate(-0.5deg); background: rgba(255, 244, 230, 0.1); box-shadow: 0 10px 22px rgba(20, 12, 40, 0.18); }
-    .track-card.active { border-color: rgba(255, 217, 160, 0.5); background: rgba(255, 217, 160, 0.1); }
-    .track-card .dot { width: 12px; height: 12px; border-radius: 50%; margin-bottom: 10px; }
-    .track-card:hover .dot { animation: dotBounce 0.75s ease-in-out infinite alternate; }
-    @keyframes dotBounce { to { transform: scale(1.28); } }
-    .track-card .nm { font-size: 14px; letter-spacing: 1px; }
-    .track-card .ds { font-size: 11px; color: var(--ink-dim); margin-top: 4px; line-height: 1.5; }
-
-    /* ---------- 提示气泡 ---------- */
-    .url-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .track-card:hover { background: rgba(255, 250, 240, .1); }
+    .track-card.active { border-color: var(--line-active); background: rgba(255, 241, 199, .1); }
+    .track-card .dot { width: 6px; height: 6px; margin-bottom: 7px; border-radius: 50%; }
+    .track-card .nm { overflow: hidden; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+    .track-card .ds { margin-top: 3px; overflow: hidden; color: var(--ink-faint); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+    .source-details { margin-top: 10px; border-top: 1px solid var(--line); }
+    .source-details summary { padding: 11px 2px 5px; color: var(--ink-soft); font-size: 10px; cursor: pointer; list-style: none; }
+    .source-details summary::-webkit-details-marker { display: none; }
+    .source-details summary::before { content: "+"; display: inline-block; width: 15px; color: var(--ink-faint); }
+    .source-details[open] summary::before { content: "−"; }
+    .url-row { display: grid; grid-template-columns: 1.2fr 1fr 34px; gap: 6px; padding-top: 6px; }
     .url-row input {
-      flex: 1 1 180px; min-width: 0; padding: 9px 12px; font: inherit; font-size: 12.5px; color: var(--ink);
-      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--panel-border); border-radius: 10px; outline: none;
+      min-width: 0; height: 34px; padding: 0 10px; color: var(--ink); background: rgba(255, 255, 255, .05);
+      border: 1px solid var(--line); border-radius: 5px; outline: none; font-size: 10px;
     }
-    .url-row input:focus { border-color: rgba(255, 210, 150, 0.55); }
-    #toasts { position: fixed; top: 84px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
-    .toast {
-      padding: 10px 22px; font-size: 13px; letter-spacing: 2px; color: var(--ink);
-      background: rgba(40, 29, 56, 0.7); border: 1px solid var(--panel-border); border-radius: 999px;
-      backdrop-filter: blur(10px); animation: toastIn 0.5s ease both;
+    .url-row input::placeholder { color: var(--ink-faint); }
+    .upload-card {
+      min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 7px;
+      color: var(--ink-soft); font-size: 10px; border: 1px dashed var(--line); border-radius: 6px; cursor: pointer;
     }
-    .toast.out { animation: toastOut 0.6s ease both; }
-    @keyframes toastIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
-    @keyframes toastOut { to { opacity: 0; transform: translateY(-8px); } }
+    .upload-card:hover { color: var(--ink); border-color: var(--line-active); }
+    .upload-card.uploading { opacity: .5; pointer-events: none; }
+    .songs-empty { grid-column: 1 / -1; padding: 8px 2px; color: var(--ink-faint); font-size: 10px; }
 
-    /* ---------- 牵手邀请 ---------- */
+    #toasts { position: fixed; top: calc(var(--safe-top) + 44px); left: 50%; z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 6px; transform: translateX(-50%); pointer-events: none; }
+    .toast {
+      max-width: min(420px, 86vw); padding: 8px 13px; color: var(--ink); background: rgba(24, 35, 46, .7);
+      border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); backdrop-filter: blur(10px);
+      font-size: 10px; text-align: center; animation: toast-in .35s ease both;
+    }
+    .toast.out { animation: toast-out .45s ease both; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+    @keyframes toast-out { to { opacity: 0; transform: translateY(-6px); } }
+
     .hand-invite {
-      position: fixed; bottom: 118px; left: 50%; transform: translateX(-50%); z-index: 45;
-      display: flex; align-items: center; gap: 14px;
-      padding: 12px 20px; font-size: 13px; letter-spacing: 1px; color: var(--ink);
-      background: rgba(40, 29, 56, 0.78); border: 1px solid var(--panel-border); border-radius: 16px;
-      backdrop-filter: blur(10px); animation: toastIn 0.45s ease both;
-      box-shadow: 0 6px 30px rgba(255, 205, 130, 0.16);
+      position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 58px); z-index: 45; display: flex; align-items: center; gap: 7px;
+      padding: 7px 8px 7px 13px; color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line);
+      border-radius: 22px; box-shadow: var(--shadow); backdrop-filter: blur(12px); transform: translateX(-50%); font-size: 11px;
     }
-    .hand-invite b { color: #ffd9a0; }
-    .hand-invite button {
-      font: inherit; cursor: pointer; border-radius: 999px; padding: 7px 16px; letter-spacing: 1px;
-      border: 1px solid var(--panel-border); color: var(--ink); background: rgba(255, 255, 255, 0.06);
-      transition: background 0.2s;
+    .hand-invite b { color: var(--light); font-weight: 500; }
+    .hand-invite button, .hi-yes {
+      min-height: 30px; padding: 0 11px; color: var(--ink); background: rgba(255, 255, 255, .06);
+      border: 1px solid var(--line); border-radius: 15px; cursor: pointer; font-size: 10px;
     }
-    .hand-invite button:hover { background: rgba(255, 255, 255, 0.14); }
-    .hand-invite .hi-yes { background: rgba(255, 190, 120, 0.24); border-color: rgba(255, 210, 150, 0.55); color: #ffe6c4; }
-    .hand-invite .hi-yes:hover { background: rgba(255, 190, 120, 0.4); }
+    .hand-invite .hi-yes { color: #374246; background: var(--light); }
+
+    /* main.ts / touch.ts 生成的覆盖层。 */
+    .instrument-keys { position: fixed; left: 50%; bottom: 8%; z-index: 35; display: none; align-items: flex-end; gap: 5px; transform: translateX(-50%); user-select: none; }
+    .instrument-key { width: 42px; min-height: 48px; padding: 7px 0 5px; color: var(--ink); text-align: center; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; touch-action: none; transition: background .08s, box-shadow .08s; }
+    .instrument-key strong { display: block; font-size: 13px; font-weight: 500; }
+    .instrument-key small { color: var(--ink-faint); font-size: 8px; }
+    .octave-label { position: absolute; top: -22px; left: 50%; color: var(--ink-soft); font-size: 9px; white-space: nowrap; transform: translateX(-50%); }
+    .chat-input { position: fixed; left: 50%; bottom: 12%; z-index: 40; display: none; width: min(380px, 76vw); height: 40px; padding: 0 16px; color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line-active); border-radius: 20px; box-shadow: var(--shadow); outline: none; transform: translateX(-50%); font-size: 13px; }
+    .chat-input::placeholder { color: var(--ink-faint); }
+    .emote-wheel { position: fixed; left: 50%; top: 50%; z-index: 50; display: none; grid-template-columns: repeat(3, 58px); gap: 7px; padding: 10px; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); transform: translate(-50%, -50%); }
+    .emote-btn { width: 58px; height: 54px; display: grid; place-items: center; gap: 2px; color: var(--ink-soft); background: rgba(255, 255, 255, .04); border: 1px solid transparent; border-radius: 5px; cursor: pointer; font-size: 9px; }
+    .emote-btn:hover, .emote-btn:focus { color: var(--ink); background: rgba(255, 255, 255, .1); border-color: var(--line); }
+    .emote-btn span { font-size: 18px; }
+    .ping-badge { display: none !important; }
+
+    /* 桌面操作层：默认只露出一个入口，按需展开键盘功能。 */
+    .desktop-actions {
+      position: fixed; right: var(--safe-right); bottom: var(--safe-bottom); z-index: 31;
+      display: none; flex-direction: column; align-items: flex-end; gap: 8px;
+      opacity: 0; pointer-events: none; transition: opacity .5s ease .25s;
+    }
+    body.playing .desktop-actions { opacity: 1; pointer-events: auto; }
+    .action-trigger {
+      width: 40px; height: 40px; display: grid; place-items: center; color: var(--ink-soft);
+      border: 1px solid var(--line); border-radius: 50%; background: rgba(25, 37, 49, .3);
+      box-shadow: 0 5px 18px rgba(16, 28, 39, .16); backdrop-filter: blur(10px); cursor: pointer;
+    }
+    .action-trigger:hover, .desktop-actions.open .action-trigger { color: var(--ink); background: rgba(25, 37, 49, .54); }
+    .action-trigger svg { width: 17px; height: 17px; stroke-width: 1.7; }
+    .action-menu {
+      width: 216px; padding: 8px; border-radius: 7px; visibility: hidden; opacity: 0;
+      transform: translateY(6px) scale(.98); transform-origin: bottom right; pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease, visibility .18s;
+    }
+    .desktop-actions.open .action-menu { visibility: visible; opacity: 1; transform: none; pointer-events: auto; }
+    .action-section + .action-section { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+    .action-section-title { margin: 0 4px 5px; color: var(--ink-faint); font-size: 8px; }
+    .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+    .action-grid.instruments { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .action-item {
+      position: relative; min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 7px; padding: 0 7px;
+      color: var(--ink-soft); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+    }
+    .action-item:hover, .action-item.active { color: var(--ink); background: rgba(255, 250, 240, .08); border-color: var(--line); }
+    .action-item svg { width: 14px; height: 14px; flex: none; stroke-width: 1.7; }
+    .action-item .label { min-width: 0; overflow: hidden; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+    .action-item kbd {
+      min-width: 17px; height: 17px; margin-left: auto; display: grid; place-items: center;
+      color: var(--ink-faint); background: rgba(255, 250, 240, .07); border: 1px solid rgba(255, 250, 240, .1);
+      border-radius: 3px; font: 8px/1 system-ui, sans-serif;
+    }
+    .action-grid.instruments .action-item { min-height: 50px; flex-direction: column; justify-content: center; gap: 3px; padding: 4px 2px; }
+    .action-grid.instruments .action-item kbd { position: absolute; top: 3px; right: 3px; margin: 0; }
+
+    .touch-root { position: fixed; inset: 0; z-index: 32; display: none; pointer-events: none; }
+    .touch-joystick { position: absolute; left: calc(var(--safe-left) + 8px); bottom: calc(var(--safe-bottom) + 64px); width: 92px; height: 92px; border: 1px solid rgba(255, 250, 240, .18); border-radius: 50%; background: rgba(25, 37, 49, .16); pointer-events: auto; touch-action: none; }
+    .touch-knob { position: absolute; left: 50%; top: 50%; width: 38px; height: 38px; border: 1px solid rgba(255, 250, 240, .36); border-radius: 50%; background: rgba(255, 250, 240, .22); transform: translate(-50%, -50%); }
+    .touch-cluster { position: absolute; right: calc(var(--safe-right) + 4px); bottom: calc(var(--safe-bottom) + 62px); display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: auto; }
+    .touch-row, .touch-small-row { display: flex; gap: 7px; align-items: center; }
+    .touch-btn { display: grid; place-items: center; color: var(--ink); background: rgba(25, 37, 49, .34); border: 1px solid rgba(255, 250, 240, .24); border-radius: 50%; backdrop-filter: blur(6px); touch-action: none; }
+    .touch-btn svg { width: 17px; height: 17px; stroke-width: 1.7; }
+    .touch-menu { position: absolute; right: var(--safe-right); bottom: calc(var(--safe-bottom) + 144px); display: none; min-width: 138px; padding: 6px; flex-direction: column; gap: 3px; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 7px; pointer-events: auto; }
+    .touch-menu-item { min-height: 34px; padding: 0 10px; display: flex; align-items: center; color: var(--ink-soft); background: transparent; border: 0; border-radius: 4px; font-size: 11px; }
+
+    @media (pointer: fine) {
+      .desktop-actions { display: flex; }
+    }
 
     @media (max-width: 720px) {
       #hints { display: none; }
-      #nearbyWrap { width: 200px; }
-      .enter-card { padding: 34px 30px; }
-      .enter-card h1 { font-size: 32px; }
-      .enter-card input { width: min(260px, 72vw); }
-      .btn-main { display: block; margin: 14px auto 0; width: min(260px, 72vw); }
-      #nowPlaying { left: 12px; right: 12px; bottom: 12px; min-width: 0; }
-      #nearbyWrap { right: 12px; bottom: 86px; }
-      #brand { top: 12px; left: 12px; }
-      #trackModal .box { padding: 20px; }
-      #avatarGrid { grid-template-columns: 1fr; }
-      .avatar-card { min-height: 52px; }
+      #nearbyWrap { top: var(--safe-top); width: 158px; }
+      #trackModal { padding: 0; }
+      #trackModal .box { width: 100%; max-height: 76vh; padding: 16px max(14px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 8px 8px 0 0; }
+      #trackGrid, #songGrid { grid-template-columns: repeat(2, 1fr); }
+      .url-row { grid-template-columns: 1fr 34px; }
+      #urlNameInput { grid-column: 1 / -1; grid-row: 2; }
+      #urlPlayBtn { grid-column: 2; grid-row: 1; }
+      .enter-card { width: min(430px, 94vw); }
+      .enter-row { flex-direction: column; align-items: center; }
+      .enter-card input, .btn-main { width: min(260px, 78vw); }
+      .btn-main { flex: none; }
+      .enter-tip { display: none; }
+      .instrument-key { width: 36px; }
+      .ping-badge { display: none !important; }
     }
 
+    @media (max-height: 600px) {
+      .sigil { display: none; }
+      .enter-card > .sub { margin-bottom: 12px; }
+      .avatar-picker { margin-bottom: 10px; }
+      .enter-tip { display: none; }
+      #trackModal .box { max-height: 88vh; }
+    }
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
     }
   </style>
 </head>
 <body>
   <div id="app"></div>
 
-  <!-- 入场 -->
   <div id="enter">
-    <div class="enter-card panel">
+    <main class="enter-card">
+      <div class="sigil" aria-hidden="true"></div>
       <h1>音遇</h1>
-      <div class="sub">音遇 —— 靠近一个人，他的歌会慢慢变得清晰</div>
+      <p class="sub">靠近一个人，听见他的世界</p>
       <div class="avatar-picker">
-        <div class="label">选择你的旅人</div>
-        <div id="avatarGrid"></div>
+        <div class="label">选择旅人</div>
+        <div id="avatarGrid" role="list"></div>
       </div>
-      <input id="enterName" maxlength="12" placeholder="给自己起个名字" autocomplete="off" />
-      <button id="enterBtn" class="btn-main">进入世界</button>
-      <div class="enter-tip">🎧 建议佩戴耳机 · 岛上无需任何任务，去听歌就好</div>
-    </div>
+      <div class="enter-row">
+        <input id="enterName" maxlength="12" placeholder="你的名字" autocomplete="off" aria-label="你的名字" />
+        <button id="enterBtn" class="btn-main">踏入云野</button>
+      </div>
+      <div class="enter-tip">建议佩戴耳机 · 无需任务，随心漫游</div>
+    </main>
   </div>
 
-  <!-- HUD -->
-  <div id="brand" class="hud panel">
-    <div class="logo"></div>
-    <div>
-      <div class="t1">音遇</div>
-      <div class="t2">Children of the Melody</div>
-    </div>
-    <div id="status"><span id="statusDot"></span><span id="statusText">连接中</span></div>
+  <div id="connectionStatus" class="hud" title="正在连接" role="status" aria-label="正在连接">
+    <i data-lucide="wifi"></i>
   </div>
 
-  <div id="nowPlaying" class="hud panel">
-    <div id="npDot"></div>
-    <div style="flex:1; min-width:0">
-      <div id="npName">还没选歌</div>
-      <div id="npSub">静默漫游中——点「换歌」选一首，或去听身边人的</div>
-    </div>
-    <button id="npPlay" title="播放/暂停">▶</button>
-    <button id="npBtn">换 歌</button>
-  </div>
+  <button id="musicButton" class="hud panel" title="打开曲库" aria-label="打开曲库">
+    <i data-lucide="music-2"></i>
+  </button>
 
   <div id="nearbyWrap" class="hud panel">
-    <h3>身边的人</h3>
-    <div id="nearby"><div class="nb-empty">还空着呢，四处走走吧</div></div>
+    <h3>渐渐听见</h3>
+    <div id="nearby"></div>
   </div>
 
-  <div id="flaps" class="hud panel"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+  <div id="flaps" class="hud panel" title="翼能"><i class="on"></i><i class="on"></i><i class="on"></i></div>
 
   <div id="hints" class="hud panel">
-    <div><b>W A S D</b> 移动 &nbsp; <b>Shift</b> 奔跑 &nbsp; <b>E</b> 坐下</div>
-    <div style="margin-top:6px"><b>空格</b> 跳跃 · 腾空按住 <b>滑翔</b> · 再按 <b>扑翼</b></div>
-    <div style="margin-top:6px"><b>G</b> 牵手 / 松手 &nbsp; <b>F</b> 接受牵手</div>
-    <div style="margin-top:6px;font-size:10.5px;color:rgba(255,244,230,0.35)">点击画面锁定鼠标环顾 · Esc 释放 · 篝火与灯塔山丘有暖流</div>
+    <div><b>WASD</b> 移动 · <b>Space</b> 飞行 · <b>E</b> 坐下</div>
+    <div><b>Enter</b> 说话 · <b>Tab</b> 动作 · <b>G</b> 牵手</div>
   </div>
 
   <div id="toasts"></div>
 
-  <!-- 换歌 -->
-  <div id="trackModal">
-    <div class="box panel">
-      <h2>选一首陪你上岛的歌</h2>
-      <div class="sub">走近别人时，你们会短暂地听见彼此的世界</div>
+  <div id="trackModal" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
+    <section class="box panel">
+      <header class="modal-head">
+        <div><h2 id="trackTitle">随身的歌</h2><p class="sub">音乐会随距离，在旅人之间渐明渐暗</p></div>
+        <button id="npPlay" class="icon-btn" title="播放" aria-label="播放"><i data-lucide="play"></i></button>
+        <button id="trackClose" class="icon-btn" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+      </header>
       <div id="trackGrid"></div>
-      <div class="section-title">贴个链接（音频直链）</div>
-      <div class="url-row">
-        <input id="urlInput" placeholder="https://…你的音频直链.mp3" autocomplete="off" spellcheck="false" />
-        <input id="urlNameInput" placeholder="给这首歌起个名（可选）" maxlength="40" autocomplete="off" />
-        <button id="urlPlayBtn" class="hi-yes" style="border-radius:10px;padding:8px 18px;font-size:12.5px;letter-spacing:2px">播放</button>
-      </div>
-      <div class="sub" style="margin:8px 0 16px">支持 CORS 的直链（如 OSS/云存储）有完整渐强体验；普通直链将以基础模式播放</div>
-      <div class="section-title">我的歌（随身携带 · 离岛自动收起）</div>
-      <div id="songGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px"></div>
-      <div class="upload-card" id="uploadCard" style="margin-top:12px">＋ 上传我的歌（mp3 / ogg / wav / m4a / flac）</div>
-      <input type="file" id="songFile" accept=".mp3,.ogg,.wav,.m4a,.flac,.aac,audio/*" style="display:none" />
-    </div>
+      <details class="source-details">
+        <summary>从链接播放</summary>
+        <div class="url-row">
+          <input id="urlInput" placeholder="音频直链 https://..." autocomplete="off" spellcheck="false" aria-label="音频直链" />
+          <input id="urlNameInput" placeholder="歌曲名（可选）" maxlength="40" autocomplete="off" aria-label="歌曲名" />
+          <button id="urlPlayBtn" class="icon-btn" title="播放链接" aria-label="播放链接"><i data-lucide="arrow-right"></i></button>
+        </div>
+      </details>
+      <details class="source-details">
+        <summary>我的曲库</summary>
+        <div id="songGrid"></div>
+        <div class="upload-card" id="uploadCard"><i data-lucide="upload"></i><span>上传音频</span></div>
+        <input type="file" id="songFile" accept=".mp3,.ogg,.wav,.m4a,.flac,.aac,audio/*" hidden />
+      </details>
+    </section>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

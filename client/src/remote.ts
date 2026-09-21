@@ -202,8 +202,8 @@ export class RemotePlayers {
       e.speed = g.position.distanceTo(e.lastPos) / Math.max(dt, 1e-4);
       e.lastPos.copy(g.position);
 
-      // mov → 空中状态: 3 滑翔 / 4 扑翼(按滑翔处理)；离地高度也作为空中判据
-      const air = e.target.mov >= 3 ? 2 : g.position.y - terrainHeight(g.position.x, g.position.z) > 0.6 ? 1 : 0;
+      // mov → 空中状态: 3 滑翔 / 4 扑翼；5 是未展开披风的普通腾空。
+      const air = e.target.mov === 3 || e.target.mov === 4 ? 2 : g.position.y - terrainHeight(g.position.x, g.position.z) > 0.6 ? 1 : 0;
       const selfDist = this.selfPos ? g.position.distanceTo(this.selfPos) : 999;
       if (e.wasAir > 0 && air === 0) {
         e.avatar.land(); // 落地缓冲

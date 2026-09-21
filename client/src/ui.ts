@@ -1,4 +1,5 @@
-import { TRACKS, trackMeta, CUSTOM_BASE, type TrackDef } from "./audio/tracks";
+import { createIcons, ArrowRight, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } from "lucide";
+import { TRACKS, trackMeta, CUSTOM_BASE } from "./audio/tracks";
 import type { RemoteInfo } from "./remote";
 import type { AvatarModel } from "./avatar";
 
@@ -14,17 +15,18 @@ export function createUI(handlers: {
   onTogglePlay: () => void;
 }) {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const refreshIcons = () => {
+    document.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
+    createIcons({ icons: { ArrowRight, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } });
+    document.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
+  };
 
   const enter = $("enter");
   const enterName = $("enterName") as HTMLInputElement;
   const enterBtn = $("enterBtn");
   const avatarGrid = $("avatarGrid");
-  const statusDot = $("statusDot");
-  const statusText = $("statusText");
-  const npDot = $("npDot");
-  const npName = $("npName");
-  const npSub = $("npSub");
-  const npBtn = $("npBtn");
+  const connectionStatus = $("connectionStatus");
+  const musicButton = $("musicButton");
   const npPlay = $("npPlay");
   const nearby = $("nearby");
   const toasts = $("toasts");
@@ -39,6 +41,7 @@ export function createUI(handlers: {
     }, ms);
   };
   const trackModal = $("trackModal");
+  const trackClose = $("trackClose");
   const trackGrid = $("trackGrid");
   const songGrid = $("songGrid");
   const uploadCard = $("uploadCard");
@@ -78,6 +81,8 @@ export function createUI(handlers: {
     const card = document.createElement("button");
     card.className = `avatar-card${index === 0 ? " active" : ""}`;
     card.dataset.avatar = choice.id;
+    card.title = choice.desc;
+    card.setAttribute("aria-label", `${choice.name}：${choice.desc}`);
     card.innerHTML = `<span class="avatar-swatch avatar-${choice.id}"></span><span><b>${choice.name}</b><small>${choice.desc}</small></span>`;
     card.addEventListener("click", () => {
       avatarGrid.querySelectorAll(".avatar-card").forEach((el) => el.classList.remove("active"));
@@ -190,7 +195,8 @@ export function createUI(handlers: {
       showToast("上传失败：" + (e instanceof Error ? e.message : String(e)));
     } finally {
       uploadCard.classList.remove("uploading");
-      uploadCard.textContent = "＋ 上传我的歌（mp3 / ogg / wav / m4a / flac）";
+      uploadCard.innerHTML = `<i data-lucide="upload"></i><span>上传音频</span>`;
+      refreshIcons();
       songFile.value = "";
     }
   });
@@ -202,7 +208,8 @@ export function createUI(handlers: {
   trackModal.addEventListener("click", (e) => {
     if (e.target === trackModal) trackModal.classList.remove("open");
   });
-  npBtn.addEventListener("click", openPicker);
+  trackClose.addEventListener("click", () => trackModal.classList.remove("open"));
+  musicButton.addEventListener("click", openPicker);
   npPlay.addEventListener("click", () => handlers.onTogglePlay());
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") trackModal.classList.remove("open");
@@ -218,6 +225,7 @@ export function createUI(handlers: {
   enterName.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doEnter();
   });
+  refreshIcons();
 
   return {
     /** 直接打开换歌面板 */
@@ -227,32 +235,32 @@ export function createUI(handlers: {
       document.body.classList.add("playing");
     },
     setStatus(mode: "online" | "solo" | "off") {
-      statusDot.className = mode === "online" ? "" : mode === "solo" ? "solo" : "off";
-      statusText.textContent = mode === "online" ? "音遇 · 在线" : mode === "solo" ? "独自漫游中" : "连接中断";
+      const label = mode === "online" ? "在线" : mode === "solo" ? "独自漫游" : "连接中断";
+      connectionStatus.className = `hud${mode === "online" ? "" : ` ${mode}`}`;
+      connectionStatus.innerHTML = `<i data-lucide="${mode === "online" ? "wifi" : mode === "solo" ? "user-round" : "wifi-off"}"></i>`;
+      connectionStatus.title = label;
+      connectionStatus.setAttribute("aria-label", label);
+      refreshIcons();
     },
     /** 刷新播放/暂停按钮与状态文案：mode "none" | "playing" | "paused" */
     setPlayState(mode: "none" | "playing" | "paused") {
-      if (mode === "none") {
-        npPlay.textContent = "▶";
-        npName.textContent = "还没选歌";
-        npSub.textContent = "静默漫游中——点「换歌」选一首，或去听身边人的";
-      } else if (mode === "paused") {
-        npPlay.textContent = "▶";
-        npSub.textContent = "已暂停——再按 ▶ 或 P 键从断点继续";
-      } else {
-        npPlay.textContent = "❚❚";
-        npSub.textContent = "正在播——按 ❚❚ 或 P 键暂停自己";
-      }
+      const playing = mode === "playing";
+      npPlay.classList.toggle("available", mode !== "none");
+      npPlay.innerHTML = `<i data-lucide="${playing ? "pause" : "play"}"></i>`;
+      npPlay.title = playing ? "暂停 (P)" : "播放 (P)";
+      npPlay.setAttribute("aria-label", npPlay.title);
+      musicButton.classList.toggle("playing", playing);
+      musicButton.classList.toggle("paused", mode === "paused");
+      refreshIcons();
     },
     setNowPlaying(trackId: number, songName = "") {
       currentTrackId = trackId;
       currentSongName = songName;
       const meta = trackMeta(trackId, songName);
       if (trackId >= 0 && meta.name) {
-        npDot.style.background = meta.color;
-        npDot.style.boxShadow = `0 0 12px ${meta.color}`;
-        npName.textContent = meta.name;
-        npSub.textContent = trackId >= CUSTOM_BASE ? "旅人上传 · 你的歌，也是岛的歌" : "走近谁，就听见谁的世界";
+        musicButton.style.setProperty("--track-color", meta.color);
+        musicButton.title = `${meta.name} · 打开曲库 · P 播放/暂停`;
+        musicButton.setAttribute("aria-label", musicButton.title);
         trackGrid.querySelectorAll(".track-card").forEach((c) => {
           c.classList.toggle("active", Number((c as HTMLElement).dataset.id) === trackId);
         });
@@ -260,8 +268,9 @@ export function createUI(handlers: {
           c.classList.toggle("active", Number((c as HTMLElement).dataset.trackId) === trackId);
         });
       } else {
-        npDot.style.background = "var(--ink-dim)";
-        npDot.style.boxShadow = "none";
+        musicButton.style.removeProperty("--track-color");
+        musicButton.title = "打开曲库";
+        musicButton.setAttribute("aria-label", musicButton.title);
       }
     },
     get currentTrackId() {
@@ -281,8 +290,10 @@ export function createUI(handlers: {
     },
     setNearby(infos: RemoteInfo[]) {
       const audible = infos.filter((i) => i.trackId >= 0 && i.dist < 38).slice(0, 4);
+      const nearbyWrap = $("nearbyWrap");
+      nearbyWrap.classList.toggle("has-people", audible.length > 0);
       if (audible.length === 0) {
-        nearby.innerHTML = `<div class="nb-empty">还空着呢，四处走走吧</div>`;
+        nearby.innerHTML = "";
         return;
       }
       nearby.innerHTML = "";

@@ -676,11 +676,9 @@ export class MusicEngine {
     return Math.pow(1 - phase, 2.2);
   }
 
-  /** 环境声：风、浪、篝火；飞行风声（光遇式）随空速涨落
-   *  @param speedH 水平空速（腾空时传入，地面传 0）
-   *  @param airborne 是否腾空（滑翔/下落都算）
-   *  @param vy 垂直速度（俯冲为负，负得越多气流越亮） */
-  ambient(t: number, playerR: number, fireDist: number, speedH = 0, airborne = false, vy = 0) {
+  /** 环境声：风、浪、篝火，以及随飞行状态变化的气流层。
+   *  普通跳跃只保留很轻的空气位移，展开披风后才出现持续宽频风声。 */
+  ambient(t: number, playerR: number, fireDist: number, speedH = 0, airborne = false, vy = 0, gliding = false) {
     if (!this.ctx || this.ctx.state !== "running") return;
     const shore = smoothstep(30, 52, playerR); // 越靠近岸浪声越大
     this.waveGain.gain.value = (0.05 + 0.045 * (0.5 + 0.5 * Math.sin(t * 0.4))) * (0.25 + shore);
@@ -692,7 +690,7 @@ export class MusicEngine {
     // 强度 = 空速 + 俯冲分量：起跳离地时缓缓升起，落地时收掉
     const w = Math.min(1, speedH / 9);
     const dive = airborne ? Math.max(0, Math.min(1, -vy / 10)) : 0; // 俯冲 0~1
-    const target = airborne ? Math.min(1, 0.28 + w * 0.6 + dive * 0.45) : 0;
+    const target = airborne ? Math.min(1, (gliding ? 0.3 : 0.07) + w * (gliding ? 0.58 : 0.12) + dive * 0.4) : 0;
     // 手动平滑（起风 ~0.5s，收风 ~0.35s）
     this.flightLevel += (target - this.flightLevel) * (target > this.flightLevel ? 0.05 : 0.07);
     if (this.flightLevel < 0.003) {
@@ -708,7 +706,7 @@ export class MusicEngine {
       this.flightHighF.frequency.value = 900 + w * 1500 + dive * 1200;
       this.flightHighG.gain.value = (0.05 + 0.11 * w + 0.1 * dive) * gust * this.flightLevel;
       // 布料扑簌：高速滑翔时披风边角被风撕出的间歇轻响
-      if (airborne && w > 0.35 && t > this.nextFlutter) {
+      if (gliding && w > 0.35 && t > this.nextFlutter) {
         this.noiseHit({
           freq0: 1600 + Math.random() * 1800,
           freq1: 700 + Math.random() * 500,
@@ -761,19 +759,44 @@ export class MusicEngine {
     osc.stop(when + dur + 0.05);
   }
 
-  /** 起跳：柔和的向上风声 */
-  sfxJump() {
-    this.noiseHit({ freq0: 300, freq1: 1400, dur: 0.28, vol: 0.1, type: "bandpass", q: 0.8 });
+  private sweepTone(freq0: number, freq1: number, dur: number, vol: number, type: OscillatorType = "sine", delay = 0) {
+    if (!this.ctx || this.ctx.state !== "running") return;
+    const ctx = this.ctx;
+    const when = ctx.currentTime + delay;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq0, when);
+    osc.frequency.exponentialRampToValueAtTime(freq1, when + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(vol, when + Math.min(0.035, dur * 0.2));
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(g).connect(this.master);
+    osc.start(when);
+    osc.stop(when + dur + 0.04);
   }
 
-  /** 扑翼：光遇式的披风拍打——布料闷响 + 推气 + 织物脆响，三层叠出体量感 */
+  /** 起跳：脚下短促推风与轻微上行泛音，避免像沉重撞击。 */
+  sfxJump() {
+    this.noiseHit({ freq0: 420, freq1: 1500, dur: 0.2, vol: 0.055, type: "bandpass", q: 0.75 });
+    this.sweepTone(230, 410, 0.24, 0.026, "sine", 0.01);
+  }
+
+  /** 披风展开：由窄到宽的织物掠风，长按进入滑翔时只触发一次。 */
+  sfxGlideOpen() {
+    this.noiseHit({ freq0: 2400, freq1: 760, dur: 0.36, vol: 0.075, type: "bandpass", q: 0.65 });
+    this.noiseHit({ freq0: 900, freq1: 1800, dur: 0.22, vol: 0.026, type: "highpass", q: 0.8, delay: 0.04 });
+    this.sweepTone(330, 495, 0.46, 0.018, "sine", 0.025);
+  }
+
+  /** 扑翼：低频推力、宽频披风和短暂泛音组成原创的轻盈升空反馈。 */
   sfxFlap() {
-    // 布料的「体腔」：低频一闷
-    this.noiseHit({ freq0: 320, freq1: 130, dur: 0.14, vol: 0.17, type: "lowpass", q: 0.9 });
-    // 向下推的一口「气」
-    this.noiseHit({ freq0: 1300, freq1: 520, dur: 0.2, vol: 0.11, type: "bandpass", q: 0.7, delay: 0.015 });
-    // 织物表面的「脆」：一闪即逝
-    this.noiseHit({ freq0: 2600, freq1: 4200, dur: 0.07, vol: 0.05, type: "highpass", q: 1.1, delay: 0.01 });
+    this.noiseHit({ freq0: 280, freq1: 120, dur: 0.18, vol: 0.12, type: "lowpass", q: 0.8 });
+    this.noiseHit({ freq0: 1700, freq1: 480, dur: 0.3, vol: 0.095, type: "bandpass", q: 0.65, delay: 0.012 });
+    this.noiseHit({ freq0: 3000, freq1: 5200, dur: 0.065, vol: 0.032, type: "highpass", q: 1, delay: 0.008 });
+    this.sweepTone(185, 370, 0.34, 0.04, "sine", 0.015);
+    this.tone(740, 0.58, 0.018, "sine", 0.055);
+    this.tone(1110, 0.72, 0.01, "sine", 0.085);
   }
 
   /** 落地：低沉的噗 + 轻尘 */

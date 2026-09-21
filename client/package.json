@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@colyseus/sdk": "^0.18.2",
+    "lucide": "^0.468.0",
     "three": "^0.186.0"
   },
   "devDependencies": {

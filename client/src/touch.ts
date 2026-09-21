@@ -1,3 +1,4 @@
+import { Armchair, createIcons, Footprints, MessageCircle, Music2, Package, Sparkles } from "lucide";
 import type { PlayerControls } from "./controls";
 
 /**
@@ -18,26 +19,23 @@ export function isTouchDevice(): boolean {
   return (typeof window !== "undefined" && matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window;
 }
 
-function btn(label: string, size: number, onTap?: () => void, onHold?: (down: boolean) => void): HTMLDivElement {
+function btn(icon: string, label: string, size: number, onTap?: () => void, onHold?: (down: boolean) => void): HTMLDivElement {
   const el = document.createElement("div");
-  el.textContent = label;
-  el.style.cssText = [
-    "width:" + size + "px", "height:" + size + "px", "border-radius:50%",
-    "display:flex", "align-items:center", "justify-content:center",
-    "font-size:" + Math.round(size * 0.36) + "px", "color:#fff2df",
-    "background:rgba(26,18,42,.55)", "border:1.5px solid rgba(255,236,200,.4)",
-    "backdrop-filter:blur(6px)", "-webkit-backdrop-filter:blur(6px)",
-    "user-select:none", "touch-action:none",
-  ].join(";");
+  el.className = "touch-btn";
+  el.innerHTML = `<i data-lucide="${icon}"></i>`;
+  el.title = label;
+  el.setAttribute("aria-label", label);
+  el.style.width = `${size}px`;
+  el.style.height = `${size}px`;
   el.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    el.style.background = "rgba(255,214,130,.5)";
+    el.style.background = "rgba(255, 241, 199, .46)";
     if (onHold) onHold(true);
     else if (onTap) onTap();
   });
   const release = () => {
-    el.style.background = "rgba(26,18,42,.55)";
+    el.style.background = "";
     if (onHold) onHold(false);
   };
   el.addEventListener("pointerup", release);
@@ -56,30 +54,21 @@ function typing(): boolean {
 
 export function createTouchUI(controls: PlayerControls, actions: TouchActions): { setVisible: (v: boolean) => void } {
   const root = document.createElement("div");
-  root.style.cssText = "position:fixed;inset:0;z-index:32;pointer-events:none;display:none;";
+  root.className = "touch-root";
   document.body.appendChild(root);
 
   // ---- 左下：虚拟摇杆 ----
   const joyBase = document.createElement("div");
-  joyBase.style.cssText = [
-    "position:absolute", "left:26px", "bottom:96px", "width:124px", "height:124px",
-    "border-radius:50%", "background:rgba(26,18,42,.4)",
-    "border:1.5px solid rgba(255,236,200,.35)", "pointer-events:auto", "touch-action:none",
-    "backdrop-filter:blur(4px)", "-webkit-backdrop-filter:blur(4px)",
-  ].join(";");
+  joyBase.className = "touch-joystick";
   const joyKnob = document.createElement("div");
-  joyKnob.style.cssText = [
-    "position:absolute", "left:50%", "top:50%", "width:52px", "height:52px",
-    "border-radius:50%", "transform:translate(-50%,-50%)",
-    "background:rgba(255,236,200,.5)", "border:1.5px solid rgba(255,244,222,.7)",
-  ].join(";");
+  joyKnob.className = "touch-knob";
   joyBase.appendChild(joyKnob);
   root.appendChild(joyBase);
 
   let joyId: number | null = null;
   let joyCx = 0;
   let joyCy = 0;
-  const R = 46;
+  const R = 34;
   const setJoy = (dx: number, dy: number) => {
     const d = Math.hypot(dx, dy);
     const k = d > R ? R / d : 1;
@@ -120,39 +109,31 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
 
   // ---- 右下：按钮簇 ----
   const cluster = document.createElement("div");
-  cluster.style.cssText = "position:absolute;right:20px;bottom:88px;display:flex;flex-direction:column;align-items:flex-end;gap:12px;pointer-events:auto;";
+  cluster.className = "touch-cluster";
   root.appendChild(cluster);
 
   const row = document.createElement("div");
-  row.style.cssText = "display:flex;gap:12px;";
+  row.className = "touch-row";
   const smallBtns = document.createElement("div");
-  smallBtns.style.cssText = "display:flex;gap:10px;";
-  const mkSmall = (label: string, onTap: () => void) => btn(label, 46, onTap);
-  smallBtns.appendChild(mkSmall("💬", actions.openChat));
-  smallBtns.appendChild(mkSmall("👋", actions.openWheel));
-  smallBtns.appendChild(mkSmall("🎵", () => popupMenu(instrMenu)));
-  smallBtns.appendChild(mkSmall("🪑", () => popupMenu(furnMenu)));
+  smallBtns.className = "touch-small-row";
+  const mkSmall = (icon: string, label: string, onTap: () => void) => btn(icon, label, 38, onTap);
+  smallBtns.appendChild(mkSmall("message-circle", "说话", actions.openChat));
+  smallBtns.appendChild(mkSmall("sparkles", "动作", actions.openWheel));
+  smallBtns.appendChild(mkSmall("music-2", "乐器", () => popupMenu(instrMenu)));
+  smallBtns.appendChild(mkSmall("package", "家具", () => popupMenu(furnMenu)));
   row.appendChild(smallBtns);
-  row.appendChild(btn("坐", 54, () => controls.virtualKey("e", true)));
+  row.appendChild(btn("armchair", "坐下", 44, () => controls.virtualKey("e", true)));
   cluster.appendChild(row);
-  cluster.appendChild(btn("跳", 74, undefined, (down) => controls.virtualKey(" ", down)));
+  cluster.appendChild(btn("footprints", "跳跃或飞行", 58, undefined, (down) => controls.virtualKey(" ", down)));
 
   // ---- 弹出式小菜单（乐器/家具） ----
   function makeMenu(items: { label: string; onTap: () => void }[]): HTMLDivElement {
     const m = document.createElement("div");
-    m.style.cssText = [
-      "position:absolute", "right:20px", "bottom:180px", "display:none",
-      "flex-direction:column", "gap:8px", "padding:12px", "border-radius:16px",
-      "background:rgba(26,18,42,.9)", "border:1.5px solid rgba(255,236,200,.35)",
-      "pointer-events:auto",
-    ].join(";");
+    m.className = "touch-menu";
     for (const it of items) {
       const b = document.createElement("div");
       b.textContent = it.label;
-      b.style.cssText = [
-        "padding:10px 18px", "border-radius:10px", "font-size:14px", "color:#fff2df",
-        "background:rgba(255,244,222,.07)", "min-width:118px", "text-align:center",
-      ].join(";");
+      b.className = "touch-menu-item";
       b.addEventListener("pointerdown", (e) => {
         e.stopPropagation();
         it.onTap();
@@ -164,14 +145,14 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
     return m;
   }
   const instrMenu = makeMenu([
-    { label: "🎹 竖琴", onTap: () => actions.takeInstrument(0) },
-    { label: " flute 长笛", onTap: () => actions.takeInstrument(1) },
-    { label: "🔔 风铃", onTap: () => actions.takeInstrument(2) },
+    { label: "竖琴", onTap: () => actions.takeInstrument(0) },
+    { label: "长笛", onTap: () => actions.takeInstrument(1) },
+    { label: "风铃", onTap: () => actions.takeInstrument(2) },
     { label: "收起乐器", onTap: () => actions.takeInstrument(-1) },
   ]);
   const furnMenu = makeMenu([
-    { label: "🪑 放/收 椅子", onTap: () => actions.toggleFurniture(0) },
-    { label: "🎠 放/收 秋千", onTap: () => actions.toggleFurniture(1) },
+    { label: "放置 / 收起椅子", onTap: () => actions.toggleFurniture(0) },
+    { label: "放置 / 收起秋千", onTap: () => actions.toggleFurniture(1) },
   ]);
   function popupMenu(m: HTMLDivElement) {
     const open = m.style.display === "flex";
@@ -179,6 +160,9 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
     furnMenu.style.display = "none";
     m.style.display = open ? "none" : "flex";
   }
+
+  createIcons({ icons: { Armchair, Footprints, MessageCircle, Music2, Package, Sparkles } });
+  root.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
 
   return {
     setVisible(v: boolean) {

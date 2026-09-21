@@ -6,12 +6,12 @@ import { resolveColliders, standGroundHeight } from "./colliders";
  * 光遇式操控 · 二代
  *
  * - 动量移动：加速/减速有惯性，转弯时身体侧倾
- * - 跳跃 → 按住空格滑翔（缓降 + 前冲，披风展开）
- * - 腾空再按空格 = 扑翼（3 翼能，落地充能）
+ * - 单按空格跳跃；按住超过短阈值才展开披风滑翔
+ * - 腾空再次按空格 = 扑翼（3 翼能，落地充能）
  * - 篝火与灯塔山丘有上升暖气流
  * - 滑翔时相机 FOV 微宽，速度感更足
  *
- * mov 状态码: 0 静止 / 1 行走 / 2 奔跑 / 3 滑翔 / 4 扑翼(瞬时)
+ * mov 状态码: 0 静止 / 1 行走 / 2 奔跑 / 3 滑翔 / 4 扑翼(瞬时) / 5 普通腾空
  */
 export interface ControlsState {
   pos: THREE.Vector3;
@@ -43,6 +43,7 @@ export class PlayerControls {
   onLand: (() => void) | null = null;
   onFlap: (() => void) | null = null;
   onJump: (() => void) | null = null;
+  onGlide: ((open: boolean) => void) | null = null;
   onSit: ((sitting: boolean) => void) | null = null;
 
   /** 当前水平速度（米/秒，供动画使用） */
@@ -67,6 +68,8 @@ export class PlayerControls {
   private lastX = 0;
   private lastY = 0;
   private jumpQueued = false;
+  private spacePressedAt = 0;
+  private gliding = false;
   private flapTimer = 0; // mov=4 的显示时长
   private flapRegen = 0;
   private enabled = false;
@@ -92,10 +95,17 @@ export class PlayerControls {
         this.state.sit = !this.state.sit;
         this.onSit?.(this.state.sit);
       }
-      if (k === " " && !e.repeat) this.jumpQueued = true;
+      if (k === " " && !e.repeat) {
+        this.jumpQueued = true;
+        this.spacePressedAt = performance.now();
+      }
       this.keys.add(k);
     });
-  window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
+  window.addEventListener("keyup", (e) => {
+    const k = e.key.toLowerCase();
+    this.keys.delete(k);
+    if (k === " ") this.spacePressedAt = 0;
+  });
   window.addEventListener("blur", () => this.keys.clear());
 
     dom.addEventListener("pointerdown", (e) => {
@@ -152,11 +162,15 @@ export class PlayerControls {
           this.state.sit = !this.state.sit;
           this.onSit?.(this.state.sit);
         }
-        if (k === " ") this.jumpQueued = true;
+        if (k === " ") {
+          this.jumpQueued = true;
+          this.spacePressedAt = performance.now();
+        }
         this.keys.add(k);
       }
     } else {
       this.keys.delete(k);
+      if (k === " ") this.spacePressedAt = 0;
     }
   }
 
@@ -187,6 +201,8 @@ export class PlayerControls {
     this.vel.set(0, 0, 0);
     this.vy = 0;
     this.state.airborne = false;
+    this.spacePressedAt = 0;
+    this.gliding = false;
   }
 
   /** 暖气流：篝火广场与灯塔山丘上空有柔和的上升气流 */
@@ -225,18 +241,24 @@ export class PlayerControls {
     const moving = inputLen > 0.01 && !s.sit;
     const joyFull = Math.hypot(this.touchMove.x, this.touchMove.z) > 0.88;
     const running = moving && (this.keys.has("shift") || joyFull);
+    const spaceHeldMs = this.spacePressedAt > 0 && this.keys.has(" ") ? performance.now() - this.spacePressedAt : 0;
+    const glideHeld = s.airborne && spaceHeldMs >= 150;
+    if (glideHeld !== this.gliding) {
+      this.gliding = glideHeld;
+      this.onGlide?.(glideHeld);
+    }
 
-    // ---- 水平动量（腾空时转向收敛，像布一样飘） ----
-    const targetSpeed = s.airborne ? (this.keys.has(" ") ? 9.2 : 6.0) : running ? 7.2 : 3.6;
+    // ---- 水平动量（跳跃保留惯性，展开披风后才持续向前滑行） ----
+    const targetSpeed = s.airborne ? (glideHeld ? 9.2 : Math.max(3.2, this.horizSpeed)) : running ? 7.2 : 3.6;
     let tx = 0;
     let tz = 0;
-    if (moving || s.airborne) {
+    if (moving || glideHeld) {
       let dx: number, dz: number;
       if (moving) {
         dx = ix / inputLen;
         dz = iz / inputLen;
       } else {
-        // 腾空无输入：维持当前朝向的前冲
+        // 展翼后无输入：沿角色朝向稳定滑行
         dx = Math.sin(s.yaw);
         dz = Math.cos(s.yaw);
       }
@@ -247,7 +269,12 @@ export class PlayerControls {
       tx = (dx * cos + dz * sin) * targetSpeed;
       tz = (-dx * sin + dz * cos) * targetSpeed;
     }
-    const accel = s.airborne ? 2.2 : 10;
+    if (s.airborne && !moving && !glideHeld) {
+      // 普通跳跃只继承起跳惯性，不会凭空获得向前推力。
+      tx = this.vel.x * 0.985;
+      tz = this.vel.z * 0.985;
+    }
+    const accel = s.airborne ? (glideHeld ? 2.8 : 1.4) : 10;
     this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
     this.vel.z = THREE.MathUtils.lerp(this.vel.z, tz, Math.min(1, accel * dt));
     s.pos.x += this.vel.x * dt;
@@ -281,7 +308,6 @@ export class PlayerControls {
     // ---- 垂直：跳跃 / 滑翔 / 扑翼 / 暖气流 ----
     // 地面 = 地形高度，或已越过的实体顶面（岩石/灯塔环廊/木凳，站得上去）
     const ground = Math.max(terrainHeight(s.pos.x, s.pos.z), WATER_LEVEL - 0.25, standGroundHeight(s.pos));
-    const glideHeld = this.keys.has(" ");
 
     if (this.jumpQueued) {
       this.jumpQueued = false;
@@ -300,11 +326,12 @@ export class PlayerControls {
 
     if (s.airborne) {
       const up = this.updraftAt(s.pos.x, s.pos.z, s.pos.y);
-      if (glideHeld && this.vy < 0.6) {
-        // 滑翔：柔和缓降；暖气流直接抬升缓降下限，篝火上方会被稳稳托起
-        this.vy = Math.max(this.vy - 5 * dt, -1.7 + up);
+      if (glideHeld && this.vy < 1.2) {
+        // 展翼后逐渐收住下坠，避免突然吸附到固定下降速度。
+        const glideFloor = -1.35 + up + Math.min(0.3, this.horizSpeed * 0.025);
+        this.vy = Math.max(this.vy - 4.2 * dt, glideFloor);
       } else {
-        this.vy -= 22 * dt;
+        this.vy -= 19 * dt;
         this.vy += up * 0.45 * dt; // 自由落体时暖流只轻微上托
       }
       this.vy = Math.min(this.vy, 12);
@@ -313,6 +340,11 @@ export class PlayerControls {
         s.pos.y = ground;
         s.airborne = false;
         this.vy = 0;
+        this.spacePressedAt = 0;
+        if (this.gliding) {
+          this.gliding = false;
+          this.onGlide?.(false);
+        }
         this.onLand?.();
       }
     } else {
@@ -332,7 +364,7 @@ export class PlayerControls {
       this.flapTimer -= dt;
       s.mov = 4;
     } else if (s.airborne) {
-      s.mov = 3;
+      s.mov = glideHeld ? 3 : 5;
     } else {
       s.mov = speedH < 0.4 ? 0 : running ? 2 : 1;
     }
@@ -344,7 +376,7 @@ export class PlayerControls {
   private updateCamera(dt: number) {
     const s = this.state;
     const speedH = Math.hypot(this.vel.x, this.vel.z);
-    const glideHeld = this.keys.has(" ");
+    const glideHeld = this.gliding;
     const focus = new THREE.Vector3(s.pos.x, s.pos.y + 1.7, s.pos.z);
     const cx = focus.x + Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const cz = focus.z + Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);
