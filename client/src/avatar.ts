@@ -6,6 +6,7 @@ import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
 import { Spring } from "./motion";
 import { terrainHeight } from "./heightfield";
+import { lightState } from "./world/lightstate";
 
 /**
  * 光遇风小人 · 二代
@@ -133,9 +134,59 @@ const _ev1 = new THREE.Vector3();
 const _ev2 = new THREE.Vector3();
 const _ev3 = new THREE.Vector3();
 
-/** 披风材质：普通 toon 双面——形变与法线全部由 CapeSim 物理每帧驱动 */
-function makeCapeMaterial(color: THREE.Color, gradientMap: THREE.DataTexture | null) {
-  return new THREE.MeshToonMaterial({ color, side: THREE.DoubleSide, gradientMap: gradientMap ?? undefined });
+// ---- GLB 角色的菲涅尔边缘光（共享 uniforms，昼夜换色在 animate 里推进） ----
+const rimColorUni = { value: new THREE.Color("#ffd9a8") };
+const rimIntUni = { value: 0.3 };
+const RIM_DAY = new THREE.Color("#ffd9a8");
+const RIM_NIGHT = new THREE.Color("#aebfff");
+function patchRimMaterial(mat: THREE.Material) {
+  const m = mat as THREE.MeshStandardMaterial;
+  if (!m.isMeshStandardMaterial || (m as unknown as { __rimmed?: boolean }).__rimmed) return;
+  (m as unknown as { __rimmed?: boolean }).__rimmed = true;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uRimColor = rimColorUni;
+    shader.uniforms.uRimInt = rimIntUni;
+    shader.fragmentShader = shader.fragmentShader
+      .replace("void main() {", "uniform vec3 uRimColor;\nuniform float uRimInt;\nvoid main() {")
+      .replace(
+        "#include <fog_fragment>",
+        /* glsl */ `
+        // 菲涅尔边缘光：视角掠过表面处泛起的光边（光遇角色的逆光轮廓）
+        float rimF = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0);
+        gl_FragColor.rgb += uRimColor * rimF * uRimInt;
+        #include <fog_fragment>`
+      );
+  };
+}
+
+/** 披风材质：普通 toon 双面——形变与法线全部由 CapeSim 物理每帧驱动。
+ *  自带暖色 emissive（默认强度 0）：太阳在背后时透光，光遇披风的逆光感 */
+function makeCapeMaterial(color: THREE.Color, gradientMap: THREE.DataTexture | null, emissive = "#ffb877") {
+  return new THREE.MeshToonMaterial({
+    color,
+    side: THREE.DoubleSide,
+    gradientMap: gradientMap ?? undefined,
+    emissive: new THREE.Color(emissive),
+    emissiveIntensity: 0,
+  });
+}
+
+/** 接触阴影贴图：中心实边缘羽化的径向渐变（角色脚下的柔和暗斑） */
+let _shadowTex: THREE.Texture | null = null;
+function shadowTexture(): THREE.Texture {
+  if (_shadowTex) return _shadowTex;
+  const size = 128;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d")!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(20, 14, 34, 0.85)");
+  g.addColorStop(0.5, "rgba(20, 14, 34, 0.4)");
+  g.addColorStop(1, "rgba(20, 14, 34, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  _shadowTex = new THREE.CanvasTexture(cv);
+  return _shadowTex;
 }
 
 export function createAvatar(opts: { name: string; hue: number; self?: boolean; model?: AvatarModel }): Avatar {
@@ -197,6 +248,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedModel.traverse((obj) => {
         obj.castShadow = true;
         obj.receiveShadow = true;
+        const meshMats = (obj as THREE.Mesh).material;
+        if (meshMats) for (const mm of Array.isArray(meshMats) ? meshMats : [meshMats]) patchRimMaterial(mm);
         if (obj.name.toLowerCase().includes("cape")) {
           const material = (obj as THREE.Mesh).material;
           for (const mat of Array.isArray(material) ? material : [material]) {
@@ -444,6 +497,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // 参数柔和：重力小、风缓、阻尼收敛快——站立时垂坠安静，跑动时才后扬
   const outerCapeSim = new CapeSim(outerGeo, makeCapeMaterial(capeOuter, kit.gradient), { gravity: 6, damping: 0.94, iters: 5 });
   const outerCape = outerCapeSim.mesh;
+  const outerCapeMat = outerCape.material as THREE.MeshToonMaterial;
   // 注意：mesh 不带偏移——CapeSim 的顶点/锚点/碰撞都在 group 坐标系里表达
   group.add(outerCape);
 
@@ -451,7 +505,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const innerGeo = new THREE.PlaneGeometry(0.56, 0.42, 6, 6);
   innerGeo.translate(0, -0.21, 0);
   innerGeo.rotateX(0.14);
-  const innerCape = new THREE.Mesh(innerGeo, makeCapeMaterial(capeInner, kit.gradient));
+  const innerCape = new THREE.Mesh(innerGeo, makeCapeMaterial(capeInner, kit.gradient, "#ffd9a0"));
+  const innerCapeMat = innerCape.material as THREE.MeshToonMaterial;
+
+  // ---- 接触阴影：脚下柔和暗斑（腾空淡出并轻微扩散），全部模型通用 ----
+  const contactShadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: 0.42 })
+  );
+  contactShadow.rotation.x = -Math.PI / 2;
+  group.add(contactShadow);
   innerCape.position.set(0, 0.98, -0.12);
   innerCape.castShadow = true;
   bodyGroup.add(innerCape);
@@ -1060,6 +1123,33 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;
       eyes.forEach((e) => e.scale.set(1, 1.5 * blink, 0.55));
+
+      // ---- 接触阴影：贴地暗斑随高度淡出扩散（水面/深海上自然沉底不可见） ----
+      const shadowGroundY = terrainHeight(group.position.x, group.position.z);
+      const airH = Math.max(0, group.position.y - shadowGroundY);
+      const shOpacity = 0.42 * THREE.MathUtils.clamp(1 - airH / 3.5, 0, 1);
+      (contactShadow.material as THREE.MeshBasicMaterial).opacity = shOpacity;
+      contactShadow.visible = shOpacity > 0.01;
+      const shScale = (importedReady ? 1.15 : 0.85) * (1 + airH * 0.1);
+      contactShadow.scale.set(shScale, shScale, 1);
+      contactShadow.position.set(0, shadowGroundY + 0.03 - group.position.y, 0);
+
+      // ---- 披风逆光透光：太阳在角色背后时布面泛起暖光（飞离太阳时最明显，光遇的披风感） ----
+      if (!importedReady) {
+        const backlit =
+          THREE.MathUtils.clamp(
+            -(lightState.sunDir.x * Math.sin(group.rotation.y) + lightState.sunDir.z * Math.cos(group.rotation.y)),
+            0,
+            1
+          ) * Math.max(0, lightState.sunDir.y * 2);
+        const glow = backlit * (0.3 + 0.4 * Math.max(speedN, glideBlend));
+        outerCapeMat.emissiveIntensity = glow * 0.6;
+        innerCapeMat.emissiveIntensity = glow;
+      }
+
+      // ---- GLB 边缘光颜色随昼夜（昼暖夜冷） ----
+      rimColorUni.value.lerpColors(RIM_DAY, RIM_NIGHT, lightState.night);
+      rimIntUni.value = 0.26 + 0.18 * (1 - lightState.night);
 
       // 烛光呼吸
       wisp.scale.setScalar(0.85 + 0.18 * Math.sin(t * 2.4 + opts.hue));

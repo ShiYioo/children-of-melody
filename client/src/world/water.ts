@@ -3,8 +3,13 @@ import * as THREE from "three";
 /**
  * 岛屿四周的海：轻浪、浅水透绿、深水入蓝，
  * 沿真实海岸线(在 GLSL 里复刻地形函数)画出发光的泡沫带。
+ * 颜色随昼夜相位推进：太阳(夜=月亮)方向、雾色、天空反射色、波光色由 scene.setDayPhase 注入。
  */
-export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (t: number) => void } {
+export function createWater(camera: THREE.Camera): {
+  mesh: THREE.Mesh;
+  update: (t: number) => void;
+  setPhase: (p: { sunDir: THREE.Vector3; fogColor: THREE.Color; fogDensity: number; skyHi: THREE.Color; skyLo: THREE.Color; specColor: THREE.Color; night: number }) => void;
+} {
   const SUN_DIR = new THREE.Vector3(-0.62, 0.17, -0.42).normalize();
   const FOG_COLOR = new THREE.Color("#eecfa4");
   const FOG_DENSITY = 0.0042;
@@ -17,6 +22,9 @@ export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (
       uFogColor: { value: FOG_COLOR },
       uFogDensity: { value: FOG_DENSITY },
       uCamPos: { value: new THREE.Vector3() },
+      uSkyHi: { value: new THREE.Color("#3b4a8f") }, // 天顶色（视角反射用）
+      uSkyLo: { value: new THREE.Color("#ffd9a3") }, // 地平色
+      uSpecColor: { value: new THREE.Color("#ffe0a0") }, // 波光色（黄昏暖金/夜月冷白）
     },
     vertexShader: /* glsl */ `
       uniform float uTime;
@@ -52,6 +60,9 @@ export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (
       uniform vec3 uFogColor;
       uniform float uFogDensity;
       uniform vec3 uCamPos;
+      uniform vec3 uSkyHi;
+      uniform vec3 uSkyLo;
+      uniform vec3 uSpecColor;
       varying vec3 vWorld;
       varying vec3 vNormal;
 
@@ -85,16 +96,17 @@ export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (
         vec3 deep = vec3(0.07, 0.27, 0.50);
         vec3 col = mix(shallow, deep, smoothstep(0.05, 0.75, depth));
 
-        // 视角天光反射
+        // 视角天光反射：颜色随昼夜相位（黄昏玫瑰/夜深蓝/白昼亮蓝）
         vec3 V = normalize(uCamPos - vWorld);
         vec3 N = normalize(vNormal);
         float fres = pow(1.0 - max(dot(V, N), 0.0), 3.0);
-        col = mix(col, vec3(1.0, 0.83, 0.62), fres * 0.45);
+        vec3 skyRef = mix(uSkyLo, uSkyHi, clamp(N.y, 0.0, 1.0));
+        col = mix(col, skyRef, fres * 0.45);
 
-        // 夕阳的粼粼波光
+        // 太阳(夜=月亮)的粼粼波光
         vec3 R = reflect(-V, N);
         float spec = pow(max(dot(R, uSunDir), 0.0), 90.0);
-        col += vec3(1.0, 0.85, 0.62) * spec * 1.2;
+        col += uSpecColor * spec * 1.2;
 
         // 海岸泡沫：贴着等高线的一条柔和亮带
         float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));
@@ -121,6 +133,14 @@ export function createWater(camera: THREE.Camera): { mesh: THREE.Mesh; update: (
     update: (t: number) => {
       mat.uniforms.uTime.value = t;
       mat.uniforms.uCamPos.value.copy(camera.position);
+    },
+    setPhase: (p) => {
+      mat.uniforms.uSunDir.value.copy(p.sunDir).normalize();
+      mat.uniforms.uFogColor.value.copy(p.fogColor);
+      mat.uniforms.uFogDensity.value = p.fogDensity;
+      mat.uniforms.uSkyHi.value.copy(p.skyHi);
+      mat.uniforms.uSkyLo.value.copy(p.skyLo);
+      mat.uniforms.uSpecColor.value.copy(p.specColor);
     },
   };
 }

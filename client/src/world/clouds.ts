@@ -28,14 +28,20 @@ interface Cloud {
   angle: number;
   speed: number;
   bob: number;
+  mat: THREE.SpriteMaterial; // 主色随昼夜相位推进（夜=暗蓝灰带月照边）
 }
 
-export function createClouds(): { group: THREE.Group; update: (t: number) => void } {
+export function createClouds(): {
+  group: THREE.Group;
+  update: (t: number) => void;
+  setPhase: (night: number, dawn: number) => void; // night 夜晚度, dawn 暖色度(黄昏/黎明)
+} {
   const group = new THREE.Group();
   const tex = puffTexture();
   const baseMat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: true });
 
   const clouds: Cloud[] = [];
+  const cloudMats: THREE.SpriteMaterial[] = [];
 
   const mkCloud = (opts: {
     radius: number;
@@ -47,9 +53,12 @@ export function createClouds(): { group: THREE.Group; update: (t: number) => voi
     squash?: number;
   }) => {
     const g = new THREE.Group();
+    let firstMat: THREE.SpriteMaterial | null = null;
     for (let i = 0; i < opts.puffs; i++) {
       const mat = baseMat.clone();
       mat.opacity = opts.opacity * (0.75 + Math.random() * 0.35);
+      cloudMats.push(mat);
+      if (!firstMat) firstMat = mat;
       const sp = new THREE.Sprite(mat);
       const rr = Math.pow(Math.random(), 0.6); // 中心更密
       const a = Math.random() * Math.PI * 2;
@@ -65,7 +74,7 @@ export function createClouds(): { group: THREE.Group; update: (t: number) => voi
     const angle = Math.random() * Math.PI * 2;
     g.position.set(Math.cos(angle) * opts.radius, opts.y, Math.sin(angle) * opts.radius);
     group.add(g);
-    clouds.push({ group: g, radius: opts.radius, angle, speed: opts.speed, bob: Math.random() * 10 });
+    clouds.push({ group: g, radius: opts.radius, angle, speed: opts.speed, bob: Math.random() * 10, mat: firstMat! });
   };
 
   // 岛脚下的云海（绵密、大团）
@@ -114,6 +123,14 @@ export function createClouds(): { group: THREE.Group; update: (t: number) => voi
         c.group.position.z = Math.sin(c.angle) * c.radius;
         c.group.position.y += Math.sin(t * 0.18 + c.bob) * 0.003;
       }
+    },
+    // 云色随昼夜：白昼亮白 → 黄昏/黎明染玫瑰金 → 夜晚沉入暗蓝灰（比天穹稍亮，月光感）
+    setPhase: (night: number, dawn: number) => {
+      const day = new THREE.Color("#fffbf2");
+      const dusk = new THREE.Color("#f2b49a");
+      const moon = new THREE.Color("#3a4668");
+      const tint = day.clone().lerp(dusk, dawn).lerp(moon, night);
+      for (const m of cloudMats) m.color.copy(tint);
     },
   };
 }

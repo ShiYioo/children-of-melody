@@ -12,7 +12,13 @@ import { createToonKit } from "./toon";
 import { createMotes, createFireflies, createEmbers } from "./particles";
 import { createWindLines } from "./windlines";
 import { createBursts } from "./bursts";
+import { lightState } from "./lightstate";
 import { isTouchDevice } from "../touch";
+
+// 水面波光色（随昼夜）：白昼暖金 / 黄昏深金 / 夜月冷白
+const SPEC_DAY = new THREE.Color("#ffe9c0");
+const SPEC_WARM = new THREE.Color("#ffb36b");
+const SPEC_NIGHT = new THREE.Color("#cfd8ff");
 
 export interface World {
   scene: THREE.Scene;
@@ -240,8 +246,26 @@ export function createWorld(container: HTMLElement): World {
     sun.position.lerpVectors(a.sunPos, b.sunPos, u);
     shaftMat.opacity = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u);
     renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
-    // 萤火虫入夜点亮（白天几乎看不见）
+    // 萤火虫入夜点亮（白天几乎看不见），白天光尘入夜淡出（萤火虫接管）
     fireflyMat.opacity = 0.75 * THREE.MathUtils.clamp(skyPal.night * 1.6, 0.04, 1);
+    (motes.points.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 0.5 * (1 - skyPal.night * 0.85);
+
+    // 光照状态共享：披风透光/边缘光强度跟着太阳走
+    lightState.sunDir.copy(sun.position).normalize();
+    lightState.night = skyPal.night;
+    // 暖色度（黄昏/黎明高、白昼和深夜低）：水面波光与云的染色共用
+    const warm = Math.pow(1 - skyPal.night, 2) * (1 - THREE.MathUtils.clamp((skyPal.sunEl - 0.4) / 0.4, 0, 1));
+    const spec = SPEC_DAY.clone().lerp(SPEC_WARM, warm).lerp(SPEC_NIGHT, skyPal.night);
+    water.setPhase({
+      sunDir: sun.position,
+      fogColor: (scene.fog as THREE.FogExp2).color,
+      fogDensity: (scene.fog as THREE.FogExp2).density,
+      skyHi: skyPal.zenith,
+      skyLo: skyPal.horizon,
+      specColor: spec,
+      night: skyPal.night,
+    });
+    clouds.setPhase(skyPal.night, warm);
   }
   setDayPhase(0);
 
