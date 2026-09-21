@@ -61,8 +61,9 @@ export class SpringV3 {
     return this.x;
   }
 
-  snap(p: THREE.Vector3) {
+  snap(p: THREE.Vector3): this {
     this.x.copy(p);
     this.v.set(0, 0, 0);
+    return this;
   }
 }

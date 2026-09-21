@@ -3,6 +3,7 @@ import { createAvatar, type Avatar } from "./avatar";
 import { trackMeta } from "./audio/tracks";
 import { terrainHeight } from "./heightfield";
 import type { AvatarModel } from "./avatar";
+import { SpringV3 } from "./motion";
 
 /**
  * 岛上的其他人（网络玩家与演示 NPC 共用同一套管线）：
@@ -31,6 +32,7 @@ interface Entry {
   speed: number; // 推算的移动速度（用于动画）
   lastPos: THREE.Vector3;
   lastY: number; // 上一帧 y（估算垂直速度）
+  posSpring: SpringV3; // 位置弹簧（网络玩家也带动作物理的重量感）
   clarity: number;
   wasNear: boolean;
   wasAir: number; // 上一帧的空中状态（0/1/2）
@@ -66,6 +68,7 @@ export class RemotePlayers {
       speed: 0,
       lastPos: new THREE.Vector3(data.x, data.y, data.z),
       lastY: data.y,
+      posSpring: new SpringV3(60, 14).snap(new THREE.Vector3(data.x, data.y, data.z)),
       clarity: 0,
       wasNear: false,
       wasAir: 0,
@@ -186,17 +189,18 @@ export class RemotePlayers {
 
   /** 每帧：插值 + 动画 + 光环（beatMap 提供每个 key 的实时节拍能量） */
   animate(dt: number, t: number, clarityMap: Map<string, number>, beatMap?: Map<string, number>, seatedKeys?: Set<string>): RemoteInfo[] {
-    const k = Math.min(1, dt * 10);
     for (const e of this.entries.values()) {
       const g = e.avatar.group;
-      g.position.x = THREE.MathUtils.lerp(g.position.x, e.target.x, k);
-      g.position.y = THREE.MathUtils.lerp(g.position.y, e.target.y, k);
-      g.position.z = THREE.MathUtils.lerp(g.position.z, e.target.z, k);
+      // 位置走弹簧：网络玩家同样有起步/急停的重量感（10Hz 目标步进 → 弹簧平滑+一点惯性）。
+      // 大距离跳变（重连/瞬移）直接贴上，弹簧不能长距离飞掠
+      this._netPos.set(e.target.x, e.target.y, e.target.z);
+      if (e.posSpring.x.distanceTo(this._netPos) > 6) e.posSpring.snap(this._netPos);
+      g.position.copy(e.posSpring.step(this._netPos, dt));
 
       let dy = e.target.ry - g.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
-      const yawStep = dy * k;
+      const yawStep = dy * Math.min(1, dt * 10);
       g.rotation.y += yawStep;
 
       e.speed = g.position.distanceTo(e.lastPos) / Math.max(dt, 1e-4);
@@ -245,6 +249,8 @@ export class RemotePlayers {
   private sceneAdd: (o: THREE.Object3D) => void = () => {};
   private sceneRemove: (o: THREE.Object3D) => void = () => {};
   private selfPos: THREE.Vector3 | null = null;
+  /** 网络目标位置复用向量（弹簧目标，防每帧分配） */
+  private readonly _netPos = new THREE.Vector3();
 
   /** 每帧由主循环更新自己位置（供距离判断） */
   setSelfPos(p: THREE.Vector3) {
