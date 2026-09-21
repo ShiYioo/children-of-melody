@@ -40,8 +40,9 @@ export class PlayerControls {
   camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
-  /** 相机位置弹簧（略欠阻尼：跟随带一点点呼吸感） */
+  /** 相机跟随焦点弹簧（只平滑玩家移动的跟随；鼠标转视角是直接操作不走弹簧） */
   private readonly camSpring = new SpringV3(110, 19);
+  private readonly _focusRaw = new THREE.Vector3();
   /** 平滑后的水平速度（速度前瞻用，防抖） */
   private readonly camLead = new THREE.Vector3();
   private readonly camFocus = new THREE.Vector3();
@@ -383,16 +384,17 @@ export class PlayerControls {
     const s = this.state;
     const speedH = Math.hypot(this.vel.x, this.vel.z);
     const glideHeld = this.gliding;
-    const focus = new THREE.Vector3(s.pos.x, s.pos.y + 1.7, s.pos.z);
+    // 弹簧只挂在跟随焦点上：玩家移动的跟随带一点呼吸感。
+    // 鼠标转视角是直接操作，必须 1:1 立即响应——弹簧若挂在相机位置上，
+    // 快速转动时轨道目标绕焦点瞬移，弹簧追不上再触发距离保护直贴，视角就会猛跳
+    const focusRaw = this._focusRaw.set(s.pos.x, s.pos.y + 1.7, s.pos.z);
+    if (this.camSpring.x.distanceTo(focusRaw) > 8) this.camSpring.snap(focusRaw); // 入场/传送直接贴上
+    const focus = this.camSpring.step(focusRaw, dt);
     const cx = focus.x + Math.sin(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const cz = focus.z + Math.cos(this.camYaw) * this.camDist * Math.cos(this.camPitch);
     const cy = focus.y + Math.sin(this.camPitch) * this.camDist;
     const camGround = terrainHeight(cx, cz) + 0.8;
-    const target = new THREE.Vector3(cx, Math.max(cy, camGround), cz);
-    // 弹簧跟随（略欠阻尼）：起停时镜头有一点点呼吸感而不是恒速漂移；
-    // 大距离跳变（入场/重置）直接贴上，避免弹簧长距离飞掠穿地形
-    if (this.camSpring.x.distanceTo(target) > 8) this.camSpring.snap(target);
-    this.camera.position.copy(this.camSpring.step(target, dt));
+    this.camera.position.set(cx, Math.max(cy, camGround), cz);
     // 速度前瞻：视线先看向要去的地方（光遇的镜头感），落点用平滑速度防抖
     this.camLead.lerp(this.vel, Math.min(1, dt * 4));
     this.camFocus.copy(focus).addScaledVector(this.camLead, 0.16);
