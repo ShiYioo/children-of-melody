@@ -90,27 +90,29 @@ function makeDriftPoints(opts: {
 }
 
 /** 全岛漂浮的暖色光尘 */
+/** 全岛漂浮的暖色光尘（只撒陆地上空 r<38——岸环洼地 r≈45+ 是湖，
+ *  闪烁光点落在暗水面上+Bloom 放大 = 整片湖"蹦迪"） */
 export function createMotes(): DriftPoints {
   return makeDriftPoints({
     count: 380,
     color: "#ffe9b8",
-    area: { r: 55, yMin: 0.6, yMax: 13 },
+    area: { r: 38, yMin: 0.6, yMax: 13 },
     size: 0.5,
     drift: 1.4,
     opacity: 0.5,
   });
 }
 
-/** 林地里的萤光（淡绿偏暖，贴近树梢高度） */
+/** 林地里的萤光（淡绿偏暖，贴近树梢高度；中心收进内陆，最远 r≈30 不碰湖） */
 export function createFireflies(): DriftPoints {
   return makeDriftPoints({
     count: 90,
     color: "#e5ffb0",
-    area: { r: 26, yMin: 1.2, yMax: 4.5 },
+    area: { r: 16, yMin: 1.2, yMax: 4.5 },
     size: 0.42,
     drift: 0.9,
     opacity: 0.75,
-    center: [-14, -34],
+    center: [-12, -18],
   });
 }
 
