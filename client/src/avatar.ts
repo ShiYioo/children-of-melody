@@ -765,7 +765,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const torsoTarget =
         -0.5 * sitLerp +
         (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
-        0.76 * glideBlend +
+        THREE.MathUtils.clamp(0.38 - vy * 0.07, 0.08, 0.95) * glideBlend + // 俯冲低头/爬升抬头（能量飞行的姿态反馈）
         0.15 * jumpBlend * (1 - glideBlend) +
         slopeLean;
       bodyGroup.rotation.x = mTorsoX.step(torsoTarget, dt) + mEmTorso.step(eTorso, dt);
@@ -854,7 +854,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       // 没有专用飞行动画的导入模型也随状态调整整体姿态，避免在空中直立行走。
       if (importedModel && !elainaRoot) {
-        const importedPitch = air === 2 ? 0.38 : air === 1 ? -0.08 : 0;
+        const importedPitch = air === 2 ? THREE.MathUtils.clamp(0.3 - vy * 0.06, 0.05, 0.8) : air === 1 ? -0.08 : 0;
         importedModel.rotation.x = THREE.MathUtils.lerp(importedModel.rotation.x, importedPitch, Math.min(1, dt * 5));
         importedModel.rotation.z = THREE.MathUtils.lerp(importedModel.rotation.z, air === 2 ? THREE.MathUtils.clamp(-yawVel * 0.025, -0.14, 0.14) : 0, Math.min(1, dt * 5));
       }
@@ -959,7 +959,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           pitch = -0.12; // 坐椅子/秋千：上身微后靠，身体立着（座位高度由外部驱动）
           lift = 0.06;
         } else if (air === 2) {
-          pitch = 0.85; // 滑翔俯冲角，与程序化小人一致
+          pitch = THREE.MathUtils.clamp(0.38 - vy * 0.07, 0.08, 0.95); // 滑翔俯冲角随真实垂直速度（俯冲低头/爬升抬头）
           lift = -0.05;
         } else if (air === 1) {
           pitch = -0.05; // 腾空微后仰

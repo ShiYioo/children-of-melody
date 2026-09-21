@@ -40,6 +40,10 @@ export class PlayerControls {
   camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
+  // ---- 滑翔能量飞行（光遇的滑翔是滑翔机：俯冲攒速度、拉起用速度换高度） ----
+  private glidePitch = 0; // 俯仰角：-0.55 俯冲 ~ +0.45 爬升（玩家可操控）
+  private glideSpeed = 0; // 空速=能量：俯冲充能、爬升耗能、阻力缓慢流失
+  private glideEngaged = false; // 滑翔物理是否接管（上升余势先自然衰减再接管）
   /** 相机跟随焦点弹簧（只平滑玩家移动的跟随；鼠标转视角是直接操作不走弹簧） */
   private readonly camSpring = new SpringV3(110, 19);
   private readonly _focusRaw = new THREE.Vector3();
@@ -210,6 +214,9 @@ export class PlayerControls {
     this.state.airborne = false;
     this.spacePressedAt = 0;
     this.gliding = false;
+    this.glideEngaged = false;
+    this.glidePitch = 0;
+    this.glideSpeed = 0;
   }
 
   /** 暖气流：篝火广场与灯塔山丘上空有柔和的上升气流 */
@@ -252,44 +259,54 @@ export class PlayerControls {
     const glideHeld = s.airborne && spaceHeldMs >= 150;
     if (glideHeld !== this.gliding) {
       this.gliding = glideHeld;
+      if (glideHeld) this.glideSpeed = Math.max(4, Math.hypot(this.vel.x, this.vel.z)); // 以当前速度为初始能量
       this.onGlide?.(glideHeld);
     }
+    // 展翼接管时机：上升余势(vy>1.2)先自然衰减，衰减到阈值后滑翔物理才接管，
+    // 否则跳起瞬间展翼会被俯仰公式立即按住；接管后爬升可自由超过该阈值
+    if (glideHeld) {
+      if (!this.glideEngaged && this.vy < 1.2) this.glideEngaged = true;
+    } else {
+      this.glideEngaged = false;
+    }
 
-    // ---- 水平动量（跳跃保留惯性，展开披风后才持续向前滑行） ----
-    const targetSpeed = s.airborne ? (glideHeld ? 9.2 : Math.max(3.2, this.horizSpeed)) : running ? 7.2 : 3.6;
-    let tx = 0;
-    let tz = 0;
-    if (moving || glideHeld) {
-      let dx: number, dz: number;
-      if (moving) {
-        dx = ix / inputLen;
-        dz = iz / inputLen;
-      } else {
-        // 展翼后无输入：沿角色朝向稳定滑行
-        dx = Math.sin(s.yaw);
-        dz = Math.cos(s.yaw);
+    // ---- 水平动量（滑翔接管时水平速度由俯仰/航向决定，见垂直块；这里只管地面与普通腾空） ----
+    if (!this.glideEngaged) {
+      const targetSpeed = s.airborne ? (glideHeld ? 9.2 : Math.max(3.2, this.horizSpeed)) : running ? 7.2 : 3.6;
+      let tx = 0;
+      let tz = 0;
+      if (moving || glideHeld) {
+        let dx: number, dz: number;
+        if (moving) {
+          dx = ix / inputLen;
+          dz = iz / inputLen;
+        } else {
+          // 展翼后无输入：沿角色朝向稳定滑行
+          dx = Math.sin(s.yaw);
+          dz = Math.cos(s.yaw);
+        }
+        // 相机相对方向（对任意 camYaw 都成立）：
+        // 前向 = -(sin,cos)，右向 = (cos,-sin)
+        const cos = Math.cos(this.camYaw);
+        const sin = Math.sin(this.camYaw);
+        tx = (dx * cos + dz * sin) * targetSpeed;
+        tz = (-dx * sin + dz * cos) * targetSpeed;
       }
-      // 相机相对方向（对任意 camYaw 都成立）：
-      // 前向 = -(sin,cos)，右向 = (cos,-sin)
-      const cos = Math.cos(this.camYaw);
-      const sin = Math.sin(this.camYaw);
-      tx = (dx * cos + dz * sin) * targetSpeed;
-      tz = (-dx * sin + dz * cos) * targetSpeed;
+      if (s.airborne && !moving && !glideHeld) {
+        // 普通跳跃只继承起跳惯性，不会凭空获得向前推力。
+        tx = this.vel.x * 0.985;
+        tz = this.vel.z * 0.985;
+      }
+      const accel = s.airborne ? (glideHeld ? 2.8 : 1.4) : 10;
+      this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
+      this.vel.z = THREE.MathUtils.lerp(this.vel.z, tz, Math.min(1, accel * dt));
+      s.pos.x += this.vel.x * dt;
+      s.pos.z += this.vel.z * dt;
     }
-    if (s.airborne && !moving && !glideHeld) {
-      // 普通跳跃只继承起跳惯性，不会凭空获得向前推力。
-      tx = this.vel.x * 0.985;
-      tz = this.vel.z * 0.985;
-    }
-    const accel = s.airborne ? (glideHeld ? 2.8 : 1.4) : 10;
-    this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
-    this.vel.z = THREE.MathUtils.lerp(this.vel.z, tz, Math.min(1, accel * dt));
-    s.pos.x += this.vel.x * dt;
-    s.pos.z += this.vel.z * dt;
 
-    // ---- 朝向与侧倾 ----
+    // ---- 朝向与侧倾（滑翔中转向由滑翔块按航向转弯处理，不走速度朝向） ----
     const speedH = Math.hypot(this.vel.x, this.vel.z);
-    if (moving && speedH > 0.3) {
+    if (moving && speedH > 0.3 && !this.glideEngaged) {
       const targetYaw = Math.atan2(this.vel.x, this.vel.z);
       let diff = targetYaw - s.yaw;
       while (diff > Math.PI) diff -= Math.PI * 2;
@@ -324,16 +341,50 @@ export class PlayerControls {
         s.sit = false;
         this.onJump?.();
       } else if (s.flaps > 0) {
-        this.vy = 7.0;
         s.flaps--;
         this.flapTimer = 0.28;
+        if (this.glideEngaged) {
+          // 滑翔中拍翅=光翼冲程：注入能量并抬头，随后的能量公式自然把它转成爬升
+          this.glideSpeed = Math.min(17, Math.max(this.glideSpeed, 9.5));
+          this.glidePitch = Math.max(this.glidePitch, 0.3);
+        } else {
+          this.vy = 7.0;
+        }
         this.onFlap?.();
       }
     }
 
     if (s.airborne) {
       const up = this.updraftAt(s.pos.x, s.pos.z, s.pos.y);
-      if (glideHeld && this.vy < 1.2) {
+      if (this.glideEngaged) {
+        // ---- 能量飞行（光遇滑翔的灵魂）：俯仰可操控，高度与速度互相转换 ----
+        // W 前推=俯冲机头 S 后拉=爬升；无输入回中到自然下滑角（滑翔不该凭空平飞）
+        let pitchTarget = iz === 0 ? -0.14 : THREE.MathUtils.clamp(iz * 0.5, -0.55, 0.45);
+        if (this.glideSpeed < 5) pitchTarget = Math.min(pitchTarget, -0.25);
+        this.glidePitch = THREE.MathUtils.lerp(this.glidePitch, pitchTarget, Math.min(1, dt * 2.8));
+        const sinP = Math.sin(this.glidePitch);
+        const cosP = Math.cos(this.glidePitch);
+        // 重力沿航向的分量：爬升消耗空速、俯冲补充空速（能量交换）
+        this.glideSpeed += -9.8 * sinP * 1.15 * dt;
+        // 空气阻力：与速度成正比，巡航时缓慢流失
+        this.glideSpeed -= (0.15 + this.glideSpeed * 0.05) * dt;
+        this.glideSpeed = THREE.MathUtils.clamp(this.glideSpeed, 3.2, 17);
+        this.vy = this.glideSpeed * sinP + up * 0.85; // 垂直=航迹分量+暖气流托举
+        // 水平速度沿航向（转弯=转航向，不是平移飘）
+        const hs = this.glideSpeed * cosP;
+        this.vel.x = Math.sin(s.yaw) * hs;
+        this.vel.z = Math.cos(s.yaw) * hs;
+        // A/D 倾斜转弯：速度快时转弯率自然收紧（大速度=大转弯半径）
+        const turnRate = THREE.MathUtils.clamp(2.2 - this.glideSpeed * 0.06, 0.8, 2.2);
+        if (ix !== 0) {
+          s.yaw += ix * turnRate * dt;
+          s.yawVel = THREE.MathUtils.lerp(s.yawVel, ix * turnRate, Math.min(1, dt * 6));
+        } else {
+          s.yawVel = THREE.MathUtils.lerp(s.yawVel, 0, Math.min(1, dt * 4));
+        }
+        s.pos.x += this.vel.x * dt;
+        s.pos.z += this.vel.z * dt;
+      } else if (glideHeld && this.vy < 1.2) {
         // 展翼后逐渐收住下坠，避免突然吸附到固定下降速度。
         const glideFloor = -1.35 + up + Math.min(0.3, this.horizSpeed * 0.025);
         this.vy = Math.max(this.vy - 4.2 * dt, glideFloor);
@@ -348,6 +399,8 @@ export class PlayerControls {
         s.airborne = false;
         this.vy = 0;
         this.spacePressedAt = 0;
+        this.glideEngaged = false;
+        this.glidePitch = 0;
         if (this.gliding) {
           this.gliding = false;
           this.onGlide?.(false);
