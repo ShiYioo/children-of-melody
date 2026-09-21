@@ -394,7 +394,7 @@ function makeCampfire(kit: ToonKit): Campfire {
 
   // 出生点就在篝火 8m 内。场景主光必须稳定；高频抖动经过 Bloom 会让整片广场像频闪灯。
   let fireBoost = 1;
-  const fireLight = new THREE.PointLight("#ffb36b", 28, 22, 1.35);
+  const fireLight = new THREE.PointLight("#ffb36b", 16, 20, 1.35);
   fireLight.position.y = 1.0;
   g.add(fireLight);
 
@@ -416,7 +416,7 @@ function makeCampfire(kit: ToonKit): Campfire {
       flame1.material instanceof THREE.ShaderMaterial && (flame1.material.uniforms.uTime.value = t);
       flame2.material instanceof THREE.ShaderMaterial && (flame2.material.uniforms.uTime.value = t * 1.3);
       flame1.rotation.y = t * 0.8;
-      fireLight.intensity = 28 * fireBoost;
+      fireLight.intensity = 16 * fireBoost;
     },
     /** 黄昏音乐会等场景的篝火增亮（1=常态） */
     setBoost: (v: number) => {

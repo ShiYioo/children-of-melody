@@ -1108,9 +1108,10 @@ function tick(dt: number) {
     if (duskOn !== duskConcert) {
       duskConcert = duskOn;
       npcs?.setConcert(duskOn);
-      world.campfire.setBoost(duskOn ? 1.7 : 1);
       if (duskOn) ui.toast("黄昏音乐会：老住户们围到篝火旁合奏了", 4200);
     }
+    // 每帧设置增亮：只在相位沿上设一次的话，错过沿（进游戏就在黄昏）会永远卡在 boosted
+    world.campfire.setBoost(duskOn ? 1.3 : 1);
     if (duskConcert) {
       npcNoteT += dt;
       if (npcNoteT > 0.46) {
