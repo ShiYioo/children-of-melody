@@ -230,11 +230,12 @@ export class CharacterPhysics {
       const hs = this.glideSpeed * cosP;
       this.vel.x = Math.sin(this.yaw) * hs;
       this.vel.z = Math.cos(this.yaw) * hs;
-      // A/D 倾斜转弯：速度越快转弯率越紧（大速度=大转弯半径）
+      // A/D 倾斜转弯：速度越快转弯率越紧（大速度=大转弯半径）。
+      // 注意符号：相机在角色后方，yaw 增大在画面上是左转——D(右)必须 yaw 减
       const turnRate = THREE.MathUtils.clamp(2.2 - this.glideSpeed * 0.06, 0.8, 2.2);
       if (input.moveX !== 0) {
-        this.yaw += input.moveX * turnRate * dt;
-        this.yawVel = THREE.MathUtils.lerp(this.yawVel, input.moveX * turnRate, Math.min(1, dt * 6));
+        this.yaw -= input.moveX * turnRate * dt;
+        this.yawVel = THREE.MathUtils.lerp(this.yawVel, -input.moveX * turnRate, Math.min(1, dt * 6));
       } else {
         this.yawVel = THREE.MathUtils.lerp(this.yawVel, 0, Math.min(1, dt * 4));
       }
