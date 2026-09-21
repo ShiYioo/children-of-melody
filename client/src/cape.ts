@@ -59,22 +59,29 @@ export class CapeSim {
    * @param wingPose 滑翔翼形目标姿态（与 pos 同构）；物理位形与它按 wingBlend 插值后输出，
    *                 物理内部状态不受影响，退出滑翔时布料无跳变地回到纯仿真
    * @param wingBlend 0=纯物理 1=纯翼形
-   * @param bodyPitch 身体俯仰（鞠躬/跑动前倾/滑翔俯冲）；碰撞球与前界必须与钉点一样跟随，
+   * @param bodyPitch 身体俯仰（鞠躬/跑动前倾/滑翔俯冲）；碰撞体与前界必须与钉点一样跟随，
    *                  否则人弯腰时布被「直立身体」的隐形墙拦在原地（鞠躬披风不跟身）
-   * @param pivotY 身体根节点 y 偏移（碰撞球按「先旋转后平移」同渲染变换跟随）
+   * @param pivotY 身体根节点 y 偏移（碰撞体按「先旋转后平移」同渲染变换跟随）
+   * @param bodyScaleXZ 身体横缩放（落地压缩时 XZ 鼓大 ~10%，碰撞体要跟着变大才不穿模）
    */
-  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0, bodyPitch = 0, pivotY = 0) {
+  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0, bodyPitch = 0, pivotY = 0, bodyScaleXZ = 1) {
     const gravity = this.opts.gravity ?? 14;
     const damping = this.opts.damping ?? 0.985;
     const iters = this.opts.iters ?? 5;
 
     const sinP = Math.sin(bodyPitch);
     const cosP = Math.cos(bodyPitch);
-    // 碰撞球心 = R·直立球心 + (0,pivotY,0)，与 bodyGroup 子节点的渲染变换严格一致
-    const torsoY = 0.8 * cosP + pivotY;
-    const torsoZ = 0.8 * sinP;
-    const headY = 1.16 * cosP + pivotY;
-    const headZ = 1.16 * sinP;
+    // ---- 碰撞体（与渲染网格同参数 + 布料余量）----
+    // 躯干渲染网格是 (0.345, 0.405, 0.30) 的椭球、中心 y0.62；旧的双球近似
+    // X 向比身体窄（0.312 < 0.345）、下背部完全在球外——披风穿背的结构性根源
+    const T_X = 0.357 * Math.max(1, bodyScaleXZ);
+    const T_Y = 0.412;
+    const T_Z = 0.312 * Math.max(1, bodyScaleXZ);
+    const H_R = 0.376 * Math.max(1, bodyScaleXZ); // 头球（渲染 r0.365 + 余量）
+    const torsoY = 0.62 * cosP + pivotY;
+    const torsoZ = 0.62 * sinP;
+    const headY = 1.18 * cosP + pivotY;
+    const headZ = 1.18 * sinP;
     // 前界随胸面前移：直立时 -0.06，鞠躬 0.6rad 时胸面移到 +0.4 一带；后仰不收紧（下限 -0.06）
     const frontBase = Math.max(-0.06, 0.9 * sinP + 0.3 * cosP - 0.36);
 
@@ -126,23 +133,48 @@ export class CapeSim {
             this.pos[ob + 2] += mz * (aPinned ? 2 : 1);
           }
         }
-        // 身体碰撞：躯干球 + 肩头球，把布推离；球心随身体俯仰移动（鞠躬时跟到身前）
+        // 身体碰撞：头=真球，躯干=与渲染网格同参的椭球（世界→身体局部反旋转→
+        // 单位椭球空间推出→转回世界），随俯仰/蹲伸全程贴合身体轮廓
         for (let v = this.cols; v < n; v++) {
           const o = v * 3;
-          for (let s = 0; s < 2; s++) {
-            const cy = s === 0 ? torsoY : headY;
-            const cz = s === 0 ? torsoZ : headZ;
-            const r = s === 0 ? 0.36 : 0.33;
+          // 头球
+          {
+            const hx = this.pos[o];
+            const hy = this.pos[o + 1] - headY;
+            const hz = this.pos[o + 2] - headZ;
+            const hd2 = hx * hx + hy * hy + hz * hz;
+            if (hd2 < H_R * H_R && hd2 > 1e-9) {
+              const d = Math.sqrt(hd2);
+              const push = (H_R - d) / d;
+              this.pos[o] += hx * push;
+              this.pos[o + 1] += hy * push;
+              this.pos[o + 2] += hz * push;
+            }
+          }
+          // 躯干椭球
+          {
             const dx = this.pos[o];
-            const dy = this.pos[o + 1] - cy;
-            const dz = this.pos[o + 2] - cz;
-            const d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < r * r && d2 > 1e-9) {
-              const d = Math.sqrt(d2);
-              const push = (r - d) / d;
-              this.pos[o] += dx * push;
-              this.pos[o + 1] += dy * push;
-              this.pos[o + 2] += dz * push;
+            const dyw = this.pos[o + 1] - torsoY;
+            const dzw = this.pos[o + 2] - torsoZ;
+            const ly = dyw * cosP + dzw * sinP; // 世界 → 身体局部（绕 X 反旋转）
+            const lz = -dyw * sinP + dzw * cosP;
+            const ex = dx / T_X;
+            const ey = ly / T_Y;
+            const ez = lz / T_Z;
+            const e2 = ex * ex + ey * ey + ez * ez;
+            if (e2 < 1 && e2 > 1e-9) {
+              const len = Math.sqrt(e2);
+              const ux = ex / len;
+              const uy = ey / len;
+              const uz = ez / len;
+              const fx = ux * T_X; // 椭球面点（身体局部）
+              const fy = uy * T_Y;
+              const fz = uz * T_Z;
+              const wy = fy * cosP - fz * sinP; // 身体局部 → 世界（绕 X 正旋转）
+              const wz = fy * sinP + fz * cosP;
+              this.pos[o] = fx;
+              this.pos[o + 1] = torsoY + wy;
+              this.pos[o + 2] = torsoZ + wz;
             }
           }
           // 单向前界：布面不能越过身体正面（防跳跃下落时被上掀风翻到身前穿模）
