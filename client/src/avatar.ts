@@ -856,7 +856,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             }
           }
         }
-        outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9);
+        outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9, bodyGroup.rotation.x, bodyGroup.position.y);
       }
 
       // 伊莱娜：展示动画（抬头段循环）做基底，状态用手写骨骼动作 + 根运动表达

@@ -59,11 +59,24 @@ export class CapeSim {
    * @param wingPose 滑翔翼形目标姿态（与 pos 同构）；物理位形与它按 wingBlend 插值后输出，
    *                 物理内部状态不受影响，退出滑翔时布料无跳变地回到纯仿真
    * @param wingBlend 0=纯物理 1=纯翼形
+   * @param bodyPitch 身体俯仰（鞠躬/跑动前倾/滑翔俯冲）；碰撞球与前界必须与钉点一样跟随，
+   *                  否则人弯腰时布被「直立身体」的隐形墙拦在原地（鞠躬披风不跟身）
+   * @param pivotY 身体根节点 y 偏移（碰撞球按「先旋转后平移」同渲染变换跟随）
    */
-  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0) {
+  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0, bodyPitch = 0, pivotY = 0) {
     const gravity = this.opts.gravity ?? 14;
     const damping = this.opts.damping ?? 0.985;
     const iters = this.opts.iters ?? 5;
+
+    const sinP = Math.sin(bodyPitch);
+    const cosP = Math.cos(bodyPitch);
+    // 碰撞球心 = R·直立球心 + (0,pivotY,0)，与 bodyGroup 子节点的渲染变换严格一致
+    const torsoY = 0.8 * cosP + pivotY;
+    const torsoZ = 0.8 * sinP;
+    const headY = 1.16 * cosP + pivotY;
+    const headZ = 1.16 * sinP;
+    // 前界随胸面前移：直立时 -0.06，鞠躬 0.6rad 时胸面移到 +0.4 一带；后仰不收紧（下限 -0.06）
+    const frontBase = Math.max(-0.06, 0.9 * sinP + 0.3 * cosP - 0.36);
 
     this.acc = Math.min(this.acc + dt, this.dt * 3);
     while (this.acc >= this.dt) {
@@ -87,8 +100,8 @@ export class CapeSim {
       // 约束松弛
       for (let it = 0; it < iters; it++) {
         // 前界随翼形混合放宽：滑翔时锚点跟随前倾的肩膀移到身体前方(z+)，
-        // 固定 -0.06 的前界会把翼根硬拽回来、撕裂肩缝
-        const frontZ = -0.06 + wingBlend * 1.5;
+        // 固定 -0.06 的前界会把翼根硬拽回来、撕裂肩缝（鞠躬前倾同理，见 frontBase）
+        const frontZ = Math.min(frontBase + wingBlend * 1.5, 1.55);
         for (const c of this.constraints) {
           const oa = c.a * 3;
           const ob = c.b * 3;
@@ -113,15 +126,16 @@ export class CapeSim {
             this.pos[ob + 2] += mz * (aPinned ? 2 : 1);
           }
         }
-        // 身体碰撞：躯干球 + 肩头球，把布推离；肩头球防止布翻越头顶到身前
+        // 身体碰撞：躯干球 + 肩头球，把布推离；球心随身体俯仰移动（鞠躬时跟到身前）
         for (let v = this.cols; v < n; v++) {
           const o = v * 3;
           for (let s = 0; s < 2; s++) {
-            const cy = s === 0 ? 0.8 : 1.16;
+            const cy = s === 0 ? torsoY : headY;
+            const cz = s === 0 ? torsoZ : headZ;
             const r = s === 0 ? 0.36 : 0.33;
             const dx = this.pos[o];
             const dy = this.pos[o + 1] - cy;
-            const dz = this.pos[o + 2];
+            const dz = this.pos[o + 2] - cz;
             const d2 = dx * dx + dy * dy + dz * dz;
             if (d2 < r * r && d2 > 1e-9) {
               const d = Math.sqrt(d2);
@@ -179,8 +193,8 @@ export class CapeSim {
     } else {
       attr.copyArray(this.pos);
     }
-    // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面（翼形混合时随锚点放宽）
-    const outFront = -0.06 + Math.min(1, wingBlend) * 1.5;
+    // 渲染前硬性前界：无论物理内部状态如何，输出几何绝不越过身体正面（翼形混合/前倾时随锚点放宽）
+    const outFront = Math.min(frontBase + Math.min(1, wingBlend) * 1.5, 1.55);
     for (let i = 0; i < attr.count; i++) {
       if (attr.getZ(i) > outFront) attr.setZ(i, outFront);
     }
