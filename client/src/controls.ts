@@ -145,6 +145,12 @@ export class PlayerControls {
       this.lastY = e.clientY;
     });
     dom.addEventListener("pointerup", () => (this.dragging = false));
+    // 拖拽转视角期间的浏览器原生行为全部拦下：框选文字 / 拖拽元素（幽灵图+复制/下载光标）
+    dom.addEventListener("mousedown", (e) => {
+      if ((e.target as HTMLElement).closest("input, textarea, [contenteditable]")) return;
+      e.preventDefault(); // 阻断传统文本框选的起点
+    });
+    document.addEventListener("dragstart", (e) => e.preventDefault());
     document.addEventListener("pointerlockchange", () => {
       this.mouseLocked = document.pointerLockElement === dom;
     });
