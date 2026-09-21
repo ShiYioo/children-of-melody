@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
+import { Spring } from "./motion";
 
 /**
  * 光遇风小人 · 二代
@@ -526,10 +527,26 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let riseBlend = 0; // 腾空上升（vy>0）
   let fallBlend = 0; // 腾空下落（vy<0，准备落地）
   let squash = 0; // 落地缓冲
+  let stretch = 0; // 起跳蹬伸（腾空瞬间拉长）
   let flapPulse = 0; // 扑翼脉冲
   let accelSm = 0; // 平滑加速度（起跑前倾/急停后仰）
   let lastSpeed = 0;
   let prevAir = 0;
+  let prevVy = 0; // 上一帧 vy（落地冲击强度用）
+
+  // ---- 动作物理通道（略欠阻尼弹簧：滞后起步、过头回弹、急停反仰） ----
+  const mTorsoX = new Spring(150, 17); // 躯干俯仰（起跑/急停/滑翔）
+  const mBankZ = new Spring(80, 11); // 转弯侧倾
+  const mGaitAmp = new Spring(110, 15); // 步态幅度（起步甩开、急停收步的过渡）
+  const mHeadLagY = new Spring(45, 8); // 头部转向滞后（先身转头再跟上）
+  // 动作轮盘的物理通道：表情目标先算增量，弹簧负责过渡（自动得到预备滞后与收尾回弹）
+  const mEmTorso = new Spring(85, 10);
+  const mEmArmX = new Spring(85, 10);
+  const mEmArmLZ = new Spring(85, 10);
+  const mEmArmRZ = new Spring(85, 10);
+  const mEmHeadX = new Spring(70, 9);
+  const mEmHeadZ = new Spring(70, 9);
+  const mEmHop = new Spring(160, 12); // cheer 小跳（欠阻尼多一点，弹起来）
   let handBlend = 0; // 牵手姿势混合 0-1
   let handSide = 1; // 对方在哪一侧（+1 右 / -1 左）
   let handFwd = 0; // 对方在前方分量（抬臂前后倾角）
@@ -611,6 +628,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       riseBlend = THREE.MathUtils.lerp(riseBlend, air > 0 && vy > 0.8 ? 1 : 0, Math.min(1, dt * 5));
       fallBlend = THREE.MathUtils.lerp(fallBlend, air > 0 && vy < -0.8 ? 1 : 0, Math.min(1, dt * 5));
       squash = Math.max(0, squash - dt * 4);
+      stretch = Math.max(0, stretch - dt * 3.2);
       flapPulse = Math.max(0, flapPulse - dt * 3.2);
       // 牵手姿势混合 & 方向（世界 → 本地）
       const handTarget = handDirWorld.lengthSq() > 1e-6 ? 1 : 0;
@@ -622,11 +640,67 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         handSide = lx >= 0 ? 1 : -1;
         handFwd = THREE.MathUtils.clamp(-lz / h, -1, 1);
       }
-      // 起跳蹬地：腾空第一帧快速屈膝蓄力
-      if (air > 0 && prevAir === 0) squash = Math.max(squash, 0.55);
+      // 起跳蹬伸/落地缓冲：腾空瞬间蹬地拉长（发力感），触地按落速压缩再弹回（重量感）
+      if (air > 0 && prevAir === 0) stretch = Math.max(stretch, 0.45);
+      if (air === 0 && prevAir > 0) squash = Math.max(squash, Math.min(0.85, 0.25 + Math.abs(prevVy) * 0.06));
       prevAir = air;
+      prevVy = vy;
       const airN = Math.max(jumpBlend, glideBlend);
       const ground = 1 - airN;
+
+      // ---- 动作轮盘：时间推进与目标增量（经典/伊莱娜共用时间线） ----
+      // 经典小人的表情不直接摆姿势：先算目标增量，经弹簧应用——
+      // 起手的预备滞后与收尾的过冲回弹由物理涌现，不用手写缓动
+      if (emoteName) {
+        emoteT += dt;
+        if (emoteT >= (EMOTE_DUR[emoteName] ?? 1.4)) emoteName = null;
+      }
+      const emoteP = emoteName ? emoteT / (EMOTE_DUR[emoteName] ?? 1.4) : 0;
+      const emoteEnv = emoteName ? Math.sin(Math.PI * Math.min(1, emoteP * 1.12)) : 0;
+      const emoteGrounded = air === 0 && speed < 0.4 && !sit;
+      let eTorso = 0, eArmX = 0, eArmLZ = 0, eArmRZ = 0, eHeadX = 0, eHeadZ = 0, eHop = 0;
+      if (emoteName && !elainaRoot) {
+        const p = emoteP;
+        const env = emoteEnv;
+        // 预备动作：发力前先反向蓄一下（鞠躬先微挺胸、欢呼先微蹲）——anticipation
+        const ant = p < 0.16 ? Math.sin((p / 0.16) * Math.PI) : 0;
+        switch (emoteName) {
+          case "wave": // 招手：右臂举高摆动
+            eArmRZ = -env * 2.15;
+            eArmX = -env * 0.2;
+            eHeadZ = env * 0.12;
+            break;
+          case "bow": // 鞠躬：先微挺再上身前倾，双手贴身
+            if (emoteGrounded) {
+              eTorso = -0.07 * ant + env * 0.6;
+              eArmX = env * 0.3 - 0.04 * ant;
+            }
+            break;
+          case "nod": // 点头：两连点
+            eHeadX = Math.sin(p * Math.PI * 4) * 0.3;
+            break;
+          case "stretch": // 伸懒腰：双臂上举后仰
+            eArmLZ = env * 2.3;
+            eArmRZ = -env * 2.3;
+            if (emoteGrounded) {
+              eTorso = -env * 0.14;
+              eHeadX = -env * 0.22;
+            }
+            break;
+          case "cheer": // 欢呼：先微蹲再双臂高举小跳
+            eArmLZ = env * (2.2 + Math.sin(p * Math.PI * 6) * 0.25);
+            eArmRZ = -env * (2.2 + Math.cos(p * Math.PI * 6) * 0.25);
+            if (emoteGrounded) eHop = Math.abs(Math.sin(p * Math.PI * 2.5)) * 0.16 * env - 0.05 * ant;
+            eHeadX = -env * 0.18;
+            break;
+          case "heart": // 比心：双手收到胸前
+            eArmX = -env * 1.15;
+            eArmLZ = env * 0.55;
+            eArmRZ = -env * 0.55;
+            eHeadZ = Math.sin(p * Math.PI * 2) * 0.15;
+            break;
+        }
+      }
 
       // 平滑加速度 → 前倾角（起跑前倾、急停后仰，光遇的重量感）
       const accelRaw = (speed - lastSpeed) / Math.max(dt, 1e-3);
@@ -634,31 +708,35 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       accelSm = THREE.MathUtils.lerp(accelSm, THREE.MathUtils.clamp(accelRaw, -12, 12), Math.min(1, dt * 5));
       const leanAcc = THREE.MathUtils.clamp(accelSm * 0.014, -0.16, 0.2);
 
-      // 落地缓冲的压扁恢复
-      const sq = 1 - squash * 0.16;
-      bodyGroup.scale.set(1 + squash * 0.1, sq, 1 + squash * 0.1);
+      // 落地压缩（横向鼓出）/ 起跳蹬伸（纵向拉长）——squash 与 stretch 独立并存
+      const sq = (1 - squash * 0.16) * (1 + stretch * 0.1);
+      bodyGroup.scale.set((1 + squash * 0.1) * (1 - stretch * 0.06), sq, (1 + squash * 0.1) * (1 - stretch * 0.06));
 
-      // 躯干：盘坐后靠 / 跑动前倾+加速度 / 滑翔大幅前倾
-      bodyGroup.rotation.x =
+      // 躯干：盘坐后靠 / 跑动前倾+加速度 / 滑翔大幅前倾——目标过弹簧，
+      // 起跑先滞后半拍再前倾过头回弹，急停后仰再回正（动作物理的核心通道）
+      const torsoTarget =
         -0.5 * sitLerp +
         (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
         0.76 * glideBlend +
         0.15 * jumpBlend * (1 - glideBlend);
-      // 压弯（整体侧倾）
+      bodyGroup.rotation.x = mTorsoX.step(torsoTarget, dt) + mEmTorso.step(eTorso, dt);
+      // 压弯（整体侧倾，过弹簧：入弯压肩回正带一点回弹）
       const groundBank = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
       const glideBank = THREE.MathUtils.clamp(-yawVel * 0.035, -0.22, 0.22) * glideBlend;
-      group.rotation.z = groundBank + glideBank;
-      // 重心左右晃（跳跳步的步感）
+      group.rotation.z = mBankZ.step(groundBank + glideBank, dt);
+      // 重心左右晃（跳跳步的步感）+ cheer 小跳（弹簧自带落地回弹）
       bodyGroup.rotation.z = (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp);
 
       bodyGroup.position.y =
         -0.3 * sitLerp +
         (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.055 * (0.45 + speedN) : Math.sin(t * 1.4) * 0.012) -
-        airN * 0.06;
+        airN * 0.06 +
+        mEmHop.step(eHop, dt);
 
       // ---- 四肢（两段关节：步态 → 空中分层 → 盘坐） ----
-      // 步态：大腿摆动、小腿在恢复期屈膝（相位差 ~1.15rad），手臂与同侧腿反相
-      const walkAmp = (speed > 0.2 ? 0.35 + speedN * 0.65 : 0) * ground * (1 - sitLerp);
+      // 步态：大腿摆动、小腿在恢复期屈膝（相位差 ~1.15rad），手臂与同侧腿反相。
+      // 幅度过弹簧：起步甩开、急停收步有半拍惯性，步频和身体重量对上
+      const walkAmp = mGaitAmp.step((speed > 0.2 ? 0.35 + speedN * 0.65 : 0) * ground * (1 - sitLerp), dt);
       const strideL = Math.sin(walkPhase);
       const strideR = Math.sin(walkPhase + Math.PI);
       const kneeBase = 0.5 + speedN * 0.6;
@@ -676,18 +754,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp;
 
       // 臂：walk 反相摆 + rise 后上摆 + fall 侧举 + glide 向前上方伸出（从翼面前缘探出，不被布盖住） + sit 放前
+      // 动作轮盘增量（弹簧）叠加在基础姿态上，替换原来的绝对覆盖
       const armSwL = -strideL;
       const armSwR = -strideR;
       armL.root.rotation.x =
-        armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp;
+        armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
+        mEmArmX.step(eArmX, dt);
       armR.root.rotation.x =
-        armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp;
-      armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp;
-      armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp;
+        armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
+        mEmArmX.x;
+      armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp + mEmArmLZ.step(eArmLZ, dt);
+      armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp + mEmArmRZ.step(eArmRZ, dt);
       // 肘：跑步更弯、滑翔前伸、其余自然微弯
       const elbow = -(0.3 + (0.35 + speedN * 0.55) * walkAmp + 0.25 * riseBlend + 0.5 * glideBlend + 0.15 * fallBlend) * (1 - sitLerp) - 0.35 * sitLerp;
       armL.joint.rotation.x = elbow;
       armR.joint.rotation.x = elbow;
+      // 招手时前臂绕轴摆（正弦快摆不弹簧化，弹簧只管起收）
+      armR.joint.rotation.z = emoteName === "wave" && !elainaRoot ? Math.sin(emoteP * Math.PI * 5) * 0.5 * emoteEnv : 0;
 
       // 牵手：内侧手臂抬向对方（走/飞时保持，光遇式牵着走）
       if (handBlend > 0.005) {
@@ -703,67 +786,12 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         }
       }
 
-      // 头：待机慢张望（光遇小人会东看看西看看）+ 滑翔抬头看前方
-      headGroup.rotation.y = (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26;
-      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground;
-      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7;
-
-      // ---- 动作轮盘：时间推进（经典/伊莱娜共用） ----
-      if (emoteName) {
-        emoteT += dt;
-        if (emoteT >= (EMOTE_DUR[emoteName] ?? 1.4)) {
-          emoteName = null;
-          bodyGroup.position.y = 0; // cheer 的小跳结束后复位
-        }
-      }
-      const emoteP = emoteName ? emoteT / (EMOTE_DUR[emoteName] ?? 1.4) : 0;
-      const emoteEnv = emoteName ? Math.sin(Math.PI * Math.min(1, emoteP * 1.12)) : 0;
-
-      // ---- 动作轮盘：经典小人覆盖手臂/头/上身 ----
-      if (emoteName && !elainaRoot) {
-        {
-          const p = emoteP;
-          const env = emoteEnv;
-          const grounded = air === 0 && speed < 0.4;
-          switch (emoteName) {
-            case "wave": // 招手：右臂举高摆动
-              armR.root.rotation.z = -0.16 - env * 2.15;
-              armR.root.rotation.x = -env * 0.2;
-              armR.joint.rotation.z = Math.sin(p * Math.PI * 5) * 0.5 * env;
-              headGroup.rotation.z = env * 0.12;
-              break;
-            case "bow": // 鞠躬：上身前倾，双手贴身
-              if (grounded && !sit) {
-                bodyGroup.rotation.x = env * 0.6;
-                armL.root.rotation.x = armR.root.rotation.x = env * 0.3;
-              }
-              break;
-            case "nod": // 点头：两连点
-              headGroup.rotation.x += Math.sin(p * Math.PI * 4) * 0.3;
-              break;
-            case "stretch": // 伸懒腰：双臂上举后仰
-              armL.root.rotation.z += env * 2.3;
-              armR.root.rotation.z -= env * 2.3;
-              if (grounded && !sit) {
-                bodyGroup.rotation.x -= env * 0.14;
-                headGroup.rotation.x -= env * 0.22;
-              }
-              break;
-            case "cheer": // 欢呼：双臂高举小跳
-              armL.root.rotation.z += env * (2.2 + Math.sin(p * Math.PI * 6) * 0.25);
-              armR.root.rotation.z -= env * (2.2 + Math.cos(p * Math.PI * 6) * 0.25);
-              if (grounded && !sit) bodyGroup.position.y = Math.abs(Math.sin(p * Math.PI * 2.5)) * 0.16 * env;
-              headGroup.rotation.x -= env * 0.18;
-              break;
-            case "heart": // 比心：双手收到胸前
-              armL.root.rotation.x = armR.root.rotation.x = -env * 1.15;
-              armL.root.rotation.z += env * 0.55;
-              armR.root.rotation.z -= env * 0.55;
-              headGroup.rotation.z = Math.sin(p * Math.PI * 2) * 0.15;
-              break;
-          }
-        }
-      }
+      // 头：待机慢张望 + 滑翔抬头看前方 + 转向滞后（身先转头后跟，弱弹簧串出 secondary motion）
+      headGroup.rotation.y =
+        (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26 +
+        mHeadLagY.step(-THREE.MathUtils.clamp(yawVel * 0.09, -0.45, 0.45), dt);
+      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground + mEmHeadZ.step(eHeadZ, dt);
+      headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7 + mEmHeadX.step(eHeadX, dt);
 
       // 没有专用飞行动画的导入模型也随状态调整整体姿态，避免在空中直立行走。
       if (importedModel && !elainaRoot) {
