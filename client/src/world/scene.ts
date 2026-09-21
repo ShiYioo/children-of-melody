@@ -87,6 +87,50 @@ export function createWorld(container: HTMLElement): World {
   const clouds = createClouds();
   scene.add(clouds.group);
 
+  // ---- 远岛剪影：地平线上的层叠山影，画面纵深（随相位染色，不受雾影响） ----
+  const islandCv = document.createElement("canvas");
+  islandCv.width = 256;
+  islandCv.height = 128;
+  {
+    const ictx = islandCv.getContext("2d")!;
+    ictx.fillStyle = "#ffffff";
+    // 三层叠出岛影轮廓：远峰-主岛-近脚
+    const blob = (cx: number, cy: number, rx: number, ry: number) => {
+      ictx.beginPath();
+      ictx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ictx.fill();
+    };
+    blob(128, 108, 120, 26);
+    blob(96, 88, 70, 30);
+    blob(168, 92, 60, 22);
+    blob(128, 72, 34, 26);
+    blob(110, 62, 18, 18);
+    // 底边羽化进海面
+    const fade = ictx.createLinearGradient(0, 92, 0, 128);
+    fade.addColorStop(0, "rgba(255,255,255,1)");
+    fade.addColorStop(1, "rgba(255,255,255,0)");
+    ictx.globalCompositeOperation = "destination-out";
+    ictx.fillStyle = fade;
+    ictx.fillRect(0, 92, 256, 36);
+    ictx.globalCompositeOperation = "source-over";
+  }
+  const islandTex = new THREE.CanvasTexture(islandCv);
+  const farIslandMats: THREE.MeshBasicMaterial[] = [];
+  const farIslands = new THREE.Group();
+  for (let i = 0; i < 6; i++) {
+    const m = new THREE.MeshBasicMaterial({ map: islandTex, transparent: true, depthWrite: false, fog: false, opacity: 0.85 });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), m);
+    const ang = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
+    const d = 380 + Math.random() * 170;
+    const w = 170 + Math.random() * 150;
+    mesh.position.set(Math.cos(ang) * d, 14 + Math.random() * 22, Math.sin(ang) * d);
+    mesh.scale.set(w, w * (0.16 + Math.random() * 0.1), 1);
+    mesh.lookAt(0, mesh.position.y * 0.6, 0);
+    farIslandMats.push(m);
+    farIslands.add(mesh);
+  }
+  scene.add(farIslands);
+
   const kit = createToonKit();
   const props = createProps(kit);
   scene.add(props.group);
@@ -151,7 +195,12 @@ export function createWorld(container: HTMLElement): World {
   window.addEventListener("resize", resize);
 
   // ---- 昼夜循环：四阶段关键帧（黄昏→夜→黎明→白昼），平滑插值 ----
-  const C = (hex: string) => new THREE.Color(hex);
+  // 色板统一降饱和 15%（光遇的克制感：水彩晕染，不是高饱和卡通）
+  const C = (hex: string) => {
+    const c = new THREE.Color(hex);
+    const l = (c.r + c.g + c.b) / 3;
+    return c.lerp(new THREE.Color(l, l, l), 0.15);
+  };
   interface Phase {
     sky: SkyPalette;
     fogColor: THREE.Color;
@@ -266,6 +315,9 @@ export function createWorld(container: HTMLElement): World {
       night: skyPal.night,
     });
     clouds.setPhase(skyPal.night, warm);
+    // 远岛剪影随相位染色：雾色与天空中段的混合再压暗（大气透视的层次）
+    const silC = (scene.fog as THREE.FogExp2).color.clone().lerp(skyPal.mid, 0.5).multiplyScalar(0.8 - skyPal.night * 0.25);
+    for (const m of farIslandMats) m.color.copy(silC);
   }
   setDayPhase(0);
 

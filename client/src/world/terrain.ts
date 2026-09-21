@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { terrainHeight } from "../heightfield";
+import { painterlyGradient, brushTexture } from "./toon";
 
 /**
  * 岛屿地形网格：顶点着色出绘画感的柔和色带——
@@ -66,7 +67,8 @@ export function createTerrain(): THREE.Mesh {
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
 
-  const mat = new THREE.MeshToonMaterial({ vertexColors: true });
+  // 油画渐变 + 手绘笔触（与全岛 toon 材质同一套画风）
+  const mat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: painterlyGradient(), map: brushTexture() });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = "terrain";

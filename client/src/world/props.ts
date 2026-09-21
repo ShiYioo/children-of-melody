@@ -9,6 +9,23 @@ import type { ToonKit } from "./toon";
  * 灯塔山丘的灯塔、篝火广场的石圈与木凳。
  */
 
+/** 几何有机化：沿径向做低频噪声鼓包——破掉完美球体的"程序图元"感，像手捏的 */
+function organic(geo: THREE.BufferGeometry, amount: number, freq: number, seed: number): THREE.BufferGeometry {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const n =
+      Math.sin(v.x * freq + seed) * Math.cos(v.y * freq * 1.31 + seed * 1.7) +
+      0.6 * Math.sin(v.z * freq * 1.73 - seed * 2.1) * Math.cos(v.x * freq * 0.79 + seed);
+    const len = v.length() || 1;
+    v.addScaledVector(v.clone().divideScalar(len), n * amount);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
 // ---------- 树（光遇式：高干微倾 + 大而扁的圆冠，像画出来的） ----------
 function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Group {
   const g = new THREE.Group();
@@ -34,9 +51,10 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
   ];
   const cTop = new THREE.Color("#bfe3ab");
   const cSide = new THREE.Color("#8cc487");
-  puffs.forEach((p) => {
-    const s = new THREE.SphereGeometry(p[3], 14, 12);
+  puffs.forEach((p, pi) => {
+    const s = new THREE.SphereGeometry(p[3], 16, 13);
     s.scale(1, p[4], 1);
+    organic(s, p[3] * 0.13, 1.9, pi * 3.7 + x * 0.13 + z * 0.17); // 手捏的不规则鼓包
     s.translate(p[0], p[1], p[2]);
     // 顶亮下暗的顶点色（画出来的立体感）
     const col = new Float32Array(s.attributes.position.count * 3);
@@ -68,9 +86,10 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
 
 // ---------- 岩石（半埋的圆润大卵石，顶面可以跳上去站） ----------
 function makeRock(kit: ToonKit, x: number, z: number, s: number): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(s, 12, 10);
+  const geo = new THREE.SphereGeometry(s, 16, 13);
   const ry = 0.62 + Math.random() * 0.25;
   geo.scale(1.15, ry, 0.9 + Math.random() * 0.3);
+  organic(geo, s * 0.11, 1.6, x * 0.21 + z * 0.15); // 卵石的不规则起伏，不再是完美椭球
   const m = new THREE.Mesh(geo, kit.mat(Math.random() < 0.5 ? "#a79fd0" : "#9a94c4"));
   const h = terrainHeight(x, z);
   m.position.set(x, h + s * 0.1, z); // 稍稍陷入地面
