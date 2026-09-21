@@ -145,10 +145,22 @@ export class PlayerControls {
       this.lastY = e.clientY;
     });
     dom.addEventListener("pointerup", () => (this.dragging = false));
-    // 拖拽转视角期间的浏览器原生行为全部拦下：框选文字 / 拖拽元素（幽灵图+复制/下载光标）
-    dom.addEventListener("mousedown", (e) => {
-      if ((e.target as HTMLElement).closest("input, textarea, [contenteditable]")) return;
-      e.preventDefault(); // 阻断传统文本框选的起点
+    // 拖拽转视角期间的浏览器原生行为与下载扩展(IDM/迅雷类"框选下载")全部拦下。
+    // 用 document 捕获阶段：页面脚本先于 document_idle 注入的内容脚本注册，
+    // 在事件到达扩展监听器之前就 stopImmediatePropagation（指针事件不受影响，转视角照常）
+    document.addEventListener(
+      "mousedown",
+      (e) => {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest?.("input, textarea, [contenteditable]")) return; // 表单交互不受影响
+        e.preventDefault(); // 阻断传统文本框选起点
+        e.stopImmediatePropagation(); // 框选下载扩展靠 mousedown 起手，掐在起点
+      },
+      true
+    );
+    // Alt+拖拽是常见下载扩展的框选触发键，Alt 本身还会唤起浏览器菜单栏——吞掉
+    window.addEventListener("keydown", (e) => {
+      if (e.altKey) e.preventDefault();
     });
     document.addEventListener("dragstart", (e) => e.preventDefault());
     document.addEventListener("pointerlockchange", () => {

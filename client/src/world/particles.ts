@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { terrainHeight } from "../heightfield";
+import { terrainHeight, WATER_LEVEL } from "../heightfield";
 
 /**
  * 漂浮光尘（岛上处处可见的暖色微光）、
@@ -9,6 +9,21 @@ import { terrainHeight } from "../heightfield";
 interface DriftPoints {
   points: THREE.Points;
   update: (t: number) => void;
+}
+
+const DRY_GROUND_MARGIN = 0.35;
+
+/** 粒子会在着色器里水平漂移；整段漂移范围都必须留在旱地上。 */
+function driftStaysOnDryGround(x: number, z: number, drift: number): boolean {
+  const dryHeight = WATER_LEVEL + DRY_GROUND_MARGIN;
+  // x/z 使用不同频率摆动，长期会覆盖 [-drift, drift]²，而不只是一条圆周。
+  // 取 5×5 网格检查整个包围盒；0.35m 的高度余量覆盖采样点之间的岸坡变化。
+  for (let ix = -2; ix <= 2; ix++) {
+    for (let iz = -2; iz <= 2; iz++) {
+      if (terrainHeight(x + ix * drift * 0.5, z + iz * drift * 0.5) <= dryHeight) return false;
+    }
+  }
+  return true;
 }
 
 /** 通用：加法混合的漂浮光点，缓慢游移 */
@@ -29,17 +44,16 @@ function makeDriftPoints(opts: {
   const base = new Float32Array(count * 3);
   const phase = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    // 只落在旱地上（地形高于水面 0.35m 余量）：闪烁光点悬在暗水面上会被 Bloom
-    // 放大成整片湖"蹦迪"——用地形高度做拒绝采样，不再依赖半径估算
-    let x = 0;
-    let z = 0;
-    for (let tries = 0; tries < 10; tries++) {
+    // 闪烁光点悬在暗水面上会被 Bloom 放大成整片湖“蹦迪”。不仅检查初始落点，
+    // 还检查着色器中的完整漂移范围；持续采样到合格，避免尝试耗尽后把水面坐标写进去。
+    let x: number;
+    let z: number;
+    do {
       const a = Math.random() * Math.PI * 2;
       const r = Math.sqrt(Math.random()) * area.r;
       x = cx + Math.cos(a) * r;
       z = cz + Math.sin(a) * r;
-      if (terrainHeight(x, z) > 0.9) break;
-    }
+    } while (!driftStaysOnDryGround(x, z, drift));
     const y = area.yMin + Math.random() * (area.yMax - area.yMin);
     base[i * 3] = x;
     base[i * 3 + 1] = y;
@@ -96,7 +110,6 @@ function makeDriftPoints(opts: {
   return { points, update: (t) => (mat.uniforms.uTime.value = t) };
 }
 
-/** 全岛漂浮的暖色光尘 */
 /** 全岛漂浮的暖色光尘（落点按地形高度过滤，只出现在旱地上空） */
 export function createMotes(): DriftPoints {
   return makeDriftPoints({
