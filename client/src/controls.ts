@@ -325,6 +325,16 @@ export class PlayerControls {
     const s = this.state;
     const speedH = this.phys.horizSpeed;
     const glideHeld = this.phys.gliding;
+    // 滑翔时镜头缓慢跟上航向：转弯时镜头自然跟到角色背后（光遇的跟随机），
+    // 鼠标随时可以拽走。没有这层跟随，俯冲后用鼠标"转向"只转镜头不转航向，
+    // 体感就是"转不动"
+    if (glideHeld) {
+      const heading = this.phys.yaw + Math.PI; // 相机在角色正后方的 camYaw
+      let d = heading - this.camYaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      this.camYaw += d * Math.min(1, dt * 1.4);
+    }
     // 弹簧只挂在跟随焦点上：玩家移动的跟随带一点呼吸感。
     // 鼠标转视角是直接操作，必须 1:1 立即响应——弹簧若挂在相机位置上，
     // 快速转动时轨道目标绕焦点瞬移，弹簧追不上再触发距离保护直贴，视角就会猛跳
