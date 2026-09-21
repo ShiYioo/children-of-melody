@@ -548,6 +548,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const mEmHeadX = new Spring(70, 9);
   const mEmHeadZ = new Spring(70, 9);
   const mEmHop = new Spring(160, 12); // cheer 小跳（欠阻尼多一点，弹起来）
+  // 待机小动作：站立久了会重心转移/背手/歪头（光遇的小人会自己"活着"），慢弹簧进出场
+  let idleT = 0; // 连续站立时长
+  let idleAct = 0; // 0 无 / 1 重心转移 / 2 背手 / 3 歪头
+  let idleActT = 0;
+  const mIdleLean = new Spring(18, 7); // 重心侧倾（很慢）
+  const mIdleArmX = new Spring(26, 8); // 双臂后收（背手）
+  const mIdleHeadZ = new Spring(22, 7); // 歪头
   // 伊莱娜的根部动作物理（俯仰/升降/侧倾/步幅：起跑、急停、躺卧起身都带惯性过渡）
   const mElainaPitch = new Spring(90, 16);
   const mElainaLift = new Spring(120, 20);
@@ -628,8 +635,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const speedN = Math.min(1, speed / 7.2);
       const vy = state.vy ?? 0;
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
-      // 步频随速度；转向也推进步频——原地转身时小腿跟着交替碎步，不再平脚碾转
-      walkPhase += dt * (3.0 + speed * 2.4 + Math.min(6, Math.abs(yawVel)) * 1.4);
+      // 步频与地面速度挂钩：步长随幅度放大（走小步跑大步），脚下打滑的本质是步频和位移脱钩。
+      // 转向仍推进步频（转身碎步）
+      const strideLen = 0.34 + 0.5 * speedN;
+      const stepRate = THREE.MathUtils.clamp((Math.PI * speed) / strideLen, 3.0, 24);
+      walkPhase += dt * (stepRate + Math.min(6, Math.abs(yawVel)) * 1.4);
       jumpBlend = THREE.MathUtils.lerp(jumpBlend, air > 0 ? 1 : 0, Math.min(1, dt * 6));
       glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
       riseBlend = THREE.MathUtils.lerp(riseBlend, air > 0 && vy > 0.8 ? 1 : 0, Math.min(1, dt * 5));
@@ -709,6 +719,23 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         }
       }
 
+      // ---- 待机小动作：连续站立超 6 秒随机来一个（重心转移/背手/歪头），走动/坐下/表情即打断 ----
+      if (speed < 0.2 && air === 0 && !sit && !emoteName && !elainaRoot) {
+        idleT += dt;
+        idleActT += dt;
+        if (idleAct === 0 && idleT > 6 && idleActT > 5) {
+          idleAct = 1 + Math.floor(Math.random() * 3);
+          idleActT = 0;
+        } else if (idleAct > 0 && idleActT > 8) {
+          idleAct = 0;
+          idleActT = 0;
+        }
+      } else {
+        idleT = 0;
+        idleAct = 0;
+        idleActT = 0;
+      }
+
       // 平滑加速度 → 前倾角（起跑前倾、急停后仰，光遇的重量感）
       const accelRaw = (speed - lastSpeed) / Math.max(dt, 1e-3);
       lastSpeed = speed;
@@ -749,9 +776,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       // 侧移倾身：横移时向移动方向压身（朝向右移 → 顶向右倾 → rotation.z 为负）
       const latV = (state.vx ?? 0) * Math.cos(group.rotation.y) - (state.vz ?? 0) * Math.sin(group.rotation.y);
       const strafeLean = THREE.MathUtils.clamp(-latV * 0.02, -0.1, 0.1) * ground * (1 - sitLerp);
-      // 重心左右晃（跳跳步的步感）+ cheer 小跳（弹簧自带落地回弹）
+      // 重心左右晃（跳跳步的步感）+ 侧移倾身 + 待机重心转移 + cheer 小跳（弹簧自带落地回弹）
       bodyGroup.rotation.z =
-        (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp) + strafeLean;
+        (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp) +
+        strafeLean +
+        mIdleLean.step(idleAct === 1 ? 0.06 : 0, dt);
 
       bodyGroup.position.y =
         -0.3 * sitLerp +
@@ -787,10 +816,12 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const armSwR = -strideR;
       armL.root.rotation.x =
         armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
-        mEmArmX.step(eArmX, dt);
+        mEmArmX.step(eArmX, dt) +
+        mIdleArmX.step(idleAct === 2 ? 0.38 : 0, dt);
       armR.root.rotation.x =
         armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
-        mEmArmX.x;
+        mEmArmX.x +
+        mIdleArmX.x;
       armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp + mEmArmLZ.step(eArmLZ, dt);
       armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp + mEmArmRZ.step(eArmRZ, dt);
       // 肘：跑步更弯、滑翔前伸、其余自然微弯
@@ -818,7 +849,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       headGroup.rotation.y =
         (1 - speedN) * ground * (1 - sitLerp) * Math.sin(t * 0.33 + opts.hue) * 0.26 +
         mHeadLagY.step(-THREE.MathUtils.clamp(yawVel * 0.09, -0.45, 0.45), dt);
-      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground + mEmHeadZ.step(eHeadZ, dt);
+      headGroup.rotation.z = Math.sin(t * 1.1 + opts.hue) * 0.035 * ground + mEmHeadZ.step(eHeadZ, dt) + mIdleHeadZ.step(idleAct === 3 ? 0.15 : 0, dt);
       headGroup.rotation.x = Math.sin(t * 0.9) * 0.02 + speedN * 0.1 - glideBlend * 0.7 + mEmHeadX.step(eHeadX, dt);
 
       // 没有专用飞行动画的导入模型也随状态调整整体姿态，避免在空中直立行走。
