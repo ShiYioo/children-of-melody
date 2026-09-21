@@ -479,6 +479,7 @@ chatInput.maxLength = 80;
 chatInput.placeholder = "说点什么…（Enter 发送，Esc 取消）";
 chatInput.autocomplete = "off";
 chatInput.className = "chat-input";
+chatInput.style.display = "none"; // 内联状态即真值：Enter 判断读的就是它，不能只靠 CSS 隐藏
 document.body.appendChild(chatInput);
 
 function openChat() {
