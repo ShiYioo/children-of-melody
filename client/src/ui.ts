@@ -41,6 +41,8 @@ export function createUI(handlers: {
     }, ms);
   };
   const trackModal = $("trackModal");
+  const trackTitle = $("trackTitle");
+  const trackSubtitle = $("trackSubtitle");
   const trackClose = $("trackClose");
   const trackGrid = $("trackGrid");
   const songGrid = $("songGrid");
@@ -99,6 +101,7 @@ export function createUI(handlers: {
     const card = document.createElement("button");
     card.className = "track-card";
     card.dataset.id = String(t.id);
+    card.title = t.desc;
     card.innerHTML = `<div class="dot" style="background:${t.color};box-shadow:0 0 10px ${t.color}"></div>
       <div class="nm">${t.name}</div><div class="ds">${t.desc}</div>`;
     card.addEventListener("click", () => {
@@ -131,6 +134,7 @@ export function createUI(handlers: {
         card.dataset.song = s.id;
         card.dataset.trackId = String(trackId);
         card.dataset.name = displayName;
+        card.title = "我的歌 · 离岛即收";
         card.innerHTML = `<div class="dot" style="background:${meta.color};box-shadow:0 0 10px ${meta.color}"></div>
           <div class="nm">${escapeHtml(displayName.slice(0, 18))}</div><div class="ds">我的歌 · 离岛即收</div>`;
         card.addEventListener("click", () => {
@@ -251,6 +255,7 @@ export function createUI(handlers: {
       npPlay.setAttribute("aria-label", npPlay.title);
       musicButton.classList.toggle("playing", playing);
       musicButton.classList.toggle("paused", mode === "paused");
+      trackSubtitle.textContent = mode === "none" ? "选择一首陪你漫游" : mode === "paused" ? "已暂停 · 按 P 继续" : "正在播放 · 会随距离渐明渐暗";
       refreshIcons();
     },
     setNowPlaying(trackId: number, songName = "") {
@@ -258,6 +263,7 @@ export function createUI(handlers: {
       currentSongName = songName;
       const meta = trackMeta(trackId, songName);
       if (trackId >= 0 && meta.name) {
+        trackTitle.textContent = meta.name;
         musicButton.style.setProperty("--track-color", meta.color);
         musicButton.title = `${meta.name} · 打开曲库 · P 播放/暂停`;
         musicButton.setAttribute("aria-label", musicButton.title);
@@ -268,6 +274,7 @@ export function createUI(handlers: {
           c.classList.toggle("active", Number((c as HTMLElement).dataset.trackId) === trackId);
         });
       } else {
+        trackTitle.textContent = "随身的歌";
         musicButton.style.removeProperty("--track-color");
         musicButton.title = "打开曲库";
         musicButton.setAttribute("aria-label", musicButton.title);

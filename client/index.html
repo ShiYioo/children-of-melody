@@ -174,50 +174,60 @@
     body.playing #hints { animation: hint-away .8s ease 8s forwards; }
     @keyframes hint-away { to { opacity: 0; visibility: hidden; } }
 
-    /* 曲库底部抽屉。 */
+    /* 曲库使用与右下操作菜单相同的紧凑浮层语言。 */
     #trackModal {
       position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center;
-      padding: 18px; background: rgba(15, 26, 37, .18); opacity: 0; visibility: hidden; pointer-events: none;
-      transition: opacity .25s ease, visibility .25s;
+      padding: 0 14px calc(var(--safe-bottom) + 52px); background: transparent;
+      opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, visibility .18s;
     }
     #trackModal.open { opacity: 1; visibility: visible; pointer-events: auto; }
     #trackModal .box {
-      width: min(680px, 100%); max-height: min(72vh, 620px); padding: 18px; overflow-y: auto;
-      border-radius: 8px; background: var(--glass-strong); transform: translateY(18px); transition: transform .3s ease;
+      width: min(410px, 100%); max-height: min(68vh, 520px); padding: 8px; overflow-y: auto;
+      border-radius: 7px; transform: translateY(6px) scale(.98); transform-origin: bottom center;
+      transition: transform .18s ease; scrollbar-width: thin;
     }
     #trackModal.open .box { transform: none; }
-    .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .modal-head { min-height: 39px; display: flex; align-items: center; gap: 6px; padding: 0 1px 7px; margin-bottom: 7px; border-bottom: 1px solid var(--line); }
     .modal-head > div { flex: 1; min-width: 0; }
-    #trackModal h2 { font-size: 15px; font-weight: 500; }
-    #trackModal .sub { margin-top: 2px; color: var(--ink-faint); font-size: 10px; }
-    #trackGrid, #songGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    #trackModal h2 { font-size: 11px; font-weight: 500; }
+    #trackModal .sub { margin-top: 2px; overflow: hidden; color: var(--ink-faint); font-size: 8px; white-space: nowrap; text-overflow: ellipsis; }
+    #trackModal .icon-btn { width: 30px; height: 30px; }
+    #trackModal .icon-btn svg { width: 14px; height: 14px; }
+    #trackGrid, #songGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
     .track-card {
-      min-height: 64px; padding: 10px; text-align: left; color: var(--ink); background: rgba(255, 250, 240, .04);
-      border: 1px solid transparent; border-radius: 6px; cursor: pointer; transition: background .2s, border-color .2s;
+      min-width: 0; min-height: 40px; display: grid; grid-template-columns: 7px minmax(0, 1fr); align-items: center; gap: 7px;
+      padding: 0 7px; text-align: left; color: var(--ink-soft); background: transparent;
+      border: 1px solid transparent; border-radius: 4px; cursor: pointer; transition: background .18s, border-color .18s, color .18s;
     }
-    .track-card:hover { background: rgba(255, 250, 240, .1); }
-    .track-card.active { border-color: var(--line-active); background: rgba(255, 241, 199, .1); }
-    .track-card .dot { width: 6px; height: 6px; margin-bottom: 7px; border-radius: 50%; }
-    .track-card .nm { overflow: hidden; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-    .track-card .ds { margin-top: 3px; overflow: hidden; color: var(--ink-faint); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
-    .source-details { margin-top: 10px; border-top: 1px solid var(--line); }
-    .source-details summary { padding: 11px 2px 5px; color: var(--ink-soft); font-size: 10px; cursor: pointer; list-style: none; }
+    .track-card:hover { color: var(--ink); background: rgba(255, 250, 240, .08); border-color: var(--line); }
+    .track-card.active { color: var(--ink); border-color: var(--line-active); background: rgba(255, 241, 199, .09); }
+    .track-card .dot { grid-row: 1; width: 6px; height: 6px; margin: 0; border-radius: 50%; }
+    .track-card .nm { grid-column: 2; overflow: hidden; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+    .track-card .ds { display: none; }
+    .source-details { margin-top: 7px; border-top: 1px solid var(--line); }
+    .source-details summary {
+      min-height: 32px; display: flex; align-items: center; padding: 0 4px;
+      color: var(--ink-soft); font-size: 9px; cursor: pointer; list-style: none;
+    }
+    .source-details summary:hover { color: var(--ink); }
     .source-details summary::-webkit-details-marker { display: none; }
-    .source-details summary::before { content: "+"; display: inline-block; width: 15px; color: var(--ink-faint); }
+    .source-details summary::before { content: "+"; width: 15px; color: var(--ink-faint); }
     .source-details[open] summary::before { content: "−"; }
-    .url-row { display: grid; grid-template-columns: 1.2fr 1fr 34px; gap: 6px; padding-top: 6px; }
+    .url-row { display: grid; grid-template-columns: 1.15fr .85fr 30px; gap: 4px; padding: 1px 3px 5px; }
     .url-row input {
-      min-width: 0; height: 34px; padding: 0 10px; color: var(--ink); background: rgba(255, 255, 255, .05);
-      border: 1px solid var(--line); border-radius: 5px; outline: none; font-size: 10px;
+      min-width: 0; height: 30px; padding: 0 8px; color: var(--ink); background: rgba(255, 255, 255, .04);
+      border: 1px solid var(--line); border-radius: 4px; outline: none; font-size: 9px;
     }
     .url-row input::placeholder { color: var(--ink-faint); }
+    .source-details #songGrid { padding: 1px 3px 0; }
     .upload-card {
-      min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 7px;
-      color: var(--ink-soft); font-size: 10px; border: 1px dashed var(--line); border-radius: 6px; cursor: pointer;
+      min-height: 32px; display: flex; align-items: center; justify-content: center; gap: 6px; margin: 4px 3px 5px;
+      color: var(--ink-soft); font-size: 9px; border: 1px dashed var(--line); border-radius: 4px; cursor: pointer;
     }
-    .upload-card:hover { color: var(--ink); border-color: var(--line-active); }
+    .upload-card svg { width: 13px; height: 13px; }
+    .upload-card:hover { color: var(--ink); border-color: var(--line-active); background: rgba(255, 250, 240, .04); }
     .upload-card.uploading { opacity: .5; pointer-events: none; }
-    .songs-empty { grid-column: 1 / -1; padding: 8px 2px; color: var(--ink-faint); font-size: 10px; }
+    .songs-empty { grid-column: 1 / -1; padding: 6px 3px 8px; color: var(--ink-faint); font-size: 9px; }
 
     #toasts { position: fixed; top: calc(var(--safe-top) + 44px); left: 50%; z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 6px; transform: translateX(-50%); pointer-events: none; }
     .toast {
@@ -311,9 +321,8 @@
     @media (max-width: 720px) {
       #hints { display: none; }
       #nearbyWrap { top: var(--safe-top); width: 158px; }
-      #trackModal { padding: 0; }
-      #trackModal .box { width: 100%; max-height: 76vh; padding: 16px max(14px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 8px 8px 0 0; }
-      #trackGrid, #songGrid { grid-template-columns: repeat(2, 1fr); }
+      #trackModal { padding-right: 14px; padding-left: 14px; padding-bottom: calc(var(--safe-bottom) + 52px); }
+      #trackModal .box { width: min(410px, 100%); max-height: 68vh; }
       .url-row { grid-template-columns: 1fr 34px; }
       #urlNameInput { grid-column: 1 / -1; grid-row: 2; }
       #urlPlayBtn { grid-column: 2; grid-row: 1; }
@@ -383,7 +392,7 @@
   <div id="trackModal" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
     <section class="box panel">
       <header class="modal-head">
-        <div><h2 id="trackTitle">随身的歌</h2><p class="sub">音乐会随距离，在旅人之间渐明渐暗</p></div>
+        <div><h2 id="trackTitle">随身的歌</h2><p id="trackSubtitle" class="sub">选择一首陪你漫游</p></div>
         <button id="npPlay" class="icon-btn" title="播放" aria-label="播放"><i data-lucide="play"></i></button>
         <button id="trackClose" class="icon-btn" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
       </header>
