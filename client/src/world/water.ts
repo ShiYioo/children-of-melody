@@ -65,11 +65,10 @@ export function createWater(camera: THREE.Camera): {
       void main() {
         vec3 pos = position;
         vec2 xz = (modelMatrix * vec4(pos, 1.0)).xz;
-        // 岛内死水一刀切：波浪只存在于外海（r>48 开始过渡）。
-        // 湖底可能被噪声挖到海平面以下（出生点的湖就是），且水面网格 7m 一格——
-        // 单个顶点起伏就带动整片三角形倾斜，水线跟着扫。湖=镜子，与深度无关
+        // 岛内死水一刀切：浪只在外海（r>58 过渡到 74 满幅）且水深>1m。
+        // 岸环洼地（出生点看见的湖，r≈45-55）在岛界以内——无论多深都是镜子
         float depth = clamp((0.55 - terrainH(xz)) / 2.2, 0.0, 1.0);
-        float amp = smoothstep_(0.25, 0.62, depth) * smoothstep_(48.0, 66.0, length(xz));
+        float amp = smoothstep_(0.45, 0.75, depth) * smoothstep_(58.0, 74.0, length(xz));
         pos.y += waveH(xz, uTime) * amp;
         vWorld = (modelMatrix * vec4(pos, 1.0)).xyz;
 
@@ -137,7 +136,7 @@ export function createWater(camera: THREE.Camera): {
 
         // 海岸泡沫：贴着等高线的一条柔和亮带（岛内静水不脉动，浪只在外海）
         float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));
-        float waveAmpF = smoothstep_(0.25, 0.62, depth) * smoothstep_(48.0, 66.0, length(vWorld.xz));
+        float waveAmpF = smoothstep_(0.45, 0.75, depth) * smoothstep_(58.0, 74.0, length(vWorld.xz));
         float band = 0.5 + 0.5 * sin(depth * 20.0 - uTime * 1.8) * waveAmpF;
         float foam = shoreline * (0.42 + 0.38 * band);
         col = mix(col, vec3(1.0, 0.97, 0.9), foam * 0.6);
