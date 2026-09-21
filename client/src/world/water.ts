@@ -30,6 +30,7 @@ export function createWater(camera: THREE.Camera): {
       uniform float uTime;
       varying vec3 vWorld;
       varying vec3 vNormal;
+      varying float vAmp; // 波浪振幅系数（静水=0，波光随之熄灭）
 
       // 采样三层正弦浪，法线用有限差分
       float waveH(vec2 p, float t) {
@@ -69,6 +70,7 @@ export function createWater(camera: THREE.Camera): {
         // 岸环洼地（出生点看见的湖，r≈45-55）在岛界以内——无论多深都是镜子
         float depth = clamp((0.55 - terrainH(xz)) / 2.2, 0.0, 1.0);
         float amp = smoothstep_(0.45, 0.75, depth) * smoothstep_(58.0, 74.0, length(xz));
+        vAmp = amp;
         pos.y += waveH(xz, uTime) * amp;
         vWorld = (modelMatrix * vec4(pos, 1.0)).xyz;
 
@@ -91,6 +93,7 @@ export function createWater(camera: THREE.Camera): {
       uniform vec3 uSpecColor;
       varying vec3 vWorld;
       varying vec3 vNormal;
+      varying float vAmp;
 
       // ---- 地形高度场的 GLSL 复刻（与 heightfield.ts 保持一致）----
       float smoothstep_(float a, float b, float x) {
@@ -129,10 +132,11 @@ export function createWater(camera: THREE.Camera): {
         vec3 skyRef = mix(uSkyLo, uSkyHi, clamp(N.y, 0.0, 1.0));
         col = mix(col, skyRef, fres * 0.45);
 
-        // 太阳(夜=月亮)的粼粼波光
+        // 太阳(夜=月亮)的粼粼波光：只随浪出现（静水零波光），指数放低加增益减半——
+        // 高指数窄斑随法线每帧跳动，在夜里就是满水面的频闪灯
         vec3 R = reflect(-V, N);
-        float spec = pow(max(dot(R, uSunDir), 0.0), 90.0);
-        col += uSpecColor * spec * 1.2;
+        float spec = pow(max(dot(R, uSunDir), 0.0), 48.0) * vAmp;
+        col += uSpecColor * spec * 0.55;
 
         // 海岸泡沫：贴着等高线的一条柔和亮带（岛内静水不脉动，浪只在外海）
         float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));

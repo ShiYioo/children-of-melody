@@ -29,10 +29,17 @@ function makeDriftPoints(opts: {
   const base = new Float32Array(count * 3);
   const phase = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.sqrt(Math.random()) * area.r;
-    const x = cx + Math.cos(a) * r;
-    const z = cz + Math.sin(a) * r;
+    // 只落在旱地上（地形高于水面 0.35m 余量）：闪烁光点悬在暗水面上会被 Bloom
+    // 放大成整片湖"蹦迪"——用地形高度做拒绝采样，不再依赖半径估算
+    let x = 0;
+    let z = 0;
+    for (let tries = 0; tries < 10; tries++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * area.r;
+      x = cx + Math.cos(a) * r;
+      z = cz + Math.sin(a) * r;
+      if (terrainHeight(x, z) > 0.9) break;
+    }
     const y = area.yMin + Math.random() * (area.yMax - area.yMin);
     base[i * 3] = x;
     base[i * 3 + 1] = y;
@@ -90,25 +97,24 @@ function makeDriftPoints(opts: {
 }
 
 /** 全岛漂浮的暖色光尘 */
-/** 全岛漂浮的暖色光尘（只撒陆地上空 r<38——岸环洼地 r≈45+ 是湖，
- *  闪烁光点落在暗水面上+Bloom 放大 = 整片湖"蹦迪"） */
+/** 全岛漂浮的暖色光尘（落点按地形高度过滤，只出现在旱地上空） */
 export function createMotes(): DriftPoints {
   return makeDriftPoints({
     count: 380,
     color: "#ffe9b8",
-    area: { r: 38, yMin: 0.6, yMax: 13 },
+    area: { r: 52, yMin: 0.6, yMax: 13 },
     size: 0.5,
     drift: 1.4,
     opacity: 0.5,
   });
 }
 
-/** 林地里的萤光（淡绿偏暖，贴近树梢高度；中心收进内陆，最远 r≈30 不碰湖） */
+/** 林地里的萤光（淡绿偏暖，贴近树梢高度；落点地形过滤，不会漂到湖面） */
 export function createFireflies(): DriftPoints {
   return makeDriftPoints({
     count: 90,
     color: "#e5ffb0",
-    area: { r: 16, yMin: 1.2, yMax: 4.5 },
+    area: { r: 20, yMin: 1.2, yMax: 4.5 },
     size: 0.42,
     drift: 0.9,
     opacity: 0.75,
