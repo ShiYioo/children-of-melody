@@ -40,16 +40,41 @@ export function createWater(camera: THREE.Camera): {
         return h;
       }
 
+      float smoothstep_(float a, float b, float x) {
+        float t = clamp((x - a) / (b - a), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+      }
+      // 地形高度场的 GLSL 复刻（与 fragment 里的同一份，浅水判定用）
+      float terrainH(vec2 p) {
+        float r = length(p);
+        float ang = atan(p.y, p.x);
+        float ef = 0.82 + 0.14 * sin(ang * 3.0 + 1.7) + 0.07 * sin(ang * 7.0 + 0.4);
+        float rr = r / (58.0 * ef);
+        if (rr >= 1.0) return -1.6 - (rr - 1.0) * 60.0;
+        float h = 5.5 * pow(max(0.0, 1.0 - rr), 1.25) + 1.2;
+        vec2 d = p - vec2(26.0, -28.0);
+        h += 9.5 * exp(-dot(d, d) / 320.0);
+        float n = 0.8 * sin(p.x * 0.16 + 2.1) * cos(p.y * 0.13 - 1.2)
+                + 0.5 * sin(p.x * 0.31) * sin(p.y * 0.27 + 0.8);
+        h += n * smoothstep_(7.0, 20.0, r);
+        h = mix(h, 1.25, min(1.0, 1.15 * exp(-r * r / 72.0)));
+        h = mix(h, -1.6, smoothstep_(0.86, 1.0, rr));
+        return h;
+      }
+
       void main() {
         vec3 pos = position;
         vec2 xz = (modelMatrix * vec4(pos, 1.0)).xz;
-        pos.y += waveH(xz, uTime);
+        // 波浪随水深衰减：湖面/浅滩是静水（光遇的湖不涨潮），只有开阔海域起浪
+        float depth = clamp((0.55 - terrainH(xz)) / 2.2, 0.0, 1.0);
+        float amp = smoothstep_(0.08, 0.5, depth);
+        pos.y += waveH(xz, uTime) * amp;
         vWorld = (modelMatrix * vec4(pos, 1.0)).xyz;
 
         float e = 1.5;
         float hx = waveH(xz + vec2(e, 0.0), uTime) - waveH(xz - vec2(e, 0.0), uTime);
         float hz = waveH(xz + vec2(0.0, e), uTime) - waveH(xz - vec2(0.0, e), uTime);
-        vNormal = normalize(vec3(-hx, 2.0 * e, -hz));
+        vNormal = normalize(vec3(-hx * amp, 2.0 * e, -hz * amp));
 
         gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
       }
@@ -108,9 +133,10 @@ export function createWater(camera: THREE.Camera): {
         float spec = pow(max(dot(R, uSunDir), 0.0), 90.0);
         col += uSpecColor * spec * 1.2;
 
-        // 海岸泡沫：贴着等高线的一条柔和亮带
+        // 海岸泡沫：贴着等高线的一条柔和亮带（静水带不脉动，跟着浪一起安静）
         float shoreline = 1.0 - smoothstep_(0.0, 0.85, abs(th - 0.55));
-        float band = 0.5 + 0.5 * sin(depth * 20.0 - uTime * 1.8);
+        float waveAmpF = smoothstep_(0.08, 0.5, depth);
+        float band = 0.5 + 0.5 * sin(depth * 20.0 - uTime * 1.8) * waveAmpF;
         float foam = shoreline * (0.42 + 0.38 * band);
         col = mix(col, vec3(1.0, 0.97, 0.9), foam * 0.6);
 
