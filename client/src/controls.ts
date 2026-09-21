@@ -1,7 +1,7 @@
 import * as THREE from "three";
-import { terrainHeight, ISLAND_RADIUS, WATER_LEVEL } from "./heightfield";
-import { resolveColliders, standGroundHeight } from "./colliders";
+import { terrainHeight } from "./heightfield";
 import { SpringV3 } from "./motion";
+import { CharacterPhysics, MAX_FLAPS, type PhysicsEvent } from "./physics";
 
 /**
  * 光遇式操控 · 二代
@@ -24,7 +24,7 @@ export interface ControlsState {
   flaps: number; // 剩余扑翼 0-3
 }
 
-export const MAX_FLAPS = 3;
+export { MAX_FLAPS };
 
 export class PlayerControls {
   readonly state: ControlsState = {
@@ -37,13 +37,12 @@ export class PlayerControls {
     flaps: MAX_FLAPS,
   };
 
+  /** 角色物理核心（光遇手感状态机：地面/腾空/滑翔/游泳），直接驱动 state.pos */
+  private readonly phys = new CharacterPhysics(this.state.pos);
+
   camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
-  // ---- 滑翔能量飞行（光遇的滑翔是滑翔机：俯冲攒速度、拉起用速度换高度） ----
-  private glidePitch = 0; // 俯仰角：-0.55 俯冲 ~ +0.45 爬升（玩家可操控）
-  private glideSpeed = 0; // 空速=能量：俯冲充能、爬升耗能、阻力缓慢流失
-  private glideEngaged = false; // 滑翔物理是否接管（上升余势先自然衰减再接管）
   /** 相机跟随焦点弹簧（只平滑玩家移动的跟随；鼠标转视角是直接操作不走弹簧） */
   private readonly camSpring = new SpringV3(110, 19);
   private readonly _focusRaw = new THREE.Vector3();
@@ -51,38 +50,40 @@ export class PlayerControls {
   private readonly camLead = new THREE.Vector3();
   private readonly camFocus = new THREE.Vector3();
 
-  onLand: (() => void) | null = null;
+  onLand: ((impact: number) => void) | null = null;
   onFlap: (() => void) | null = null;
   onJump: (() => void) | null = null;
   onGlide: ((open: boolean) => void) | null = null;
   onSit: ((sitting: boolean) => void) | null = null;
+  /** 入水/出水（水花等待接） */
+  onWater: ((enter: boolean) => void) | null = null;
 
   /** 当前水平速度（米/秒，供动画使用） */
   get horizSpeed(): number {
-    return Math.hypot(this.vel.x, this.vel.z);
+    return this.phys.horizSpeed;
   }
 
   /** 当前垂直速度（米/秒，空中姿势分层用） */
   get verticalVel(): number {
-    return this.vy;
+    return this.phys.vel.y;
   }
 
   /** 水平速度向量（风线等特效使用） */
   get horizVel(): THREE.Vector3 {
-    return this.vel;
+    return this.phys.vel;
+  }
+
+  /** 滑翔物理状态（动画层读俯仰等） */
+  get physics(): CharacterPhysics {
+    return this.phys;
   }
 
   private keys = new Set<string>();
-  private vel = new THREE.Vector3(); // 水平速度
-  private vy = 0;
   private dragging = false;
   private lastX = 0;
   private lastY = 0;
   private jumpQueued = false;
   private spacePressedAt = 0;
-  private gliding = false;
-  private flapTimer = 0; // mov=4 的显示时长
-  private flapRegen = 0;
   private enabled = false;
   private led = false; // 被牵着：移动输入与物理都交给主循环的跟随逻辑
   private mouseLocked = false;
@@ -196,37 +197,20 @@ export class PlayerControls {
     this.led = v;
     if (v) {
       this.keys.clear();
-      this.vel.set(0, 0, 0);
+      this.phys.vel.set(0, 0, 0);
       this.jumpQueued = false;
     }
   }
 
   /** 被牵时由跟随逻辑写入运动量（供动画/披风风场使用） */
   setCarriedMotion(hSpeed: number, vy: number) {
-    this.vel.set(Math.sin(this.state.yaw) * hSpeed, 0, Math.cos(this.state.yaw) * hSpeed);
-    this.vy = vy;
+    this.phys.vel.set(Math.sin(this.state.yaw) * hSpeed, vy, Math.cos(this.state.yaw) * hSpeed);
   }
 
   spawnAt(x: number, z: number) {
-    this.state.pos.set(x, terrainHeight(x, z), z);
-    this.vel.set(0, 0, 0);
-    this.vy = 0;
-    this.state.airborne = false;
+    this.phys.snapTo(x, z);
+    this.state.pos.copy(this.phys.pos);
     this.spacePressedAt = 0;
-    this.gliding = false;
-    this.glideEngaged = false;
-    this.glidePitch = 0;
-    this.glideSpeed = 0;
-  }
-
-  /** 暖气流：篝火广场与灯塔山丘上空有柔和的上升气流 */
-  private updraftAt(x: number, z: number, y: number): number {
-    let u = 0;
-    const dFire = Math.hypot(x, z);
-    if (dFire < 7 && y < 10) u += 3.4 * (1 - dFire / 7);
-    const dHill = Math.hypot(x - 26, z + 28);
-    if (dHill < 6 && y < 16) u += 2.8 * (1 - dHill / 6);
-    return u;
   }
 
   update(dt: number) {
@@ -253,179 +237,65 @@ export class PlayerControls {
     }
     const inputLen = Math.hypot(ix, iz);
     const moving = inputLen > 0.01 && !s.sit;
+    if (moving) s.sit = false; // 走动即起立
     const joyFull = Math.hypot(this.touchMove.x, this.touchMove.z) > 0.88;
     const running = moving && (this.keys.has("shift") || joyFull);
     const spaceHeldMs = this.spacePressedAt > 0 && this.keys.has(" ") ? performance.now() - this.spacePressedAt : 0;
-    const glideHeld = s.airborne && spaceHeldMs >= 150;
-    if (glideHeld !== this.gliding) {
-      this.gliding = glideHeld;
-      if (glideHeld) this.glideSpeed = Math.max(4, Math.hypot(this.vel.x, this.vel.z)); // 以当前速度为初始能量
-      this.onGlide?.(glideHeld);
-    }
-    // 展翼接管时机：上升余势(vy>1.2)先自然衰减，衰减到阈值后滑翔物理才接管，
-    // 否则跳起瞬间展翼会被俯仰公式立即按住；接管后爬升可自由超过该阈值
-    if (glideHeld) {
-      if (!this.glideEngaged && this.vy < 1.2) this.glideEngaged = true;
-    } else {
-      this.glideEngaged = false;
-    }
+    const glideHeld = this.phys.airborne && spaceHeldMs >= 150;
 
-    // ---- 水平动量（滑翔接管时水平速度由俯仰/航向决定，见垂直块；这里只管地面与普通腾空） ----
-    if (!this.glideEngaged) {
-      const targetSpeed = s.airborne ? (glideHeld ? 9.2 : Math.max(3.2, this.horizSpeed)) : running ? 7.2 : 3.6;
-      let tx = 0;
-      let tz = 0;
-      if (moving || glideHeld) {
-        let dx: number, dz: number;
-        if (moving) {
-          dx = ix / inputLen;
-          dz = iz / inputLen;
-        } else {
-          // 展翼后无输入：沿角色朝向稳定滑行
-          dx = Math.sin(s.yaw);
-          dz = Math.cos(s.yaw);
-        }
-        // 相机相对方向（对任意 camYaw 都成立）：
-        // 前向 = -(sin,cos)，右向 = (cos,-sin)
-        const cos = Math.cos(this.camYaw);
-        const sin = Math.sin(this.camYaw);
-        tx = (dx * cos + dz * sin) * targetSpeed;
-        tz = (-dx * sin + dz * cos) * targetSpeed;
-      }
-      if (s.airborne && !moving && !glideHeld) {
-        // 普通跳跃只继承起跳惯性，不会凭空获得向前推力。
-        tx = this.vel.x * 0.985;
-        tz = this.vel.z * 0.985;
-      }
-      const accel = s.airborne ? (glideHeld ? 2.8 : 1.4) : 10;
-      this.vel.x = THREE.MathUtils.lerp(this.vel.x, tx, Math.min(1, accel * dt));
-      this.vel.z = THREE.MathUtils.lerp(this.vel.z, tz, Math.min(1, accel * dt));
-      s.pos.x += this.vel.x * dt;
-      s.pos.z += this.vel.z * dt;
-    }
+    // ---- 物理步进：一个完整状态机（地面/腾空/滑翔/游泳），所有积分在里面 ----
+    const events: PhysicsEvent[] = [];
+    this.phys.step(
+      dt,
+      {
+        moveX: moving ? ix : 0,
+        moveZ: moving ? iz : 0,
+        running,
+        jumpPressed: this.jumpQueued,
+        glideHeld,
+        camYaw: this.camYaw,
+      },
+      events
+    );
+    this.jumpQueued = false;
 
-    // ---- 朝向与侧倾（滑翔中转向由滑翔块按航向转弯处理，不走速度朝向） ----
-    const speedH = Math.hypot(this.vel.x, this.vel.z);
-    if (moving && speedH > 0.3 && !this.glideEngaged) {
-      const targetYaw = Math.atan2(this.vel.x, this.vel.z);
-      let diff = targetYaw - s.yaw;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      const step = diff * Math.min(1, dt * 9);
-      s.yaw += step;
-      s.yawVel = THREE.MathUtils.lerp(s.yawVel, step / Math.max(dt, 1e-4), Math.min(1, dt * 8));
-    } else {
-      s.yawVel = THREE.MathUtils.lerp(s.yawVel, 0, Math.min(1, dt * 6));
-    }
-    if (moving && s.sit) s.sit = false;
+    // 物理状态 → 网络与动画读的 ControlsState（pos 是同一引用，无需拷贝）
+    s.yaw = this.phys.yaw;
+    s.yawVel = this.phys.yawVel;
+    s.airborne = this.phys.airborne;
+    s.flaps = this.phys.flaps;
 
-    // ---- 实体碰撞：树/岩石/灯塔/篝火不可穿越，贴着表面滑行 ----
-    resolveColliders(s.pos, this.vel);
-
-    // ---- 岛界（空中也留在岛上空） ----
-    const r = Math.hypot(s.pos.x, s.pos.z);
-    if (r > ISLAND_RADIUS - 1) {
-      s.pos.x *= (ISLAND_RADIUS - 1) / r;
-      s.pos.z *= (ISLAND_RADIUS - 1) / r;
-    }
-
-    // ---- 垂直：跳跃 / 滑翔 / 扑翼 / 暖气流 ----
-    // 地面 = 地形高度，或已越过的实体顶面（岩石/灯塔环廊/木凳，站得上去）
-    const ground = Math.max(terrainHeight(s.pos.x, s.pos.z), WATER_LEVEL - 0.25, standGroundHeight(s.pos));
-
-    if (this.jumpQueued) {
-      this.jumpQueued = false;
-      if (!s.airborne) {
-        this.vy = 6.6;
-        s.airborne = true;
-        s.sit = false;
-        this.onJump?.();
-      } else if (s.flaps > 0) {
-        s.flaps--;
-        this.flapTimer = 0.28;
-        if (this.glideEngaged) {
-          // 滑翔中拍翅=光翼冲程：注入能量并抬头，随后的能量公式自然把它转成爬升
-          this.glideSpeed = Math.min(17, Math.max(this.glideSpeed, 9.5));
-          this.glidePitch = Math.max(this.glidePitch, 0.3);
-        } else {
-          this.vy = 7.0;
-        }
-        this.onFlap?.();
-      }
-    }
-
-    if (s.airborne) {
-      const up = this.updraftAt(s.pos.x, s.pos.z, s.pos.y);
-      if (this.glideEngaged) {
-        // ---- 能量飞行（光遇滑翔的灵魂）：俯仰可操控，高度与速度互相转换 ----
-        // W 前推=俯冲机头 S 后拉=爬升；无输入回中到自然下滑角（滑翔不该凭空平飞）
-        let pitchTarget = iz === 0 ? -0.14 : THREE.MathUtils.clamp(iz * 0.5, -0.55, 0.45);
-        if (this.glideSpeed < 5) pitchTarget = Math.min(pitchTarget, -0.25);
-        this.glidePitch = THREE.MathUtils.lerp(this.glidePitch, pitchTarget, Math.min(1, dt * 2.8));
-        const sinP = Math.sin(this.glidePitch);
-        const cosP = Math.cos(this.glidePitch);
-        // 重力沿航向的分量：爬升消耗空速、俯冲补充空速（能量交换）
-        this.glideSpeed += -9.8 * sinP * 1.15 * dt;
-        // 空气阻力：与速度成正比，巡航时缓慢流失
-        this.glideSpeed -= (0.15 + this.glideSpeed * 0.05) * dt;
-        this.glideSpeed = THREE.MathUtils.clamp(this.glideSpeed, 3.2, 17);
-        this.vy = this.glideSpeed * sinP + up * 0.85; // 垂直=航迹分量+暖气流托举
-        // 水平速度沿航向（转弯=转航向，不是平移飘）
-        const hs = this.glideSpeed * cosP;
-        this.vel.x = Math.sin(s.yaw) * hs;
-        this.vel.z = Math.cos(s.yaw) * hs;
-        // A/D 倾斜转弯：速度快时转弯率自然收紧（大速度=大转弯半径）
-        const turnRate = THREE.MathUtils.clamp(2.2 - this.glideSpeed * 0.06, 0.8, 2.2);
-        if (ix !== 0) {
-          s.yaw += ix * turnRate * dt;
-          s.yawVel = THREE.MathUtils.lerp(s.yawVel, ix * turnRate, Math.min(1, dt * 6));
-        } else {
-          s.yawVel = THREE.MathUtils.lerp(s.yawVel, 0, Math.min(1, dt * 4));
-        }
-        s.pos.x += this.vel.x * dt;
-        s.pos.z += this.vel.z * dt;
-      } else if (glideHeld && this.vy < 1.2) {
-        // 展翼后逐渐收住下坠，避免突然吸附到固定下降速度。
-        const glideFloor = -1.35 + up + Math.min(0.3, this.horizSpeed * 0.025);
-        this.vy = Math.max(this.vy - 4.2 * dt, glideFloor);
-      } else {
-        this.vy -= 19 * dt;
-        this.vy += up * 0.45 * dt; // 自由落体时暖流只轻微上托
-      }
-      this.vy = Math.min(this.vy, 12);
-      s.pos.y += this.vy * dt;
-      if (s.pos.y <= ground) {
-        s.pos.y = ground;
-        s.airborne = false;
-        this.vy = 0;
-        this.spacePressedAt = 0;
-        this.glideEngaged = false;
-        this.glidePitch = 0;
-        if (this.gliding) {
-          this.gliding = false;
-          this.onGlide?.(false);
-        }
-        this.onLand?.();
-      }
-    } else {
-      s.pos.y = THREE.MathUtils.lerp(s.pos.y, ground, Math.min(1, dt * 14));
-      // 翼能恢复
-      if (s.flaps < MAX_FLAPS) {
-        this.flapRegen += dt;
-        if (this.flapRegen > 1.1) {
-          this.flapRegen = 0;
-          s.flaps++;
-        }
+    // ---- 物理事件 → 游戏回调 ----
+    for (const e of events) {
+      switch (e.type) {
+        case "jump":
+          s.sit = false;
+          this.onJump?.();
+          break;
+        case "flap":
+          this.onFlap?.();
+          break;
+        case "land":
+          this.spacePressedAt = 0;
+          this.onLand?.(e.impact);
+          break;
+        case "glide":
+          this.onGlide?.(e.open);
+          break;
+        case "water":
+          this.onWater?.(e.enter);
+          break;
       }
     }
 
     // ---- mov 状态码 ----
-    if (this.flapTimer > 0) {
-      this.flapTimer -= dt;
+    const speedH = this.phys.horizSpeed;
+    if (this.phys.flapTimer > 0) {
       s.mov = 4;
-    } else if (s.airborne) {
+    } else if (this.phys.airborne) {
       s.mov = glideHeld ? 3 : 5;
     } else {
+      // 水中游泳复用行走码（动画不区分）
       s.mov = speedH < 0.4 ? 0 : running ? 2 : 1;
     }
 
@@ -435,8 +305,8 @@ export class PlayerControls {
 
   private updateCamera(dt: number) {
     const s = this.state;
-    const speedH = Math.hypot(this.vel.x, this.vel.z);
-    const glideHeld = this.gliding;
+    const speedH = this.phys.horizSpeed;
+    const glideHeld = this.phys.gliding;
     // 弹簧只挂在跟随焦点上：玩家移动的跟随带一点呼吸感。
     // 鼠标转视角是直接操作，必须 1:1 立即响应——弹簧若挂在相机位置上，
     // 快速转动时轨道目标绕焦点瞬移，弹簧追不上再触发距离保护直贴，视角就会猛跳
@@ -449,7 +319,7 @@ export class PlayerControls {
     const camGround = terrainHeight(cx, cz) + 0.8;
     this.camera.position.set(cx, Math.max(cy, camGround), cz);
     // 速度前瞻：视线先看向要去的地方（光遇的镜头感），落点用平滑速度防抖
-    this.camLead.lerp(this.vel, Math.min(1, dt * 4));
+    this.camLead.lerp(this.phys.vel, Math.min(1, dt * 4));
     this.camFocus.copy(focus).addScaledVector(this.camLead, 0.16);
     this.camera.lookAt(this.camFocus);
 
