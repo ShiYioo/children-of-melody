@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 /**
  * 动作物理通道：弹簧-质点（半隐式欧拉积分）。
  *
@@ -41,4 +43,26 @@ export class Spring {
 /** 常用配比：给定想要的安定时间，取略欠阻尼 */
 export function bouncy(stiffness: number) {
   return { k: stiffness, c: 1.5 * Math.sqrt(stiffness) }; // ζ≈0.75
+}
+
+/** 三维弹簧（相机跟随等）：三个分量各自弹簧，物理同 Spring */
+export class SpringV3 {
+  readonly x = new THREE.Vector3();
+  private readonly v = new THREE.Vector3();
+
+  constructor(public k: number, public c: number) {}
+
+  step(target: THREE.Vector3, dt: number): THREE.Vector3 {
+    const h = Math.min(dt, 1 / 30);
+    this.v.x += (-this.k * (this.x.x - target.x) - this.c * this.v.x) * h;
+    this.v.y += (-this.k * (this.x.y - target.y) - this.c * this.v.y) * h;
+    this.v.z += (-this.k * (this.x.z - target.z) - this.c * this.v.z) * h;
+    this.x.addScaledVector(this.v, h);
+    return this.x;
+  }
+
+  snap(p: THREE.Vector3) {
+    this.x.copy(p);
+    this.v.set(0, 0, 0);
+  }
 }

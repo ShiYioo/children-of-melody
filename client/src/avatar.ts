@@ -5,6 +5,7 @@ import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { CapeSim } from "./cape";
 import { Spring } from "./motion";
+import { terrainHeight } from "./heightfield";
 
 /**
  * 光遇风小人 · 二代
@@ -547,6 +548,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const mEmHeadX = new Spring(70, 9);
   const mEmHeadZ = new Spring(70, 9);
   const mEmHop = new Spring(160, 12); // cheer 小跳（欠阻尼多一点，弹起来）
+  // 伊莱娜的根部动作物理（俯仰/升降/侧倾/步幅：起跑、急停、躺卧起身都带惯性过渡）
+  const mElainaPitch = new Spring(90, 16);
+  const mElainaLift = new Spring(120, 20);
+  const mElainaRoll = new Spring(90, 16);
+  const mElainaAmp = new Spring(110, 15);
   let handBlend = 0; // 牵手姿势混合 0-1
   let handSide = 1; // 对方在哪一侧（+1 右 / -1 左）
   let handFwd = 0; // 对方在前方分量（抬臂前后倾角）
@@ -622,7 +628,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const speedN = Math.min(1, speed / 7.2);
       const vy = state.vy ?? 0;
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
-      walkPhase += dt * (3.0 + speed * 2.4);
+      // 步频随速度；转向也推进步频——原地转身时小腿跟着交替碎步，不再平脚碾转
+      walkPhase += dt * (3.0 + speed * 2.4 + Math.min(6, Math.abs(yawVel)) * 1.4);
       jumpBlend = THREE.MathUtils.lerp(jumpBlend, air > 0 ? 1 : 0, Math.min(1, dt * 6));
       glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
       riseBlend = THREE.MathUtils.lerp(riseBlend, air > 0 && vy > 0.8 ? 1 : 0, Math.min(1, dt * 5));
@@ -713,19 +720,38 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       bodyGroup.scale.set((1 + squash * 0.1) * (1 - stretch * 0.06), sq, (1 + squash * 0.1) * (1 - stretch * 0.06));
 
       // 躯干：盘坐后靠 / 跑动前倾+加速度 / 滑翔大幅前倾——目标过弹簧，
-      // 起跑先滞后半拍再前倾过头回弹，急停后仰再回正（动作物理的核心通道）
+      // 起跑先滞后半拍再前倾过头回弹，急停后仰再回正（动作物理的核心通道）。
+      // 坡度步态：沿朝向采样地形，上坡前倾蹬坡、下坡后仰刹车
+      const fx = Math.sin(group.rotation.y);
+      const fz = Math.cos(group.rotation.y);
+      const slopeLean =
+        THREE.MathUtils.clamp(
+          (terrainHeight(group.position.x + fx * 0.6, group.position.z + fz * 0.6) -
+            terrainHeight(group.position.x - fx * 0.6, group.position.z - fz * 0.6)) *
+            0.9,
+          -0.4,
+          0.4
+        ) *
+        (0.2 + speedN * 0.5) *
+        ground *
+        (1 - sitLerp);
       const torsoTarget =
         -0.5 * sitLerp +
         (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
         0.76 * glideBlend +
-        0.15 * jumpBlend * (1 - glideBlend);
+        0.15 * jumpBlend * (1 - glideBlend) +
+        slopeLean;
       bodyGroup.rotation.x = mTorsoX.step(torsoTarget, dt) + mEmTorso.step(eTorso, dt);
       // 压弯（整体侧倾，过弹簧：入弯压肩回正带一点回弹）
       const groundBank = THREE.MathUtils.clamp(-yawVel * 0.055, -0.3, 0.3) * (0.3 + speedN) * ground;
       const glideBank = THREE.MathUtils.clamp(-yawVel * 0.035, -0.22, 0.22) * glideBlend;
       group.rotation.z = mBankZ.step(groundBank + glideBank, dt);
+      // 侧移倾身：横移时向移动方向压身（朝向右移 → 顶向右倾 → rotation.z 为负）
+      const latV = (state.vx ?? 0) * Math.cos(group.rotation.y) - (state.vz ?? 0) * Math.sin(group.rotation.y);
+      const strafeLean = THREE.MathUtils.clamp(-latV * 0.02, -0.1, 0.1) * ground * (1 - sitLerp);
       // 重心左右晃（跳跳步的步感）+ cheer 小跳（弹簧自带落地回弹）
-      bodyGroup.rotation.z = (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp);
+      bodyGroup.rotation.z =
+        (speed > 0.2 ? Math.sin(walkPhase) * (0.028 + 0.03 * speedN) : 0) * ground * (1 - sitLerp) + strafeLean;
 
       bodyGroup.position.y =
         -0.3 * sitLerp +
@@ -735,8 +761,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       // ---- 四肢（两段关节：步态 → 空中分层 → 盘坐） ----
       // 步态：大腿摆动、小腿在恢复期屈膝（相位差 ~1.15rad），手臂与同侧腿反相。
-      // 幅度过弹簧：起步甩开、急停收步有半拍惯性，步频和身体重量对上
-      const walkAmp = mGaitAmp.step((speed > 0.2 ? 0.35 + speedN * 0.65 : 0) * ground * (1 - sitLerp), dt);
+      // 幅度过弹簧：起步甩开、急停收步有半拍惯性，步频和身体重量对上。
+      // 转身碎步：慢速大角速度转向时叠加小幅迈步（光遇转身会挪小步）
+      const turnShuffle = THREE.MathUtils.clamp(Math.abs(yawVel) * 0.3, 0, 0.55) * (1 - Math.min(1, speed * 1.6)) * ground * (1 - sitLerp);
+      const walkAmp = mGaitAmp.step(Math.max(speed > 0.2 ? 0.35 + speedN * 0.65 : 0, turnShuffle) * ground * (1 - sitLerp), dt);
       const strideL = Math.sin(walkPhase);
       const strideR = Math.sin(walkPhase + Math.PI);
       const kneeBase = 0.5 + speedN * 0.6;
@@ -887,9 +915,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         outerCapeSim.step(dt, outerPins, windWorld, pose, glideBlend * 0.9, bodyGroup.rotation.x, bodyGroup.position.y);
       }
 
-      // 伊莱娜：展示动画（抬头段循环）做基底，状态用手写骨骼动作 + 根运动表达
+      // 伊莱娜：展示动画（抬头段循环）做基底，状态用手写骨骼动作 + 根运动表达。
+      // 根部俯仰/升降/侧倾全部过弹簧：起跑前倾、急停回弹、躺下与起身都是带惯性的过渡
       if (elainaRoot) {
-        const kk = Math.min(1, dt * 6);
         let pitch = 0.08 * speedN + THREE.MathUtils.clamp(accelSm * 0.012, -0.12, 0.2); // 跑动前倾
         let lift = 0;
         const seated = !!state?.seated;
@@ -905,11 +933,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         } else if (air === 1) {
           pitch = -0.05; // 腾空微后仰
         }
-        elainaRoot.rotation.x = THREE.MathUtils.lerp(elainaRoot.rotation.x, pitch, kk);
-        elainaRoot.rotation.z = THREE.MathUtils.lerp(elainaRoot.rotation.z, Math.sin(walkPhase) * 0.05 * speedN, kk);
+        // 坡度步态（与程序化小人同一套采样）+ 动作轮盘：鞠躬真正弯腰、点头小幅点身
+        pitch += slopeLean;
+        if (!sit && air === 0) {
+          if (emoteName === "bow") pitch += emoteEnv * 0.5;
+          else if (emoteName === "nod") pitch += Math.sin(emoteP * Math.PI * 4) * 0.1 * emoteEnv;
+        }
+        elainaRoot.rotation.x = mElainaPitch.step(pitch, dt);
+        elainaRoot.rotation.z = mElainaRoll.step(Math.sin(walkPhase) * 0.05 * speedN, dt);
         const bounce = air > 0 || sit ? 0 : Math.abs(Math.sin(walkPhase)) * (0.035 + 0.05 * speedN); // 步伐弹跳
-        // bounce 必须放在 lerp 目标里：加在外面会每帧累积，稳态抬高 bounce/kk（kk≈0.1 时放大十倍）
-        elainaRoot.position.y = THREE.MathUtils.lerp(elainaRoot.position.y, elainaBaseY + lift + bounce, kk);
+        elainaRoot.position.y = mElainaLift.step(elainaBaseY + lift + bounce, dt);
 
         // ---- 手写肢体动作：在她的骨骼上做世界轴旋转（绑定姿态 × 增量） ----
         if (elainaBones) {
@@ -943,9 +976,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
             swing(elainaBones.thighL, _ev1, -0.12);
             swing(elainaBones.thighR, _ev1, -0.12);
           } else if (speed > 0.3 && air === 0) {
-            // 走/跑：迈步 + 摆臂（与程序化小人同一套相位）
+            // 走/跑：迈步 + 摆臂（与程序化小人同一套相位），步幅过弹簧（起步/收步过渡）
             const run = THREE.MathUtils.clamp((speed - 4.2) / 3.5, 0, 1);
-            const amp = 0.38 + run * 0.42;
+            const amp = mElainaAmp.step(0.38 + run * 0.42, dt);
             const s = Math.sin(walkPhase);
             const s2 = Math.sin(walkPhase + Math.PI);
             swing(elainaBones.thighL, _ev1, s * amp);

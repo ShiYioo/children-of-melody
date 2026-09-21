@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { terrainHeight, ISLAND_RADIUS, WATER_LEVEL } from "./heightfield";
 import { resolveColliders, standGroundHeight } from "./colliders";
+import { SpringV3 } from "./motion";
 
 /**
  * 光遇式操控 · 二代
@@ -39,6 +40,11 @@ export class PlayerControls {
   camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
+  /** 相机位置弹簧（略欠阻尼：跟随带一点点呼吸感） */
+  private readonly camSpring = new SpringV3(110, 19);
+  /** 平滑后的水平速度（速度前瞻用，防抖） */
+  private readonly camLead = new THREE.Vector3();
+  private readonly camFocus = new THREE.Vector3();
 
   onLand: (() => void) | null = null;
   onFlap: (() => void) | null = null;
@@ -383,8 +389,14 @@ export class PlayerControls {
     const cy = focus.y + Math.sin(this.camPitch) * this.camDist;
     const camGround = terrainHeight(cx, cz) + 0.8;
     const target = new THREE.Vector3(cx, Math.max(cy, camGround), cz);
-    this.camera.position.lerp(target, Math.min(1, dt * 7));
-    this.camera.lookAt(focus);
+    // 弹簧跟随（略欠阻尼）：起停时镜头有一点点呼吸感而不是恒速漂移；
+    // 大距离跳变（入场/重置）直接贴上，避免弹簧长距离飞掠穿地形
+    if (this.camSpring.x.distanceTo(target) > 8) this.camSpring.snap(target);
+    this.camera.position.copy(this.camSpring.step(target, dt));
+    // 速度前瞻：视线先看向要去的地方（光遇的镜头感），落点用平滑速度防抖
+    this.camLead.lerp(this.vel, Math.min(1, dt * 4));
+    this.camFocus.copy(focus).addScaledVector(this.camLead, 0.16);
+    this.camera.lookAt(this.camFocus);
 
     const fovTarget = this.baseFov + Math.min(1, speedH / 9.2) * 5 + (s.airborne && glideHeld ? 3 : 0);
     if (Math.abs(this.camera.fov - fovTarget) > 0.05) {
