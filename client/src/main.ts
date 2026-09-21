@@ -12,6 +12,7 @@ import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
 import { terrainHeight } from "./heightfield";
 import { createMusicFX } from "./world/musicfx";
+import { createBeacons } from "./world/beacons";
 import { createFurniture } from "./world/furniture";
 import { createToonKit } from "./world/toon";
 import { insideAnyCollider } from "./colliders";
@@ -32,6 +33,9 @@ music.onNotice = (msg) => ui && ui.toast(msg, 3600);
 // 音乐动效：分频段包络驱动的地面涟漪 + 音符粒子（挂在场景，主循环里驱动）
 const musicfx = createMusicFX();
 world.addToScene(musicfx.group);
+// 声之灯塔：远处玩家的歌化成光柱——先闻其声，循声相遇
+const beacons = createBeacons();
+world.addToScene(beacons.group);
 
 // ---- 背包家具：椅子 & 双人荡秋千（每人每件放一个，1/2 键放收，靠近 E 坐） ----
 const furnKit = createToonKit();
@@ -158,6 +162,8 @@ function strikeNote(keyIdx: number, shift: boolean) {
   flashKey(keyIdx, shift);
   noteColor.setHSL(selfHue / 360, 0.55, 0.72);
   musicfx.noteBurst(controls.state.pos, noteColor, 0.9);
+  noteFeed.set("self", performance.now());
+  world.pulseFlowers(controls.state.pos, 7, 0.9);
   net?.sendNote(playingIdx, midi, 0.9);
 }
 const remotes = new RemotePlayers();
@@ -338,6 +344,16 @@ async function connectToIsland(name: string): Promise<NetHandle | null> {
       instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel);
       musicfx.noteBurst(av.group.position, remoteNoteColor, vel);
       attachInstrument(av.group, kindIdx);
+      noteFeed.set(from, performance.now());
+      world.pulseFlowers(av.group.position, 7, vel);
+    },
+    // 音乐回应：收到别人献的光花
+    (from) => {
+      const who = remotes.statsOf(from)?.name ?? "一位旅人";
+      ui.toast(`${who} 送了你一束光花 🌸`, 3600);
+      selfAvatar?.setRing(new THREE.Color("#ff9ecf"), 1);
+      if (selfAvatar) world.bursts.burst(selfAvatar.group.position.clone(), new THREE.Color("#ff9ecf"), "flap");
+      music.sfxChime();
     },
     // 家具增删（服务器权威：每人一个）
     (key, data) => {
@@ -702,6 +718,10 @@ window.addEventListener("keydown", (e) => {
     takeOutInstrument(Number(k) - 3);
     return;
   }
+  if (k === "v") {
+    sendFlowerToNearest();
+    return;
+  }
   if (k === "enter") {
     if (chatInput.style.display === "none") openChat();
     return;
@@ -744,6 +764,85 @@ let simT = 0;
 function loop() {
   requestAnimationFrame(loop);
   tick(Math.min(clock.getDelta(), 0.05));
+}
+
+// ---------------- 音乐世界六件套的状态 ----------------
+/** 最近 1.8 秒内弹过琴的人（key→时刻）：合奏共鸣检测 */
+const noteFeed = new Map<string, number>();
+let ensemble = 0; // 0~1 合奏强度（光环增强/音符汇聚）
+let duskConcert = false;
+let npcNoteT = 0;
+let npcNoteIdx = 0;
+let resonanceT = 0;
+
+/** 歌之相遇册：听完(≥80%时长)才收录；localStorage 持久化 */
+const BOOK_KEY = "yinyu.encounters.v1";
+interface BookEntry {
+  uid: string; // sid|trackKey 去重
+  player: string;
+  track: string;
+  color: string;
+  phase: string;
+  at: number;
+}
+let book: BookEntry[] = [];
+try {
+  book = JSON.parse(localStorage.getItem(BOOK_KEY) || "[]");
+} catch {}
+const bookCollected = new Set(book.map((e) => e.uid));
+const listenAcc = new Map<string, { player: string; track: string; color: string; acc: number; need: number }>();
+
+function phaseLabel(p: number): string {
+  return p < 0.25 ? "黄昏" : p < 0.5 ? "夜" : p < 0.75 ? "黎明" : "白昼";
+}
+
+/** 相遇册 UI：左下角书本按钮 + 面板 */
+const bookBtn = document.createElement("button");
+bookBtn.className = "book-btn";
+bookBtn.innerHTML = "📖";
+bookBtn.title = "歌之相遇册";
+const bookPanel = document.createElement("div");
+bookPanel.className = "book-panel";
+bookPanel.style.display = "none";
+document.body.appendChild(bookBtn);
+document.body.appendChild(bookPanel);
+function renderBook() {
+  bookPanel.innerHTML =
+    (book.length
+      ? book
+          .slice()
+          .reverse()
+          .map((e) => `<div class="book-row"><i style="background:${e.color}"></i><div><b>${e.track}</b><small>${e.player} · ${e.phase}相遇 · ${new Date(e.at).toLocaleDateString()}</small></div></div>`)
+          .join("")
+      : '<div class="book-empty">还没有听完过谁的歌。<br>走近一个人，把 ta 的歌听到 80% ——</div>') +
+    '<div class="book-close">合上</div>';
+  bookPanel.querySelector(".book-close")?.addEventListener("click", () => (bookPanel.style.display = "none"));
+}
+bookBtn.addEventListener("click", () => {
+  renderBook();
+  bookPanel.style.display = bookPanel.style.display === "none" ? "block" : "none";
+});
+
+/** 献花给正在听的人：音乐回应（V 键） */
+let lastFlowerSent = 0;
+function sendFlowerToNearest() {
+  if (!net || !selfAvatar) return;
+  const now = performance.now();
+  if (now - lastFlowerSent < 3000) {
+    ui.toast("光花还在路上，稍等一下…", 1500);
+    return;
+  }
+  const n = net;
+  const cands = remotes.infos(controls.state.pos).filter((i) => i.clarity > 0.2 && i.key !== n.sessionId);
+  cands.sort((a, b) => a.dist - b.dist);
+  const target = cands[0];
+  if (!target) {
+    ui.toast("附近没有正在响起的歌——走近一点再献花", 2200);
+    return;
+  }
+  lastFlowerSent = now;
+  n.sendFlower(target.key);
+  ui.toast(`把一束光花送给了 ${target.name} 🌸`, 2400);
 }
 
 function tick(dt: number) {
@@ -934,6 +1033,102 @@ function tick(dt: number) {
   const serverNow = Date.now() + (net?.clockOffset ?? 0);
   world.setDayPhase((serverNow % 600000) / 600000);
 
+  // ---- 声之灯塔：远处玩家的歌化成光柱（先闻其声，循声相遇） ----
+  const worldInfos = remotes.infos(controls.state.pos);
+  beacons.update(
+    dt,
+    t,
+    controls.state.pos,
+    world.camera.position,
+    infos
+      .filter((i) => i.trackId >= 0)
+      .map((i) => ({
+        key: i.key,
+        pos: remotes.avatarOf(i.key)?.group.position ?? controls.state.pos,
+        color: i.color,
+        playing: true,
+      }))
+  );
+
+  // ---- 合奏共鸣：1.8 秒内 ≥2 人同时在弹 → 光环增强 + 音符向彼此汇聚 ----
+  {
+    const nowMs = performance.now();
+    for (const [k, at] of noteFeed) if (nowMs - at > 1800) noteFeed.delete(k);
+    const parts: THREE.Vector3[] = [controls.state.pos.clone()];
+    for (const k of noteFeed.keys()) {
+      if (k === "self") continue;
+      const av = remotes.avatarOf(k);
+      if (!av) continue;
+      if (av.group.position.distanceTo(controls.state.pos) <= 30) parts.push(av.group.position.clone());
+    }
+    ensemble = Math.min(1, (parts.length - 1) / 2);
+    if (ensemble > 0.05) {
+      resonanceT += dt;
+      if (resonanceT > 0.55) {
+        resonanceT = 0;
+        const c = parts.reduce((acc, v) => acc.add(v), new THREE.Vector3()).divideScalar(parts.length);
+        noteColor.setHSL(((selfHue + 40) % 360) / 360, 0.6, 0.75);
+        musicfx.noteBurst(c, noteColor, 1.2 + ensemble);
+      }
+    } else {
+      resonanceT = 0;
+    }
+  }
+
+  // ---- 歌之相遇册：听着谁的歌就累积，听到 80% 时长才收录 ----
+  for (const i of worldInfos) {
+    if (i.clarity < 0.3) continue;
+    const need = music.songDurOf(i.key);
+    const tKey = music.trackKeyOf(i.key);
+    if (need <= 0 || !tKey) continue;
+    const uid = `${i.key}|${tKey}`;
+    if (bookCollected.has(uid)) continue;
+    let e = listenAcc.get(uid);
+    if (!e) {
+      e = { player: i.name, track: i.trackName || "一首无名的歌", color: "#" + i.color.getHexString(), acc: 0, need };
+      listenAcc.set(uid, e);
+    }
+    e.need = need;
+    e.acc += dt;
+    if (e.acc >= need * 0.8) {
+      bookCollected.add(uid);
+      book.push({ uid, player: e.player, track: e.track, color: e.color, phase: phaseLabel((serverNow % 600000) / 600000), at: Date.now() });
+      try {
+        localStorage.setItem(BOOK_KEY, JSON.stringify(book));
+      } catch {}
+      ui.toast(`♪《${e.track}》收进了歌之相遇册——遇见 ${e.player}`, 4200);
+      music.sfxChime();
+    }
+  }
+
+  // ---- 黄昏音乐会：黄昏相位 NPC 聚篝火合奏、篝火增亮（每天一次的约定） ----
+  {
+    const phase = (serverNow % 600000) / 600000;
+    const duskOn = phase < 0.15;
+    if (duskOn !== duskConcert) {
+      duskConcert = duskOn;
+      npcs?.setConcert(duskOn);
+      world.campfire.setBoost(duskOn ? 1.7 : 1);
+      if (duskOn) ui.toast("黄昏音乐会：老住户们围到篝火旁合奏了", 4200);
+    }
+    if (duskConcert) {
+      npcNoteT += dt;
+      if (npcNoteT > 0.46) {
+        npcNoteT = 0;
+        const key = `npc-${npcNoteIdx % 5}`;
+        const av = remotes.avatarOf(key);
+        if (av) {
+          const midi = 60 + [0, 2, 4, 7, 9, 12][npcNoteIdx % 6];
+          instruments.play(INSTRUMENTS[npcNoteIdx % 3].kind, midi, 0.45);
+          noteColor.setHSL(((npcNoteIdx * 72 + 30) % 360) / 360, 0.6, 0.75);
+          musicfx.noteBurst(av.group.position, noteColor, 1.1);
+          world.pulseFlowers(av.group.position, 8, 0.8);
+        }
+        npcNoteIdx++;
+      }
+    }
+  }
+
   // 远端乐器显形过期回收
   const nowMs = performance.now();
   for (const [g, hit] of remoteInstruments) {
@@ -953,7 +1148,7 @@ function tick(dt: number) {
     if (active) {
       const f = music.features("self");
       ringColor.set(meta.color);
-      selfAvatar.setRing(ringColor, 0.3 + f.level * 0.45 + f.beat * 0.35);
+      selfAvatar.setRing(ringColor, 0.3 + f.level * 0.45 + f.beat * 0.35 + ensemble * 0.4);
       musicfx.drive("self", controls.state.pos, ringColor, f, dt, 1);
     } else {
       selfAvatar.setRing(null, 0);

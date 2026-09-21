@@ -22,6 +22,21 @@ const NPC_NAMES = ["海风的诗", "星屑收集者", "花田看守", "潮汐信
 export class NpcDriver {
   private npcs: NpcState[] = [];
   private t = 0;
+  /** 黄昏音乐会：老住户们围到篝火旁坐下（座位=篝火木凳圈） */
+  private concert = false;
+
+  setConcert(on: boolean) {
+    this.concert = on;
+    if (on) {
+      this.npcs.forEach((n, i) => {
+        const a = (i / Math.max(1, this.npcs.length)) * Math.PI * 2 + 0.4;
+        n.target.set(Math.cos(a) * 3.0, 0, Math.sin(a) * 3.0);
+        n.waitUntil = 0;
+        n.sitUntil = 0;
+        n.stuckFor = 0;
+      });
+    }
+  }
 
   constructor(private remotes: RemotePlayers) {
     NPC_NAMES.forEach((name, i) => {
@@ -54,6 +69,32 @@ export class NpcDriver {
   update(dt: number) {
     this.t += dt;
     for (const n of this.npcs) {
+      // 黄昏音乐会：走向篝火座位，到达即坐下（朝向火心）
+      if (this.concert) {
+        this.remotes.drive(n.key, ({ pos, target }) => {
+          const to = n.target;
+          const dx = to.x - pos.x;
+          const dz = to.z - pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 0.9) {
+            target.sit = true;
+            target.mov = 0;
+            target.ry = Math.atan2(-pos.x, -pos.z); // 面向篝火(0,0)
+            return;
+          }
+          target.sit = false;
+          const speed = 2.4;
+          pos.x += (dx / d) * speed * dt;
+          pos.z += (dz / d) * speed * dt;
+          pos.y = terrainHeight(pos.x, pos.z);
+          target.x = pos.x;
+          target.y = pos.y;
+          target.z = pos.z;
+          target.ry = Math.atan2(dx, dz);
+          target.mov = 1;
+        });
+        continue;
+      }
       this.remotes.drive(n.key, ({ pos, target }) => {
         // 正在坐
         if (this.t < n.sitUntil) {

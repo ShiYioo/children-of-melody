@@ -336,9 +336,24 @@ export class MusicEngine {
       .catch((e) => console.warn("[music] 无法播放自定义曲目", e));
   }
 
+  /** 某个源的歌曲时长（秒）：文件/链接=真实时长，合成曲=32 小节；未知=0。
+   *  供「歌之相遇册」的听完判定用 */
+  songDurOf(key: string): number {
+    const src = this.sources.get(key);
+    if (!src) return 0;
+    if (src.bufDur > 0) return src.bufDur;
+    if (src.def) return (32 * src.def.beatsPerBar * 60) / src.def.bpm;
+    return 0;
+  }
+
+  /** 某个源当前的歌标识（换歌后变化），相遇册用来区分「同一首」 */
+  trackKeyOf(key: string): string {
+    const src = this.sources.get(key);
+    return src ? `${src.trackId}|${src.songName}|${src.url}` : "";
+  }
+
   /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字，链接曲目传 URL_TRACK 与直链 */
-  setOwnTrack(trackId: number, songName = "", url = "") {
-    this.ownTrackId = trackId;
+  setOwnTrack(trackId: number, songName = "", url = "") {    this.ownTrackId = trackId;
     this.ownUrl = isUrlTrack(trackId) ? url : "";
     this.ownPaused = false;
     this.ownElapsedMs = 0;

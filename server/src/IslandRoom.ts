@@ -26,6 +26,7 @@ export class IslandRoom extends Room {
   private lastEmoteOf = new Map<string, number>();
   /** 移动校验：sessionId → 上次接受的位置与时间 */
   private lastPosAt = new Map<string, { x: number; y: number; z: number; t: number }>();
+  private lastFlowerAt = new Map<string, number>(); // 献花节流（3s 一朵）
   /** 乐器音符限流窗口：sessionId → {窗口起点, 计数} */
   private noteWindow = new Map<string, { at: number; n: number }>();
 
@@ -77,6 +78,7 @@ export class IslandRoom extends Room {
     this.lastEmoteOf.delete(client.sessionId);
     this.noteWindow.delete(client.sessionId);
     this.lastPosAt.delete(client.sessionId);
+      this.lastFlowerAt.delete(client.sessionId);
     // 背包家具随人离岛收回
     this.state.furniture.delete(`${client.sessionId}:0`);
     this.state.furniture.delete(`${client.sessionId}:1`);
@@ -245,6 +247,18 @@ export class IslandRoom extends Room {
       this.noteWindow.set(client.sessionId, w);
       if (w.n > 20) return;
       this.broadcast("note", { id: client.sessionId, k, m: midi, v: Math.min(1, Math.max(0, +m?.v || 0.8)) }, { except: client });
+    },
+
+    // ---- 音乐回应：把一束光花送给正在听的那个人（点对点，3 秒一朵） ----
+    flower: (client: Client, m: any) => {
+      const to = String(m?.to ?? "");
+      if (!to || to === client.sessionId) return;
+      const now = Date.now();
+      const last = this.lastFlowerAt.get(client.sessionId) ?? 0;
+      if (now - last < 3000) return;
+      this.lastFlowerAt.set(client.sessionId, now);
+      const target = this.clients.find((c) => c.sessionId === to);
+      target?.send("flower", { id: client.sessionId });
     },
 
     // ---- 背包家具（椅子/双人秋千）：每人每件只能放一个，收回才能再放 ----

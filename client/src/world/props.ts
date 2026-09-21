@@ -101,8 +101,8 @@ function makeRock(kit: ToonKit, x: number, z: number, s: number): THREE.Mesh {
   return m;
 }
 
-// ---------- 发光小花（instanced） ----------
-function makeFlowers(): THREE.InstancedMesh {
+// ---------- 发光小花（instanced；琴声靠近会随音符明灭） ----------
+function makeFlowers(): { inst: THREE.InstancedMesh; pos: THREE.Vector3[]; base: Float32Array } {
   const count = 170;
   const geo = new THREE.SphereGeometry(0.05, 6, 5);
   geo.translate(0, 0.18, 0);
@@ -115,6 +115,8 @@ function makeFlowers(): THREE.InstancedMesh {
   inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
   const m = new THREE.Matrix4();
   const col = new THREE.Color();
+  const pos: THREE.Vector3[] = [];
+  const base = new Float32Array(count * 3);
   let placed = 0;
   let guard = 0;
   while (placed < count && guard++ < 4000) {
@@ -128,11 +130,15 @@ function makeFlowers(): THREE.InstancedMesh {
     inst.setMatrixAt(placed, m);
     col.set(mats[placed % 3].color);
     inst.setColorAt(placed, col);
+    base[placed * 3] = col.r;
+    base[placed * 3 + 1] = col.g;
+    base[placed * 3 + 2] = col.b;
+    pos.push(new THREE.Vector3(x, h, z));
     placed++;
   }
   inst.count = placed;
   inst.instanceMatrix.needsUpdate = true;
-  return inst;
+  return { inst, pos, base: base.slice(0, placed * 3) };
 }
 
 // ---------- 草地（簇状草丛：每簇十几片宽弯叶片，像被风吹过的草甸） ----------
@@ -317,6 +323,7 @@ export interface Campfire {
   group: THREE.Group;
   update: (t: number) => void;
   position: THREE.Vector3;
+  setBoost: (v: number) => void;
 }
 
 function makeCampfire(kit: ToonKit): Campfire {
@@ -386,6 +393,7 @@ function makeCampfire(kit: ToonKit): Campfire {
   g.add(flame1, flame2);
 
   // 出生点就在篝火 8m 内。场景主光必须稳定；高频抖动经过 Bloom 会让整片广场像频闪灯。
+  let fireBoost = 1;
   const fireLight = new THREE.PointLight("#ffb36b", 28, 22, 1.35);
   fireLight.position.y = 1.0;
   g.add(fireLight);
@@ -408,13 +416,23 @@ function makeCampfire(kit: ToonKit): Campfire {
       flame1.material instanceof THREE.ShaderMaterial && (flame1.material.uniforms.uTime.value = t);
       flame2.material instanceof THREE.ShaderMaterial && (flame2.material.uniforms.uTime.value = t * 1.3);
       flame1.rotation.y = t * 0.8;
-      fireLight.intensity = 28;
+      fireLight.intensity = 28 * fireBoost;
+    },
+    /** 黄昏音乐会等场景的篝火增亮（1=常态） */
+    setBoost: (v: number) => {
+      fireBoost = v;
     },
   };
 }
 
 // ---------- 总装 ----------
-export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: number) => void)[]; campfire: Campfire } {
+export function createProps(kit: ToonKit): {
+  group: THREE.Group;
+  updates: ((t: number) => void)[];
+  campfire: Campfire;
+  /** 花随琴动：让 pos 附近 r 米内的发光小花亮起（随帧衰减） */
+  pulseFlowers: (pos: THREE.Vector3, r?: number, strength?: number) => void;
+} {
   const group = new THREE.Group();
   const updates: ((t: number) => void)[] = [];
   clearColliders(); // HMR 重跑时避免重复注册
@@ -440,7 +458,28 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
   ];
   for (const [x, z, s] of rockSpots) group.add(makeRock(kit, x, z, s));
 
-  group.add(makeFlowers());
+  // ---- 发光小花：琴声靠近时随音符明灭（花随琴动） ----
+  const flowers = makeFlowers();
+  group.add(flowers.inst);
+  const flowerFlash = new Float32Array(flowers.pos.length);
+  const _fc = new THREE.Color();
+  updates.push((t) => {
+    void t;
+    let any = false;
+    for (let i = 0; i < flowerFlash.length; i++) {
+      if (flowerFlash[i] <= 0) continue;
+      any = true;
+      flowerFlash[i] = Math.max(0, flowerFlash[i] - 0.016 * 1.4);
+      const f = flowerFlash[i];
+      _fc.setRGB(
+        flowers.base[i * 3] + (1 - flowers.base[i * 3]) * f,
+        flowers.base[i * 3 + 1] + (1 - flowers.base[i * 3 + 1]) * f,
+        flowers.base[i * 3 + 2] + (1 - flowers.base[i * 3 + 2]) * f
+      );
+      flowers.inst.setColorAt(i, _fc);
+    }
+    if (any) flowers.inst.instanceColor!.needsUpdate = true;
+  });
 
   const grass = makeGrass();
   group.add(grass);
@@ -480,5 +519,17 @@ export function createProps(kit: ToonKit): { group: THREE.Group; updates: ((t: n
     }
   }
 
-  return { group, updates, campfire };
+  const pulseFlowers = (pos: THREE.Vector3, r = 7, strength = 1) => {
+    const r2 = r * r;
+    for (let i = 0; i < flowers.pos.length; i++) {
+      const d2 = flowers.pos[i].distanceToSquared(pos);
+      if (d2 < r2) {
+        const k = 1 - Math.sqrt(d2) / r;
+        flowerFlash[i] = Math.min(1, flowerFlash[i] + strength * k * 0.9);
+      }
+    }
+  };
+
+  return { group, updates, campfire, pulseFlowers };
 }
+

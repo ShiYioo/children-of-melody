@@ -55,6 +55,7 @@ export interface NetHandle {
   sendChat: (text: string) => void;
   sendEmote: (name: string) => void;
   sendNote: (kind: number, midi: number, vel: number) => void;
+  sendFlower: (to: string) => void;
   sendFurnPlace: (kind: number, x: number, y: number, z: number, ry: number) => void;
   sendFurnRemove: (kind: number) => void;
   sendHandInvite: (to: string) => void;
@@ -75,6 +76,7 @@ export async function connectIsland(
   onEmote: (from: string, name: string) => void = () => {},
   /** 别人弹了一个乐器音符（弹的人本地已响，不回声） */
   onNote: (from: string, kind: number, midi: number, vel: number) => void = () => {},
+  onFlower: (from: string) => void = () => {},
   /** 家具增删：data 为 null 表示删除 */
   onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {},
   /** 非主动关闭的掉线（网络闪断/服务器重启），主循环据此自动重连 */
@@ -149,6 +151,7 @@ export async function connectIsland(
   room.onMessage("chat", (m: any) => onChat(String(m?.id ?? ""), String(m?.name ?? ""), String(m?.text ?? "")));
   room.onMessage("emote", (m: any) => onEmote(String(m?.id ?? ""), String(m?.name ?? "")));
   room.onMessage("note", (m: any) => onNote(String(m?.id ?? ""), m?.k | 0, m?.m | 0, Math.min(1, Math.max(0, +m?.v || 0.8))));
+    room.onMessage("flower", (m: any) => onFlower(String(m?.id ?? "")));
 
   let selfHue: number | null = null;
   const getSelfHue = () => selfHue;
@@ -231,6 +234,9 @@ export async function connectIsland(
     },
     sendNote(kind, midi, vel) {
       room.send("note", { k: kind, m: midi, v: vel });
+    },
+    sendFlower(to) {
+      room.send("flower", { to });
     },
     sendFurnPlace(kind, x, y, z, ry) {
       room.send("furn-place", { kind, x, y, z, ry });

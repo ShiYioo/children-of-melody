@@ -32,6 +32,8 @@ export interface World {
   resize: () => void;
   /** 昼夜循环：phase 0~1（0 黄昏 → 0.25 夜 → 0.5 黎明 → 0.75 白昼），全部客户端按同一时钟对齐 */
   setDayPhase: (phase: number) => void;
+  /** 花随琴动：让 pos 附近的发光小花亮起 */
+  pulseFlowers: (pos: import("three").Vector3, r?: number, strength?: number) => void;
 }
 
 export function createWorld(container: HTMLElement): World {
@@ -326,6 +328,7 @@ export function createWorld(container: HTMLElement): World {
     camera,
     composer,
     campfire: props.campfire,
+    pulseFlowers: props.pulseFlowers,
     wind,
     bursts,
     addToScene: (obj) => scene.add(obj),
