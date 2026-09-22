@@ -301,18 +301,12 @@ export function createWorld(container: HTMLElement): World {
     mixC(a.sky.sea, b.sky.sea, skyPal.sea);
     skyPal.night = THREE.MathUtils.lerp(a.sky.night, b.sky.night, u);
     skyPal.sunEl = THREE.MathUtils.lerp(a.sky.sunEl, b.sky.sunEl, u);
-    sky.apply(skyPal);
-
-    mixC(a.fogColor, b.fogColor, (scene.fog as THREE.FogExp2).color);
-    (scene.fog as THREE.FogExp2).density = THREE.MathUtils.lerp(a.fogDensity, b.fogDensity, u);
-    mixC(a.hemiSky, b.hemiSky, hemi.color);
-    mixC(a.hemiGround, b.hemiGround, hemi.groundColor);
-    hemi.intensity = THREE.MathUtils.lerp(a.hemiInt, b.hemiInt, u);
-    mixC(a.ambientColor, b.ambientColor, ambient.color);
-    ambient.intensity = THREE.MathUtils.lerp(a.ambientInt, b.ambientInt, u);
     mixC(a.sunColor, b.sunColor, sun.color);
     sun.intensity = THREE.MathUtils.lerp(a.sunInt, b.sunInt, u);
     sun.position.lerpVectors(a.sunPos, b.sunPos, u);
+    // 太阳圆盘/月亮方向 = 场景光源方向（在 sun.position 更新之后再 apply，
+    // 天上的圆盘、光柱、水面波光从此同一个方向）
+    sky.apply(skyPal, sun.position);
     shaftMat.opacity = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u);
     renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
     // 萤火虫入夜点亮（白天几乎看不见），白天光尘入夜淡出（萤火虫接管）

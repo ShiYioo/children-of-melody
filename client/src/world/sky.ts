@@ -15,7 +15,7 @@ export interface SkyPalette {
  * 黄昏天空穹顶：暖金地平线 → 玫瑰 → 紫罗兰 → 暮蓝天顶，
  * 低垂的太阳与最早亮起的几颗星。昼夜循环时整套调色由 setDayPhase 驱动。
  */
-export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; apply: (p: SkyPalette) => void } {
+export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; apply: (p: SkyPalette, sunPos?: THREE.Vector3) => void } {
   const sunDir = new THREE.Vector3(-0.62, 0.17, -0.42).normalize();
 
   const mat = new THREE.ShaderMaterial({
@@ -91,18 +91,22 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
     mesh,
     update: (t: number) => {
       mat.uniforms.uTime.value = t;
-      // 太阳极缓慢地呼吸（基准高度由昼夜循环的 apply 设定）
-      const el = sunElBase + Math.sin(t * 0.02) * 0.015;
-      sunDir.set(-0.62, el, -0.42).normalize();
+      // 太阳方向由 apply() 从场景光源位置统一设定（圆盘/光柱/水面波光/月亮必须同一个方向，
+      // 各自为政就会出现"光柱斜这边、太阳在那边"的穿帮）
     },
-    apply: (p: SkyPalette) => {
+    apply: (p: SkyPalette, sunPos?: THREE.Vector3) => {
       mat.uniforms.uNight.value = p.night;
       (mat.uniforms.cZenith.value as THREE.Color).copy(p.zenith);
       (mat.uniforms.cMid.value as THREE.Color).copy(p.mid);
       (mat.uniforms.cRose.value as THREE.Color).copy(p.rose);
       (mat.uniforms.cHorizon.value as THREE.Color).copy(p.horizon);
       (mat.uniforms.cSea.value as THREE.Color).copy(p.sea);
-      sunElBase = 0.05 + p.sunEl * 0.55;
+      if (sunPos) {
+        sunDir.copy(sunPos).normalize();
+      } else {
+        sunElBase = 0.05 + p.sunEl * 0.55;
+        sunDir.set(-0.62, sunElBase, -0.42).normalize();
+      }
     },
   };
 }
