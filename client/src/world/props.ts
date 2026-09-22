@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { terrainHeight, terrainSlope } from "../heightfield";
 import { addCollider, clearColliders } from "../colliders";
 import type { ToonKit } from "./toon";
+import { lightState } from "./lightstate";
 
 /**
  * 岛上的陈设：光遇风的圆冠树、薰衣草色岩石、发光小花、
@@ -549,8 +550,14 @@ export function createProps(kit: ToonKit): {
   group.add(flowers.inst);
   const flowerFlash = new Float32Array(flowers.pos.length);
   const _fc = new THREE.Color();
+  let flowerNight = -1; // 上次设置的夜色度（避免每帧写 material）
   updates.push((t) => {
     void t;
+    // 昼夜呼吸：夜里花田不再常亮满档（光遇的夜是暗的，光只留给光源）
+    if (flowerNight !== lightState.night) {
+      flowerNight = lightState.night;
+      (flowers.inst.material as THREE.MeshBasicMaterial).color.setScalar(1 - lightState.night * 0.68);
+    }
     let any = false;
     for (let i = 0; i < flowerFlash.length; i++) {
       if (flowerFlash[i] <= 0) continue;

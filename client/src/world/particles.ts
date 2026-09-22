@@ -110,27 +110,28 @@ function makeDriftPoints(opts: {
   return { points, update: (t) => (mat.uniforms.uTime.value = t) };
 }
 
-/** 全岛漂浮的暖色光尘（落点按地形高度过滤，只出现在旱地上空） */
+/** 全岛漂浮的暖色光尘（落点按地形高度过滤，只出现在旱地上空）。
+ *  数量与亮度收着：光遇的空气是干净的，光尘是偶尔一粒而不是漫天飞 */
 export function createMotes(): DriftPoints {
   return makeDriftPoints({
-    count: 380,
+    count: 240,
     color: "#ffe9b8",
     area: { r: 52, yMin: 0.6, yMax: 13 },
-    size: 0.5,
+    size: 0.42,
     drift: 1.4,
-    opacity: 0.5,
+    opacity: 0.35,
   });
 }
 
 /** 林地里的萤光（淡绿偏暖，贴近树梢高度；落点地形过滤，不会漂到湖面） */
 export function createFireflies(): DriftPoints {
   return makeDriftPoints({
-    count: 90,
+    count: 55,
     color: "#e5ffb0",
     area: { r: 20, yMin: 1.2, yMax: 4.5 },
     size: 0.42,
     drift: 0.9,
-    opacity: 0.75,
+    opacity: 0.6,
     center: [-12, -18],
   });
 }

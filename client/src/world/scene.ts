@@ -179,9 +179,9 @@ export function createWorld(container: HTMLElement): World {
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(container.clientWidth, container.clientHeight),
-    0.58, // strength
-    0.9, // radius
-    0.72 // threshold
+    0.42, // strength：光遇的泛光很克制——发光的应该只有光源本身，不是整个画面
+    0.85, // radius
+    0.8 // threshold：抬高，只有真亮源才吃到辉光（旧 0.72 会把大片暖色都点亮）
   );
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
