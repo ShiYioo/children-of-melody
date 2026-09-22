@@ -1,10 +1,10 @@
-import { Armchair, createIcons, Footprints, MessageCircle, Music2, Package, Sparkles } from "lucide";
+import { Armchair, createIcons, Footprints, Menu, MessageCircle } from "lucide";
 import type { PlayerControls } from "./controls";
 
 /**
  * 触屏操控层（手机/平板）：
  * · 左下虚拟摇杆（推满 = 奔跑）
- * · 右下按钮簇：跳/滑翔（按住）、坐、聊天、表情、乐器、家具
+ * · 右下按钮簇：跳/滑翔（按住）、坐、聊天；动作、乐器、家具收进「更多」
  * · 只在触屏设备上显示；相机环顾直接用画面拖动（Pointer 事件天然支持触摸）
  */
 
@@ -16,7 +16,10 @@ export interface TouchActions {
 }
 
 export function isTouchDevice(): boolean {
-  return (typeof window !== "undefined" && matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window;
+  return (
+    typeof window !== "undefined" &&
+    (matchMedia("(pointer: coarse)").matches || matchMedia("(max-width: 720px)").matches || "ontouchstart" in window)
+  );
 }
 
 function btn(icon: string, label: string, size: number, onTap?: () => void, onHold?: (down: boolean) => void): HTMLDivElement {
@@ -118,15 +121,13 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
   smallBtns.className = "touch-small-row";
   const mkSmall = (icon: string, label: string, onTap: () => void) => btn(icon, label, 44, onTap);
   smallBtns.appendChild(mkSmall("message-circle", "说话", actions.openChat));
-  smallBtns.appendChild(mkSmall("sparkles", "动作", actions.openWheel));
-  smallBtns.appendChild(mkSmall("music-2", "乐器", () => popupMenu(instrMenu)));
-  smallBtns.appendChild(mkSmall("package", "家具", () => popupMenu(furnMenu)));
+  smallBtns.appendChild(mkSmall("menu", "更多", () => popupMenu(moreMenu)));
   row.appendChild(smallBtns);
   row.appendChild(btn("armchair", "坐下", 50, () => controls.virtualKey("e", true)));
   cluster.appendChild(row);
   cluster.appendChild(btn("footprints", "跳跃或飞行", 64, undefined, (down) => controls.virtualKey(" ", down)));
 
-  // ---- 弹出式小菜单（乐器/家具） ----
+  // ---- 弹出式小菜单（低频动作） ----
   function makeMenu(items: { label: string; onTap: () => void }[]): HTMLDivElement {
     const m = document.createElement("div");
     m.className = "touch-menu";
@@ -144,24 +145,21 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
     root.appendChild(m);
     return m;
   }
-  const instrMenu = makeMenu([
+  const moreMenu = makeMenu([
+    { label: "动作", onTap: actions.openWheel },
     { label: "竖琴", onTap: () => actions.takeInstrument(0) },
     { label: "长笛", onTap: () => actions.takeInstrument(1) },
     { label: "风铃", onTap: () => actions.takeInstrument(2) },
     { label: "收起乐器", onTap: () => actions.takeInstrument(-1) },
-  ]);
-  const furnMenu = makeMenu([
     { label: "放置 / 收起椅子", onTap: () => actions.toggleFurniture(0) },
     { label: "放置 / 收起秋千", onTap: () => actions.toggleFurniture(1) },
   ]);
   function popupMenu(m: HTMLDivElement) {
     const open = m.style.display === "flex";
-    instrMenu.style.display = "none";
-    furnMenu.style.display = "none";
     m.style.display = open ? "none" : "flex";
   }
 
-  createIcons({ icons: { Armchair, Footprints, MessageCircle, Music2, Package, Sparkles } });
+  createIcons({ icons: { Armchair, Footprints, Menu, MessageCircle } });
   root.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
 
   return {

@@ -353,6 +353,7 @@
     }
 
     @media (max-width: 720px) {
+      .desktop-actions { display: none !important; }
       #hints { display: none; }
       #nearbyWrap { top: calc(var(--safe-top) + 50px); width: min(204px, calc(100vw - 32px)); }
       #trackModal .box { width: min(440px, 100%); max-height: 78vh; }
@@ -370,10 +371,20 @@
     }
 
     @media (orientation: portrait) and (max-width: 720px) {
-      .chat-input { bottom: calc(var(--safe-bottom) + 188px); }
-      .touch-cluster { right: calc(var(--safe-right) + 12px); bottom: calc(var(--safe-bottom) + 72px); }
+      #nearbyWrap { display: none !important; }
+      #toasts { top: calc(var(--safe-top) + 68px); width: min(354px, calc(100vw - 36px)); gap: 6px; }
+      .toast { max-width: 100%; padding: 10px 15px; border-radius: 18px; font-size: 11px; line-height: 1.45; }
+      .chat-input { bottom: calc(var(--safe-bottom) + 178px); }
+      .touch-joystick { left: calc(var(--safe-left) + 12px); bottom: calc(var(--safe-bottom) + 76px); width: 104px; height: 104px; }
+      .touch-knob { width: 42px; height: 42px; }
+      .touch-cluster { right: calc(var(--safe-right) + 12px); bottom: calc(var(--safe-bottom) + 76px); gap: 8px; }
       .touch-row { align-items: flex-end; }
-      .touch-small-row { display: grid; grid-template-columns: repeat(2, 44px); gap: 8px; }
+      .touch-row, .touch-small-row { gap: 7px; }
+      .touch-small-row { display: grid; grid-template-columns: repeat(2, 42px); gap: 7px; }
+      .touch-small-row .touch-btn { width: 42px !important; height: 42px !important; }
+      .touch-row > .touch-btn { width: 46px !important; height: 46px !important; }
+      .touch-cluster > .touch-btn { width: 58px !important; height: 58px !important; }
+      .touch-menu { right: calc(var(--safe-right) + 10px); bottom: calc(var(--safe-bottom) + 212px); max-height: min(42vh, 270px); overflow-y: auto; }
     }
 
     @media (max-width: 360px) {
