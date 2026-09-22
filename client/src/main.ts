@@ -264,7 +264,7 @@ voice = new VoiceChat({
     if (active) remoteVoiceLevels.set(id, level);
     else remoteVoiceLevels.delete(id);
   },
-  onError: (message) => ui.toast(message, 3200),
+  onError: (message) => ui.toast(message, message.length > 40 ? 12000 : 3200), // 诊断指引类长文案给足阅读时间
 });
 ui.focusName();
 

@@ -97,7 +97,12 @@ export class VoiceChat {
     if (this.enabled) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") {
       this.callbacks.onState("blocked");
-      this.callbacks.onError("当前浏览器不支持语音通话");
+      // 浏览器都支持语音——内网 HTTP 访问（http://192.168.x.x 之类）不是「安全上下文」，
+      // 浏览器会把麦克风 API 整个藏起来。给出可操作的解法而不是误诊「不支持」
+      const reason = !window.isSecureContext
+        ? `内网 HTTP 无法使用麦克风（${location.origin} 非安全环境）。每台设备一次性设置：地址栏输入 chrome://flags 搜「unsafely-treat-insecure-origin-as-secure」，填入 ${location.origin} 并重启浏览器；正式环境请用 HTTPS 域名访问`
+        : "当前浏览器不支持语音通话";
+      this.callbacks.onError(reason);
       return;
     }
 

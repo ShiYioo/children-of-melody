@@ -52,6 +52,18 @@ pm2 save && pm2 startup   # 按提示执行一次，开机自启
 - [ ] pm2 save + startup 已执行
 - [ ] 备份/监控：`pm2 logs yinyu`、磁盘（曲库 2GB 上限）
 
+## 内网/局域网语音（ getUserMedia 的安全上下文限制）
+
+浏览器只在 **HTTPS 或 localhost** 下开放麦克风 API。内网用 `http://192.168.x.x:5173` 访问时
+`navigator.mediaDevices` 直接不存在（不是浏览器不支持语音）。每台设备一次性设置：
+
+1. 地址栏输入 `chrome://flags`
+2. 搜索 `unsafely-treat-insecure-origin-as-secure`
+3. 填入 `http://192.168.x.x:5173`（你的实际访问地址），启用并重启浏览器
+
+Edge 同理（`edge://flags`）。正式上线用 HTTPS 域名则完全无此问题。
+游戏内点麦克风会给出这条指引的完整文案。
+
 ## 已知边界（诚实声明）
 
 - 管理后台还没有：封禁名单、踢人指令、曲库清理都要 SSH 上服务器操作
