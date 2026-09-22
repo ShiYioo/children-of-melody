@@ -519,10 +519,11 @@ function makeCampfire(kit: ToonKit): Campfire {
       flame1.material instanceof THREE.ShaderMaterial && (flame1.material.uniforms.uTime.value = t);
       flame2.material instanceof THREE.ShaderMaterial && (flame2.material.uniforms.uTime.value = t * 1.3);
       flame1.rotation.y = t * 0.8;
-      // 火光真闪烁：多层正弦叠加的有机抖动（光强+位置微微跳动），夜里篝火旁的人和凳子被跳动的光照着
-      const flick = 0.82 + 0.13 * Math.sin(t * 7.3) + 0.06 * Math.sin(t * 13.7 + 1.4) + 0.04 * Math.sin(t * 3.1 + 0.6);
+      // 火光呼吸（不是蹦迪）：光遇的篝火光非常安静——低频慢呼吸为主，微弱高频火苗感。
+      // 高频大幅抖动会让整个广场地面跟着脉动，夜里就是频闪灯
+      const flick = 0.93 + 0.05 * Math.sin(t * 2.1) + 0.02 * Math.sin(t * 5.3 + 1.4);
       fireLight.intensity = 16 * fireBoost * flick;
-      fireLight.position.set(Math.sin(t * 5.1) * 0.04, 1.0 + Math.sin(t * 8.7) * 0.03, Math.cos(t * 4.3) * 0.04);
+      fireLight.position.set(Math.sin(t * 1.3) * 0.02, 1.0, Math.cos(t * 1.1) * 0.02);
     },
     /** 黄昏音乐会等场景的篝火增亮（1=常态） */
     setBoost: (v: number) => {
