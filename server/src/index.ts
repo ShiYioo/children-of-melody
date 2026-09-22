@@ -82,7 +82,11 @@ const server = defineServer({
   express: (app) => {
     // 上传：POST /songs/upload?name=歌名&owner=会话id  (原始音频字节)
     app.post("/songs/upload", express.raw({ type: () => true, limit: `${UPLOAD_MAX_BYTES / 1024 / 1024}mb` }), (req, res) => {
-      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+      // X-Forwarded-For 只有部署在可信反代后才可信——直连时客户端可任意伪造该头
+      // 绕过 IP 限频。默认取真实 socket 地址；TRUST_PROXY=1 时（nginx 后）才读 XFF
+      const ip = process.env.TRUST_PROXY === "1"
+        ? ((req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown")
+        : (req.socket.remoteAddress || "unknown");
       if (rateLimited(ip)) {
         res.status(429).json({ error: "上传太频繁了，休息一下吧（10 分钟内最多 3 首）" });
         return;

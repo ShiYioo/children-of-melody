@@ -1,5 +1,6 @@
 import { Room, Client } from "colyseus";
 import { IslandState, Player, Furniture } from "./state.js";
+import { MsgGuard, finite, finiteClamp, safeStr } from "./guard.js";
 import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
@@ -32,8 +33,37 @@ export class IslandRoom extends Room {
   /** 乐器音符限流窗口：sessionId → {窗口起点, 计数} */
   private noteWindow = new Map<string, { at: number; n: number }>();
 
+  private guard = new MsgGuard();
+  /** 本房间允许的来源站点（生产由 ALLOW_ORIGINS 环境变量注入，开发态放行本机） */
+  private allowedOrigins: string[] = [];
+
+  /** 入场守门：来源站点白名单 + 每 IP 并发连接上限（防连接洪水与第三方站点盗连） */
+  onAuth(client: Client, options: any, request: any) {
+    void options;
+    const envList = (process.env.ALLOW_ORIGINS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    this.allowedOrigins = envList.length
+      ? envList
+      : [`http://${request?.headers?.host}`, `https://${request?.headers?.host}`, "http://localhost:5173", "http://127.0.0.1:5173"];
+    const origin = request?.headers?.origin as string | undefined;
+    if (origin && !this.allowedOrigins.includes(origin)) {
+      console.warn(`[guard] 拒绝未知来源连接: ${origin}`);
+      return false;
+    }
+    const ip = String(request?.headers?.["x-forwarded-for"] ?? request?.socket?.remoteAddress ?? "?").split(",")[0].trim();
+    if (!MsgGuard.tryAcquireIp(ip)) {
+      console.warn(`[guard] IP 连接数超限: ${ip}`);
+      return false;
+    }
+    (client as unknown as { __ip?: string }).__ip = ip;
+    return true;
+  }
+
   onCreate() {
     this.maxClients = 64;
+    // 全消息限流用框架原生的 maxMessagesPerSecond（超限自动断开）。
+    // 合法峰值 ~35/s（pos 10Hz + 音符 20/s），60 留余量；洪水客户端会被框架直接踢线。
+    // （messages 对象在框架更早阶段组合，运行期再包裹不会生效——试过，勿回退）
+    this.maxMessagesPerSecond = 60;
 
     // 随身曲库：服务器重启即清空——歌只活在一次房间生命周期里
     const cleared = clearAllSongs();
@@ -72,6 +102,9 @@ export class IslandRoom extends Room {
   }
 
   async onLeave(client: Client) {
+    this.guard.cleanup(client.sessionId);
+    const ip = (client as unknown as { __ip?: string }).__ip;
+    if (ip) MsgGuard.releaseIp(ip);
     const player = this.state.players.get(client.sessionId);
     this.unlinkHands(client.sessionId);
     for (const [k, v] of this.pendingHands) if (k === client.sessionId || v.from === client.sessionId) this.pendingHands.delete(k);
@@ -108,20 +141,31 @@ export class IslandRoom extends Room {
     p.handLead = false;
   }
 
+  onDispose() {
+    this.guard.dispose();
+    console.log("[island] 房间已关闭，防护状态已清空");
+  }
+
   messages = {
     // 客户端 10Hz 上报自身位置；服务端只做岛屿边界约束
     pos: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
-      if (!p || typeof m?.x !== "number") return;
+      // NaN/Infinity 会被 typeof 放行且让一切比较为 false（速度检查直接失效），
+      // 广播出去还会毒死所有客户端——必须 Number.isFinite 显式拦截
+      if (!p || !Number.isFinite(m?.x) || !Number.isFinite(m?.z)) return;
+      const mx = finiteClamp(m.x, -ISLAND_RADIUS * 2, ISLAND_RADIUS * 2, p.x);
+      const my = finiteClamp(m.y, 0, 40, p.y);
+      const mz = finiteClamp(m.z, -ISLAND_RADIUS * 2, ISLAND_RADIUS * 2, p.z);
       // 移动合法性：合法极速 ~15m/s（滑翔/被牵飞行），40 是宽松上限，超了当瞬移丢弃
       const now = Date.now();
       const last = this.lastPosAt.get(client.sessionId);
       if (last) {
         const dt = Math.max(0.05, (now - last.t) / 1000);
-        const dist = Math.hypot(m.x - last.x, (m.y ?? p.y) - last.y, m.z - last.z);
+        const dist = Math.hypot(mx - last.x, my - last.y, mz - last.z);
         if (dist / dt > 40) return;
       }
-      this.lastPosAt.set(client.sessionId, { x: m.x, y: m.y ?? p.y, z: m.z, t: now });
+      m.x = mx; m.y = my; m.z = mz;
+      this.lastPosAt.set(client.sessionId, { x: m.x, y: m.y, z: m.z, t: now });
       const r = Math.hypot(m.x, m.z);
       if (r > ISLAND_RADIUS) {
         m.x = (m.x / r) * ISLAND_RADIUS;
@@ -130,7 +174,7 @@ export class IslandRoom extends Room {
       p.x = m.x;
       p.y = clamp(m.y, 0, 40);
       p.z = m.z;
-      p.ry = m.ry ?? 0;
+      p.ry = finite(m.ry, 0); // NaN 朝向同样会毒广播
       p.mov = clamp(m.mov | 0, 0, 4); // 0静 1走 2跑 3滑翔 4扑翼
       p.sit = !!m.sit;
     },
@@ -142,7 +186,7 @@ export class IslandRoom extends Room {
     track: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
-      p.trackId = clamp(m?.trackId | 0, -1, 9999);
+      p.trackId = finiteClamp(m?.trackId, -1, 9999, -1) | 0;
       const resumeMs = clamp(m?.resumeMs | 0, 0, 24 * 3600 * 1000);
       let url = "";
       if (p.trackId === 200) {
@@ -157,7 +201,7 @@ export class IslandRoom extends Room {
       p.startedAt = p.trackId >= 0 ? Date.now() - resumeMs : 0;
       p.songName =
         p.trackId >= 100 && typeof m?.name === "string"
-          ? m.name.trim().slice(0, 40).replace(/[\\/:*?"<>|]/g, "_")
+          ? safeStr(m.name, 40).replace(/[\\/:*?"<>|]/g, "_")
           : "";
     },
 
@@ -178,7 +222,7 @@ export class IslandRoom extends Room {
     },
 
     "voice-signal": (client: Client, m: any) => {
-      const to = typeof m?.to === "string" ? m.to : "";
+      const to = safeStr(m?.to, 64);
       if (!to || to === client.sessionId || !this.voiceActive.has(client.sessionId) || !this.voiceActive.has(to)) return;
       const target = this.clients.find((c) => c.sessionId === to);
       if (!target || !m?.signal || typeof m.signal !== "object") return;
@@ -189,9 +233,10 @@ export class IslandRoom extends Room {
     // ---- 牵手（光遇式：邀请 → 对方同意 → 连接） ----
     "hand-invite": (client: Client, m: any) => {
       const me = this.state.players.get(client.sessionId);
-      const target = typeof m?.to === "string" ? this.state.players.get(m.to) : undefined;
-      const targetClient = typeof m?.to === "string" ? this.clients.find((c) => c.sessionId === m.to) : undefined;
-      if (!me || !target || !targetClient || m.to === client.sessionId) return;
+      const to = safeStr(m?.to, 64);
+      const target = this.state.players.get(to);
+      const targetClient = this.clients.find((c) => c.sessionId === to);
+      if (!me || !target || !targetClient || to === client.sessionId) return;
       if (me.handWith || target.handWith) {
         client.send("hand-busy", {});
         return;
@@ -208,7 +253,7 @@ export class IslandRoom extends Room {
 
     "hand-accept": (client: Client, m: any) => {
       const inv = this.pendingHands.get(client.sessionId);
-      if (!inv || inv.from !== m?.to || Date.now() - inv.at > 15000) {
+      if (!inv || inv.from !== safeStr(m?.to, 64) || Date.now() - inv.at > 15000) {
         this.pendingHands.delete(client.sessionId);
         return;
       }
@@ -224,7 +269,7 @@ export class IslandRoom extends Room {
 
     "hand-reject": (client: Client, m: any) => {
       const inv = this.pendingHands.get(client.sessionId);
-      if (!inv || inv.from !== m?.to) return;
+      if (!inv || inv.from !== safeStr(m?.to, 64)) return;
       this.pendingHands.delete(client.sessionId);
       this.clients.find((c) => c.sessionId === inv.from)?.send("hand-reject", {
         name: this.state.players.get(client.sessionId)?.name ?? "旅人",
@@ -240,7 +285,7 @@ export class IslandRoom extends Room {
     chat: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
-      const text = typeof m?.text === "string" ? m.text.trim().slice(0, 80) : "";
+      const text = safeStr(m?.text, 80).trim();
       if (!text) return;
       const now = Date.now();
       if (now - (this.lastChatOf.get(client.sessionId) ?? 0) < 900) return;
@@ -277,7 +322,7 @@ export class IslandRoom extends Room {
 
     // ---- 音乐回应：把一束光花送给正在听的那个人（点对点，3 秒一朵） ----
     flower: (client: Client, m: any) => {
-      const to = String(m?.to ?? "");
+      const to = safeStr(m?.to, 64);
       if (!to || to === client.sessionId) return;
       const now = Date.now();
       const last = this.lastFlowerAt.get(client.sessionId) ?? 0;
@@ -291,7 +336,7 @@ export class IslandRoom extends Room {
     "furn-place": (client: Client, m: any) => {
       const kind = m?.kind | 0;
       if (kind !== 0 && kind !== 1) return;
-      if (typeof m?.x !== "number" || typeof m?.z !== "number") return;
+      if (!Number.isFinite(m?.x) || !Number.isFinite(m?.z) || !Number.isFinite(m?.y)) return;
       const r = Math.hypot(m.x, m.z);
       if (r > ISLAND_RADIUS - 2) return; // 别放到岛外
       const key = `${client.sessionId}:${kind}`;
@@ -302,7 +347,7 @@ export class IslandRoom extends Room {
       f.x = m.x;
       f.y = clamp(m.y, 0, 40);
       f.z = m.z;
-      f.ry = typeof m?.ry === "number" ? m.ry : 0;
+      f.ry = finite(m.ry, 0);
       this.state.furniture.set(key, f);
     },
 
