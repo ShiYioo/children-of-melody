@@ -88,6 +88,10 @@ export class RemotePlayers {
     return this.entries.has(key);
   }
 
+  hueOf(key: string): number {
+    return this.entries.get(key)?.hue ?? 150;
+  }
+
   /** 取某个远端玩家的头像（聊天气泡等直接作用于角色的效果用） */
   avatarOf(key: string): Avatar | null {
     return this.entries.get(key)?.avatar ?? null;

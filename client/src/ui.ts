@@ -1,5 +1,6 @@
-import { createIcons, ArrowRight, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } from "lucide";
+import { createIcons, ArrowRight, Mic, MicOff, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } from "lucide";
 import { TRACKS, trackMeta, CUSTOM_BASE } from "./audio/tracks";
+import type { VoiceMode } from "./voice";
 import type { RemoteInfo } from "./remote";
 import type { AvatarModel } from "./avatar";
 
@@ -13,11 +14,12 @@ export function createUI(handlers: {
   onPickTrack: (id: number, name?: string) => void;
   onPickUrl: (url: string, name: string) => void;
   onTogglePlay: () => void;
+  onToggleVoice: () => void;
 }) {
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const refreshIcons = () => {
     document.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
-    createIcons({ icons: { ArrowRight, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } });
+    createIcons({ icons: { ArrowRight, Mic, MicOff, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } });
     document.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
   };
 
@@ -27,6 +29,7 @@ export function createUI(handlers: {
   const avatarGrid = $("avatarGrid");
   const connectionStatus = $("connectionStatus");
   const musicButton = $("musicButton");
+  const voiceButton = $("voiceButton");
   const npPlay = $("npPlay");
   const nearby = $("nearby");
   const toasts = $("toasts");
@@ -214,6 +217,7 @@ export function createUI(handlers: {
   });
   trackClose.addEventListener("click", () => trackModal.classList.remove("open"));
   musicButton.addEventListener("click", openPicker);
+  voiceButton.addEventListener("click", () => handlers.onToggleVoice());
   npPlay.addEventListener("click", () => handlers.onTogglePlay());
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") trackModal.classList.remove("open");
@@ -240,7 +244,7 @@ export function createUI(handlers: {
     },
     setStatus(mode: "online" | "solo" | "off") {
       const label = mode === "online" ? "在线" : mode === "solo" ? "独自漫游" : "连接中断";
-      connectionStatus.className = `hud${mode === "online" ? "" : ` ${mode}`}`;
+      connectionStatus.className = `hud fixed-control${mode === "online" ? "" : ` ${mode}`}`;
       connectionStatus.innerHTML = `<i data-lucide="${mode === "online" ? "wifi" : mode === "solo" ? "user-round" : "wifi-off"}"></i>`;
       connectionStatus.title = label;
       connectionStatus.setAttribute("aria-label", label);
@@ -299,10 +303,6 @@ export function createUI(handlers: {
       const audible = infos.filter((i) => i.trackId >= 0 && i.dist < 38).slice(0, 4);
       const nearbyWrap = $("nearbyWrap");
       nearbyWrap.classList.toggle("has-people", audible.length > 0);
-      if (audible.length === 0) {
-        nearby.innerHTML = "";
-        return;
-      }
       nearby.innerHTML = "";
       for (const i of audible) {
         const pct = Math.round(i.clarity * 100);
@@ -319,6 +319,23 @@ export function createUI(handlers: {
         nearby.appendChild(item);
       }
     },
+    setVoiceState(mode: VoiceMode) {
+      const labels: Record<VoiceMode, string> = {
+        off: "开启附近语音",
+        starting: "正在开启麦克风",
+        on: "关闭附近语音",
+        blocked: "麦克风不可用",
+      };
+      voiceButton.classList.remove("starting", "active", "blocked");
+      if (mode === "starting") voiceButton.classList.add("starting");
+      if (mode === "on") voiceButton.classList.add("active");
+      if (mode === "blocked") voiceButton.classList.add("blocked");
+      voiceButton.innerHTML = `<i data-lucide="${mode === "on" || mode === "starting" ? "mic" : "mic-off"}"></i>`;
+      voiceButton.title = labels[mode];
+      voiceButton.setAttribute("aria-label", labels[mode]);
+      refreshIcons();
+    },
+
     toast(text: string, ms = 2600) {
       showToast(text, ms);
     },

@@ -2,6 +2,7 @@ import { Client } from "@colyseus/sdk";
 import type { RemotePlayers } from "./remote";
 import { terrainHeight } from "./heightfield";
 import type { AvatarModel } from "./avatar";
+import type { VoiceSignal } from "./voice";
 
 /**
  * Colyseus 联机：进入 "island" 房间，把 Schema 状态 diff 进 RemotePlayers。
@@ -35,6 +36,11 @@ interface PlayerLike {  name: string;
 }
 
 /** 牵手相关的服务器事件（经 connectIsland 注入回调） */
+export interface VoiceEvents {
+  onPresence: (id: string, active: boolean) => void;
+  onSignal: (from: string, signal: VoiceSignal) => void;
+}
+
 export interface HandEvents {
   /** 有人向我伸手（15 秒内有效） */
   onInvite: (from: string, name: string) => void;
@@ -62,6 +68,9 @@ export interface NetHandle {
   sendHandAccept: (to: string) => void;
   sendHandReject: (to: string) => void;
   sendHandRelease: () => void;
+  sendVoicePresence: (active: boolean) => void;
+  requestVoicePresence: () => void;
+  sendVoiceSignal: (to: string, signal: VoiceSignal) => void;
   close: () => void;
 }
 
@@ -82,7 +91,8 @@ export async function connectIsland(
   /** 非主动关闭的掉线（网络闪断/服务器重启），主循环据此自动重连 */
   onDrop: () => void = () => {},
   /** 延迟探针：每 2 秒回报一次往返毫秒数 */
-  onPing: (ms: number) => void = () => {}
+  onPing: (ms: number) => void = () => {},
+  voice: VoiceEvents = { onPresence: () => {}, onSignal: () => {} }
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
@@ -151,7 +161,16 @@ export async function connectIsland(
   room.onMessage("chat", (m: any) => onChat(String(m?.id ?? ""), String(m?.name ?? ""), String(m?.text ?? "")));
   room.onMessage("emote", (m: any) => onEmote(String(m?.id ?? ""), String(m?.name ?? "")));
   room.onMessage("note", (m: any) => onNote(String(m?.id ?? ""), m?.k | 0, m?.m | 0, Math.min(1, Math.max(0, +m?.v || 0.8))));
-    room.onMessage("flower", (m: any) => onFlower(String(m?.id ?? "")));
+  room.onMessage("flower", (m: any) => onFlower(String(m?.id ?? "")));
+  room.onMessage("voice-presence", (m: any) => voice.onPresence(String(m?.id ?? ""), !!m?.active));
+  room.onMessage("voice-list", (m: any) => {
+    for (const id of Array.isArray(m?.ids) ? m.ids : []) voice.onPresence(String(id), true);
+  });
+  room.onMessage("voice-signal", (m: any) => {
+    const from = String(m?.from ?? "");
+    const signal = m?.signal as VoiceSignal | undefined;
+    if (from && signal) voice.onSignal(from, signal);
+  });
 
   let selfHue: number | null = null;
   const getSelfHue = () => selfHue;
@@ -255,6 +274,16 @@ export async function connectIsland(
     },
     sendHandRelease() {
       room.send("hand-release", {});
+    },
+    sendVoicePresence(active) {
+      room.send("voice-presence", { active: !!active });
+    },
+    requestVoicePresence() {
+      room.send("voice-list");
+    },
+    sendVoiceSignal(to, signal) {
+      if (!to || !signal) return;
+      room.send("voice-signal", { to, signal });
     },
     close() {
       closedByUs = true;

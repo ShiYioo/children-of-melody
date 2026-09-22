@@ -68,7 +68,7 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
   let joyId: number | null = null;
   let joyCx = 0;
   let joyCy = 0;
-  const R = 34;
+  const R = 42;
   const setJoy = (dx: number, dy: number) => {
     const d = Math.hypot(dx, dy);
     const k = d > R ? R / d : 1;
@@ -116,15 +116,15 @@ export function createTouchUI(controls: PlayerControls, actions: TouchActions): 
   row.className = "touch-row";
   const smallBtns = document.createElement("div");
   smallBtns.className = "touch-small-row";
-  const mkSmall = (icon: string, label: string, onTap: () => void) => btn(icon, label, 38, onTap);
+  const mkSmall = (icon: string, label: string, onTap: () => void) => btn(icon, label, 44, onTap);
   smallBtns.appendChild(mkSmall("message-circle", "说话", actions.openChat));
   smallBtns.appendChild(mkSmall("sparkles", "动作", actions.openWheel));
   smallBtns.appendChild(mkSmall("music-2", "乐器", () => popupMenu(instrMenu)));
   smallBtns.appendChild(mkSmall("package", "家具", () => popupMenu(furnMenu)));
   row.appendChild(smallBtns);
-  row.appendChild(btn("armchair", "坐下", 44, () => controls.virtualKey("e", true)));
+  row.appendChild(btn("armchair", "坐下", 50, () => controls.virtualKey("e", true)));
   cluster.appendChild(row);
-  cluster.appendChild(btn("footprints", "跳跃或飞行", 58, undefined, (down) => controls.virtualKey(" ", down)));
+  cluster.appendChild(btn("footprints", "跳跃或飞行", 64, undefined, (down) => controls.virtualKey(" ", down)));
 
   // ---- 弹出式小菜单（乐器/家具） ----
   function makeMenu(items: { label: string; onTap: () => void }[]): HTMLDivElement {

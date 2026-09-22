@@ -27,6 +27,8 @@ export class IslandRoom extends Room {
   /** 移动校验：sessionId → 上次接受的位置与时间 */
   private lastPosAt = new Map<string, { x: number; y: number; z: number; t: number }>();
   private lastFlowerAt = new Map<string, number>(); // 献花节流（3s 一朵）
+  /** 开启语音的会话；音频本身只在客户端 WebRTC 点对点传输 */
+  private voiceActive = new Set<string>();
   /** 乐器音符限流窗口：sessionId → {窗口起点, 计数} */
   private noteWindow = new Map<string, { at: number; n: number }>();
 
@@ -78,7 +80,10 @@ export class IslandRoom extends Room {
     this.lastEmoteOf.delete(client.sessionId);
     this.noteWindow.delete(client.sessionId);
     this.lastPosAt.delete(client.sessionId);
-      this.lastFlowerAt.delete(client.sessionId);
+    this.lastFlowerAt.delete(client.sessionId);
+    if (this.voiceActive.delete(client.sessionId)) {
+      this.broadcast("voice-presence", { id: client.sessionId, active: false });
+    }
     // 背包家具随人离岛收回
     this.state.furniture.delete(`${client.sessionId}:0`);
     this.state.furniture.delete(`${client.sessionId}:1`);
@@ -158,6 +163,27 @@ export class IslandRoom extends Room {
 
     time: (client: Client) => {
       client.send("time", { t: Date.now() });
+    },
+
+    // ---- 语音（信令转发，音频不经过服务器） ----
+    "voice-presence": (client: Client, m: any) => {
+      const active = !!m?.active;
+      if (active) this.voiceActive.add(client.sessionId);
+      else this.voiceActive.delete(client.sessionId);
+      this.broadcast("voice-presence", { id: client.sessionId, active }, { except: client });
+    },
+
+    "voice-list": (client: Client) => {
+      client.send("voice-list", { ids: [...this.voiceActive].filter((id) => id !== client.sessionId) });
+    },
+
+    "voice-signal": (client: Client, m: any) => {
+      const to = typeof m?.to === "string" ? m.to : "";
+      if (!to || to === client.sessionId || !this.voiceActive.has(client.sessionId) || !this.voiceActive.has(to)) return;
+      const target = this.clients.find((c) => c.sessionId === to);
+      if (!target || !m?.signal || typeof m.signal !== "object") return;
+      if (JSON.stringify(m.signal).length > 16000) return;
+      target.send("voice-signal", { from: client.sessionId, signal: m.signal });
     },
 
     // ---- 牵手（光遇式：邀请 → 对方同意 → 连接） ----

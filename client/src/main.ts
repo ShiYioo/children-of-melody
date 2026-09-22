@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { Armchair, Bell, createIcons, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } from "lucide";
+import { Armchair, Bell, BookOpen, createIcons, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } from "lucide";
 import { createWorld } from "./world/scene";
 import { HandLinks } from "./world/handlink";
 import { PlayerControls } from "./controls";
@@ -12,6 +12,7 @@ import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
 import { terrainHeight } from "./heightfield";
 import { createMusicFX } from "./world/musicfx";
+import { createVoiceFX } from "./world/voicefx";
 import { createBeacons } from "./world/beacons";
 import { createFurniture } from "./world/furniture";
 import { createToonKit } from "./world/toon";
@@ -19,6 +20,7 @@ import { insideAnyCollider } from "./colliders";
 import { Instruments, INSTRUMENTS } from "./audio/instruments";
 import { makeInstrumentMesh } from "./world/instruments";
 import { createTouchUI, isTouchDevice } from "./touch";
+import { VoiceChat } from "./voice";
 
 /**
  * 音遇 · 客户端主流程
@@ -33,6 +35,9 @@ music.onNotice = (msg) => ui && ui.toast(msg, 3600);
 // 音乐动效：分频段包络驱动的地面涟漪 + 音符粒子（挂在场景，主循环里驱动）
 const musicfx = createMusicFX();
 world.addToScene(musicfx.group);
+// 语音反馈：同一套脚下涟漪语言，但由麦克风/远端 WebRTC 音量驱动
+const voicefx = createVoiceFX();
+world.addToScene(voicefx.group);
 // 声之灯塔：远处玩家的歌化成光柱——先闻其声，循声相遇
 const beacons = createBeacons();
 world.addToScene(beacons.group);
@@ -179,9 +184,13 @@ remotes.bindFX({
 
 let selfAvatar: Avatar | null = null;
 let net: NetHandle | null = null;
+let voice: VoiceChat;
 let npcs: NpcDriver | null = null;
 let playerName = "旅人";
 let selfHue = Math.floor(Math.random() * 360);
+let localVoiceLevel = 0;
+const remoteVoiceLevels = new Map<string, number>();
+const voiceColor = new THREE.Color();
 let selectedAvatar: AvatarModel = "classic";
 let entered = false;
 
@@ -238,6 +247,24 @@ const ui = createUI({
       ui.setPlayState("paused");
     }
   },
+  onToggleVoice: () => {
+    void voice.toggle();
+  },
+});
+
+voice = new VoiceChat({
+  sendPresence: (active) => net?.sendVoicePresence(active),
+  requestPresence: () => net?.requestVoicePresence(),
+  sendSignal: (to, signal) => net?.sendVoiceSignal(to, signal),
+  onState: (mode) => ui.setVoiceState(mode),
+  onLocalLevel: (level) => {
+    localVoiceLevel = level;
+  },
+  onPeerLevel: (id, active, level) => {
+    if (active) remoteVoiceLevels.set(id, level);
+    else remoteVoiceLevels.delete(id);
+  },
+  onError: (message) => ui.toast(message, 3200),
 });
 ui.focusName();
 
@@ -256,9 +283,11 @@ async function handleEnter(name: string) {
   // 连接服务器；失败则进入独自漫游（NPC 陪伴）
   net = await connectToIsland(name);
   if (net) {
+    voice.setNetwork(net.sessionId);
     ui.setStatus("online");
     ui.setSongOwner(net.sessionId);
   } else {
+    voice.setNetwork(null);
     ui.setStatus("solo");
     // 独自漫游时没有会话 id，用本地随机 id（HTTP 直传仍可用，重启时清理）
     ui.setSongOwner("solo-" + Math.random().toString(36).slice(2, 10));
@@ -366,7 +395,11 @@ async function connectToIsland(name: string): Promise<NetHandle | null> {
     // 非主动掉线 → 自动重连
     startReconnect,
     // ping 探针回报
-    updatePingBadge
+    updatePingBadge,
+    {
+      onPresence: (id, active) => voice.handlePresence(id, active),
+      onSignal: (from, signal) => voice.handleSignal(from, signal),
+    }
   );
 }
 
@@ -376,6 +409,7 @@ function startReconnect() {
   if (reconnecting || !entered) return;
   reconnecting = true;
   net = null;
+  voice.setNetwork(null);
   pingBadge.style.display = "none";
   // 旧会话的家具在服务器端已被清掉，本地也清（重连后从新状态重建别人的）
   seatedOn = null;
@@ -387,6 +421,7 @@ function startReconnect() {
       const h = await connectToIsland(playerName);
       if (h) {
         net = h;
+        voice.setNetwork(h.sessionId);
         reconnecting = false;
         ui.setStatus("online");
         ui.setSongOwner(net.sessionId);
@@ -633,7 +668,7 @@ desktopActions.innerHTML = `
   </div>
   <button class="action-trigger" title="旅人操作" aria-label="展开旅人操作" aria-expanded="false"><i data-lucide="menu"></i></button>`;
 document.body.appendChild(desktopActions);
-createIcons({ icons: { Armchair, Bell, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } });
+createIcons({ icons: { Armchair, Bell, BookOpen, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } });
 desktopActions.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
 
 const actionTrigger = desktopActions.querySelector(".action-trigger") as HTMLButtonElement;
@@ -799,13 +834,15 @@ function phaseLabel(p: number): string {
 /** 相遇册 UI：左下角书本按钮 + 面板 */
 const bookBtn = document.createElement("button");
 bookBtn.className = "book-btn";
-bookBtn.innerHTML = "📖";
+bookBtn.innerHTML = `<i data-lucide="book-open"></i>`;
 bookBtn.title = "歌之相遇册";
 const bookPanel = document.createElement("div");
 bookPanel.className = "book-panel";
 bookPanel.style.display = "none";
 document.body.appendChild(bookBtn);
 document.body.appendChild(bookPanel);
+createIcons({ icons: { BookOpen } });
+bookBtn.querySelector("svg[data-lucide]")?.removeAttribute("data-lucide");
 function renderBook() {
   bookPanel.innerHTML =
     (book.length
@@ -941,8 +978,20 @@ function tick(dt: number) {
   remotes.setSelfPos(controls.state.pos);
   const infos = remotes.infos(controls.state.pos);
   const clockOffset = net?.clockOffset ?? 0;
+  voice.updateNearby(infos.map((i) => ({ id: i.key, distance: i.dist })));
 
   music.tick();
+  voicefx.beginFrame();
+  if (selfAvatar && localVoiceLevel > 0.008) {
+    voiceColor.setHSL(selfHue / 360, 0.52, 0.7);
+    voicefx.drive("self", controls.state.pos, voiceColor, localVoiceLevel);
+  }
+  for (const [key, level] of remoteVoiceLevels) {
+    const pos = remotes.posOf(key);
+    if (!pos || level <= 0.008) continue;
+    voiceColor.setHSL(remotes.hueOf(key) / 360, 0.52, 0.7);
+    voicefx.drive(key, pos, voiceColor, level);
+  }
   const clarity = music.mix(
     infos.map((i) => ({
       key: i.key,
@@ -1159,6 +1208,7 @@ function tick(dt: number) {
   // 自己的 drive 在上面才调用——放在 world.bursts.update 那里会把 self 每帧删建，
   // 音符累积器永远归零（自己永远不吐音符）+ 踩点检测每帧误判
   musicfx.update(dt);
+  voicefx.update(dt, t);
 
   // UI 低频刷新 + 靠近提示 + 翼能
   uiTimer += dt;
