@@ -15,8 +15,13 @@ export interface SkyPalette {
  * 黄昏天空穹顶：暖金地平线 → 玫瑰 → 紫罗兰 → 暮蓝天顶，
  * 低垂的太阳与最早亮起的几颗星。昼夜循环时整套调色由 setDayPhase 驱动。
  */
-export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; apply: (p: SkyPalette, sunPos?: THREE.Vector3) => void } {
+export function createSky(): {
+  mesh: THREE.Mesh;
+  update: (t: number) => void;
+  apply: (p: SkyPalette, sunDir?: THREE.Vector3, moonDir?: THREE.Vector3, sunVis?: number, moonVis?: number) => void;
+} {
   const sunDir = new THREE.Vector3(-0.62, 0.17, -0.42).normalize();
+  const moonDir = new THREE.Vector3(0.62, 0.4, 0.42).normalize();
 
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -25,6 +30,9 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
     uniforms: {
       uTime: { value: 0 },
       uSunDir: { value: sunDir },
+      uMoonDir: { value: moonDir },
+      uSunVis: { value: 1 },
+      uMoonVis: { value: 0 },
       uNight: { value: 0 },
       cZenith: { value: new THREE.Color("#3b4a8f") },
       cMid: { value: new THREE.Color("#9a7bc0") },
@@ -43,6 +51,9 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
       uniform float uTime;
       uniform float uNight;
       uniform vec3 uSunDir;
+      uniform vec3 uMoonDir;
+      uniform float uSunVis;
+      uniform float uMoonVis;
       uniform vec3 cZenith, cMid, cRose, cHorizon, cSea;
       varying vec3 vDir;
 
@@ -62,13 +73,14 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
         // 地平线以下沉入海面的暖雾
         col = mix(cSea, col, smoothstep(-0.12, 0.02, h));
 
-        // 太阳：大范围柔光 + 亮核（夜里换成月光，余晖收掉）
+        // 太阳：大范围柔光 + 亮核（随 uSunVis 在地平线处升落淡入淡出）
         float sd = max(dot(d, uSunDir), 0.0);
-        col += vec3(1.0, 0.85, 0.6) * pow(sd, 20.0) * 0.55 * (1.0 - uNight * 0.8);
-        col += vec3(0.85, 0.92, 1.0) * pow(sd, 300.0) * (mix(1.1, 0.5, uNight));
-        // 月亮：夜里的光源位置就是月亮方向——清冷的圆面 + 一圈月晕（光遇的月）
-        col += vec3(0.93, 0.96, 1.0) * pow(sd, 1800.0) * 1.3 * uNight;
-        col += vec3(0.72, 0.8, 1.0) * pow(sd, 48.0) * 0.16 * uNight;
+        col += vec3(1.0, 0.85, 0.6) * pow(sd, 20.0) * 0.55 * uSunVis;
+        col += vec3(0.98, 0.9, 0.72) * pow(sd, 300.0) * 1.1 * uSunVis;
+        // 月亮：独立天体，自己的方向与升落——清冷圆面 + 月晕
+        float md = max(dot(d, uMoonDir), 0.0);
+        col += vec3(0.93, 0.96, 1.0) * pow(md, 1800.0) * 1.3 * uMoonVis;
+        col += vec3(0.72, 0.8, 1.0) * pow(md, 48.0) * 0.16 * uMoonVis;
 
         // 星星：入夜后铺满天空，缓慢闪烁
         float starZone = smoothstep(0.18, 0.5, h);
@@ -86,7 +98,6 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
   mesh.frustumCulled = false;
   mesh.renderOrder = -10;
 
-  let sunElBase = 0.17;
   return {
     mesh,
     update: (t: number) => {
@@ -94,19 +105,17 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
       // 太阳方向由 apply() 从场景光源位置统一设定（圆盘/光柱/水面波光/月亮必须同一个方向，
       // 各自为政就会出现"光柱斜这边、太阳在那边"的穿帮）
     },
-    apply: (p: SkyPalette, sunPos?: THREE.Vector3) => {
+    apply: (p: SkyPalette, sunD?: THREE.Vector3, moonD?: THREE.Vector3, sunVis = 1, moonVis = 0) => {
       mat.uniforms.uNight.value = p.night;
       (mat.uniforms.cZenith.value as THREE.Color).copy(p.zenith);
       (mat.uniforms.cMid.value as THREE.Color).copy(p.mid);
       (mat.uniforms.cRose.value as THREE.Color).copy(p.rose);
       (mat.uniforms.cHorizon.value as THREE.Color).copy(p.horizon);
       (mat.uniforms.cSea.value as THREE.Color).copy(p.sea);
-      if (sunPos) {
-        sunDir.copy(sunPos).normalize();
-      } else {
-        sunElBase = 0.05 + p.sunEl * 0.55;
-        sunDir.set(-0.62, sunElBase, -0.42).normalize();
-      }
+      if (sunD) sunDir.copy(sunD).normalize();
+      if (moonD) moonDir.copy(moonD).normalize();
+      mat.uniforms.uSunVis.value = sunVis;
+      mat.uniforms.uMoonVis.value = moonVis;
     },
   };
 }

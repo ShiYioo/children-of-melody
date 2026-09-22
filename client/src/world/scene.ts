@@ -28,7 +28,7 @@ export interface World {
   wind: ReturnType<typeof createWindLines>;
   bursts: ReturnType<typeof createBursts>;
   addToScene: (obj: THREE.Object3D) => void;
-  render: (dt: number, t: number) => void;
+  render: (dt: number, t: number, playerPos?: import("three").Vector3) => void;
   resize: () => void;
   /** 昼夜循环：phase 0~1（0 黄昏 → 0.25 夜 → 0.5 黎明 → 0.75 白昼），全部客户端按同一时钟对齐 */
   setDayPhase: (phase: number) => void;
@@ -169,26 +169,39 @@ export function createWorld(container: HTMLElement): World {
     const m = new THREE.Mesh(shaftGeo, shaftMat);
     shaftOffsets.push((Math.random() - 0.5) * 46);
     m.position.set(0, 16 + Math.random() * 6, shaftOffsets[i]);
-    m.scale.set(0.6 + Math.random(), 1, 1);
+    m.userData.baseW = 0.6 + Math.random();
+    m.scale.set(m.userData.baseW as number, 1.6, 1); // 光路拉长：从高空一路斜到近地
     m.userData.sway = Math.random() * Math.PI * 2;
     shafts.add(m);
   }
   scene.add(shafts);
-  /** 每帧：光柱基点移到「朝太阳 18m」的上空，朝向顺着当前太阳方向 */
-  function updateShafts(t: number) {
+  /**
+   * 每帧重算光柱：顶端锚在太阳（夜里=月亮）方向的高空、向下穿过玩家周围——
+   * 光「从太阳那里斜下来」并且跟着人走（走到哪光柱就在哪），缓慢漂移呼吸
+   */
+  function updateShafts(t: number, playerPos?: THREE.Vector3) {
     const sd = sun.position.clone().normalize();
-    const bx = sd.x * 18;
-    const bz = sd.z * 18;
-    // 与太阳方向垂直的横向轴（把散布铺开，而不是排成一串）
+    // 锚点：朝太阳方向 130m 的高空（视觉上光柱从太阳附近斜插下来）
+    const anchor = sd.clone().multiplyScalar(130);
+    // 落点：玩家附近偏太阳一侧 20m（光柱罩着人，随人移动）
+    const gtx = (playerPos?.x ?? 0) - sd.x * 20;
+    const gtz = (playerPos?.z ?? 0) - sd.z * 20;
+    // 与太阳方向垂直的横向轴（把光柱铺成一排有宽度的光帘）
     const px = -sd.z;
     const pz = sd.x;
     shafts.children.forEach((m, i) => {
-      const off = shaftOffsets[i] ?? 0;
-      m.position.set(bx + px * off, m.position.y, bz + pz * off);
-      m.lookAt(m.position.x - sd.x * 30, m.position.y - sd.y * 30, m.position.z - sd.z * 30);
+      const off = (shaftOffsets[i] ?? 0) * 0.55 + Math.sin(t * 0.08 + i * 1.7) * 3; // 横向缓慢漂移
+      const k = (i % 5) / 5 + 0.08; // 沿光路分布：0=高空近太阳 1=近地面
+      const cx = anchor.x + (gtx - anchor.x) * k;
+      const cy = anchor.y + (0 - anchor.y) * k * 0.85;
+      const cz = anchor.z + (gtz - anchor.z) * k;
+      m.position.set(cx + px * off, cy, cz + pz * off);
+      m.lookAt(m.position.x - sd.x * 40, m.position.y - sd.y * 40, m.position.z - sd.z * 40);
       m.rotateX(Math.PI / 2);
       const sway = m.userData.sway as number;
-      m.rotation.z = Math.sin(t * 0.35 + sway) * 0.05; // 光柱随气流微微摇曳
+      m.rotation.z = Math.sin(t * 0.35 + sway) * 0.05; // 随气流微微摇曳
+      const breathe = 0.85 + 0.15 * Math.sin(t * 0.5 + sway * 2); // 宽度呼吸
+      m.scale.x = (m.userData.baseW as number) * breathe;
     });
   }
 
@@ -303,10 +316,30 @@ export function createWorld(container: HTMLElement): World {
     skyPal.sunEl = THREE.MathUtils.lerp(a.sky.sunEl, b.sky.sunEl, u);
     mixC(a.sunColor, b.sunColor, sun.color);
     sun.intensity = THREE.MathUtils.lerp(a.sunInt, b.sunInt, u);
-    sun.position.lerpVectors(a.sunPos, b.sunPos, u);
-    // 太阳圆盘/月亮方向 = 场景光源方向（在 sun.position 更新之后再 apply，
-    // 天上的圆盘、光柱、水面波光从此同一个方向）
-    sky.apply(skyPal, sun.position);
+
+    // ---- 实时日月轨道：位置由时钟连续算出，光源、天空圆盘、光柱、水面波光跟随天体 ----
+    // 弧线区间必须严格卡在色板相位上，否则会出现"黎明的暖光从月亮方向照来"的错位：
+    // 太阳 p∈[0.5,1.0]（黎明相位升起→黄昏相位落下），月亮 p∈[0.12,0.48]（入夜升→黎明前落）
+    const sunT = (p - 0.5) / 0.5;
+    const moonT = (p - 0.12) / 0.36;
+    const arcDir = (t: number, maxEl: number, azBase: number, azSpan: number) => {
+      const elv = Math.sin(t * Math.PI) * maxEl;
+      const az = azBase + (t - 0.5) * azSpan;
+      return new THREE.Vector3(Math.sin(az) * Math.cos(elv), Math.sin(elv), Math.cos(az) * Math.cos(elv));
+    };
+    const sunUp = sunT >= 0 && sunT <= 1;
+    const moonUp = moonT >= 0 && moonT <= 1;
+    const sunD = sunUp ? arcDir(sunT, 0.95, -0.35, 2.8) : new THREE.Vector3(0, -1, 0);
+    const moonD = moonUp ? arcDir(moonT, 0.8, 2.6, -2.2) : new THREE.Vector3(0, -1, 0);
+    const sunElv = sunUp ? Math.sin(sunT * Math.PI) * 0.95 : -1;
+    const moonElv = moonUp ? Math.sin(moonT * Math.PI) * 0.8 : -1;
+    // 光源 = 主导天体（交叉时段按高度切换）；强度再乘高度因子——初升/将落的光更弱
+    const lead = sunElv >= moonElv ? sunD : moonD;
+    sun.position.copy(lead).multiplyScalar(60);
+    const elvDim = 0.6 + 0.4 * THREE.MathUtils.clamp(Math.max(sunElv, moonElv) / 0.5, 0, 1);
+    sun.intensity *= elvDim;
+    const horizonFade = (elv: number) => THREE.MathUtils.clamp((elv + 0.08) / 0.14, 0, 1);
+    sky.apply(skyPal, sunD, moonD, horizonFade(sunElv), horizonFade(moonElv));
     shaftMat.opacity = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u);
     renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
     // 萤火虫入夜点亮（白天几乎看不见），白天光尘入夜淡出（萤火虫接管）
@@ -344,11 +377,11 @@ export function createWorld(container: HTMLElement): World {
     wind,
     bursts,
     addToScene: (obj) => scene.add(obj),
-    render(dt, t) {
+    render(dt, t, playerPos) {
       sky.update(t);
       water.update(t);
       clouds.update(t);
-      updateShafts(t);
+      updateShafts(t, playerPos);
       props.updates.forEach((u) => u(t));
       motes.update(t);
       fireflies.update(t);

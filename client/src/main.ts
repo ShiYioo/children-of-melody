@@ -1258,6 +1258,6 @@ function tick(dt: number) {
     }
   }
 
-  world.render(dt, t);
+  world.render(dt, t, controls.state.pos); // 光柱跟随玩家
 }
 loop();
