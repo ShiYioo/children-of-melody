@@ -381,11 +381,24 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
   );
   beam.rotation.z = Math.PI / 2;
   beam.position.y = 9.0;
+  // 真扫光的探照灯：光束锥转到哪个方向，哪片地面/海面就被照亮（不再是只有贴图在转）
+  const sweep = new THREE.SpotLight("#ffd9a0", 260, 90, 0.32, 0.65, 1.4);
+  sweep.position.set(0, 9.2, 0);
+  sweep.castShadow = false;
+  const sweepTarget = new THREE.Object3D();
+  sweepTarget.position.set(30, 2, 0);
+  g.add(sweepTarget);
+  sweep.target = sweepTarget;
+  g.add(sweep);
+  // 光柱贴图与探照灯同轴：把贴图挪进 sweepPivot，一起转
   const beamPivot = new THREE.Group();
   beamPivot.position.y = 0;
   beamPivot.add(beam);
   beam.position.set(15, 9.0, 0);
   beam.rotation.set(0, 0, Math.PI / 2);
+  beamPivot.add(sweep);
+  sweep.position.set(0, 9.2, 0);
+  beamPivot.add(sweepTarget);
   g.add(beamPivot);
 
   return {
@@ -393,6 +406,8 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
     update: (t: number) => {
       beamPivot.rotation.y = t * 0.35;
       lamp.intensity = 26 + Math.sin(t * 2.2) * 4;
+      // 灯塔扫过时地面明暗真实流动（SpotLight 照亮沿途地形/海面/角色）
+      sweep.intensity = 240 + Math.sin(t * 2.2) * 30;
     },
   };
 }
@@ -504,7 +519,10 @@ function makeCampfire(kit: ToonKit): Campfire {
       flame1.material instanceof THREE.ShaderMaterial && (flame1.material.uniforms.uTime.value = t);
       flame2.material instanceof THREE.ShaderMaterial && (flame2.material.uniforms.uTime.value = t * 1.3);
       flame1.rotation.y = t * 0.8;
-      fireLight.intensity = 16 * fireBoost;
+      // 火光真闪烁：多层正弦叠加的有机抖动（光强+位置微微跳动），夜里篝火旁的人和凳子被跳动的光照着
+      const flick = 0.82 + 0.13 * Math.sin(t * 7.3) + 0.06 * Math.sin(t * 13.7 + 1.4) + 0.04 * Math.sin(t * 3.1 + 0.6);
+      fireLight.intensity = 16 * fireBoost * flick;
+      fireLight.position.set(Math.sin(t * 5.1) * 0.04, 1.0 + Math.sin(t * 8.7) * 0.03, Math.cos(t * 4.3) * 0.04);
     },
     /** 黄昏音乐会等场景的篝火增亮（1=常态） */
     setBoost: (v: number) => {
