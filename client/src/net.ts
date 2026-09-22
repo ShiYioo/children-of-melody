@@ -39,6 +39,10 @@ interface PlayerLike {  name: string;
 export interface VoiceEvents {
   onPresence: (id: string, active: boolean) => void;
   onSignal: (from: string, signal: VoiceSignal) => void;
+  /** 服务器中继语音分片（P2P 打不通的兜底通道） */
+  onAudio: (from: string, pcm: Uint8Array) => void;
+  /** 把自己的语音分片交给中继通道 */
+  sendAudio: (pcm: Uint8Array) => void;
 }
 
 export interface HandEvents {
@@ -71,6 +75,8 @@ export interface NetHandle {
   sendVoicePresence: (active: boolean) => void;
   requestVoicePresence: () => void;
   sendVoiceSignal: (to: string, signal: VoiceSignal) => void;
+  /** 语音中继分片（16kHz 单声道 PCM，80ms 一片） */
+  sendAudio: (pcm: Uint8Array) => void;
   close: () => void;
 }
 
@@ -92,7 +98,7 @@ export async function connectIsland(
   onDrop: () => void = () => {},
   /** 延迟探针：每 2 秒回报一次往返毫秒数 */
   onPing: (ms: number) => void = () => {},
-  voice: VoiceEvents = { onPresence: () => {}, onSignal: () => {} }
+  voice: VoiceEvents = { onPresence: () => {}, onSignal: () => {}, onAudio: () => {}, sendAudio: () => {} }
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
@@ -170,6 +176,12 @@ export async function connectIsland(
     const from = String(m?.from ?? "");
     const signal = m?.signal as VoiceSignal | undefined;
     if (from && signal) voice.onSignal(from, signal);
+  });
+  // 服务器中继语音（P2P 打不通时的兜底）：16kHz 单声道 PCM 分片
+  room.onMessage("voice-audio", (m: any) => {
+    const from = String(m?.id ?? "");
+    const data = m?.d;
+    if (from && data instanceof Uint8Array) voice.onAudio(from, data);
   });
 
   let selfHue: number | null = null;
@@ -284,6 +296,10 @@ export async function connectIsland(
     sendVoiceSignal(to, signal) {
       if (!to || !signal) return;
       room.send("voice-signal", { to, signal });
+    },
+    sendAudio(pcm) {
+      // 服务器只中继给 24 米内的开麦者；80ms 一片 2.5KB，叠加游戏消息也在 60/s 限内
+      room.send("voice-audio", pcm);
     },
     close() {
       closedByUs = true;

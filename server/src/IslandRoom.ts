@@ -221,6 +221,23 @@ export class IslandRoom extends Room {
       client.send("voice-list", { ids: [...this.voiceActive].filter((id) => id !== client.sessionId) });
     },
 
+    // ---- 服务器中继语音：P2P 打不通（内网 VPN/防火墙）时的保底通道 ----
+    // 发送者必须开麦；收听不需要开麦——24 米内所有人都听得见（靠近渐强由客户端做）
+    "voice-audio": (client: Client, m: any) => {
+      if (!this.voiceActive.has(client.sessionId)) return;
+      if (!(m instanceof Uint8Array) || m.length < 320 || m.length > 3200) return;
+      const me = this.state.players.get(client.sessionId);
+      if (!me) return;
+      const payload = { id: client.sessionId, d: m };
+      for (const c of this.clients) {
+        if (c.sessionId === client.sessionId) continue;
+        const p = this.state.players.get(c.sessionId);
+        if (!p) continue;
+        if (Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) > 24) continue;
+        c.send("voice-audio", payload);
+      }
+    },
+
     "voice-signal": (client: Client, m: any) => {
       const to = safeStr(m?.to, 64);
       if (!to || to === client.sessionId || !this.voiceActive.has(client.sessionId) || !this.voiceActive.has(to)) return;

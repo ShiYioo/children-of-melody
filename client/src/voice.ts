@@ -9,6 +9,8 @@ interface VoiceCallbacks {
   sendPresence: (active: boolean) => void;
   requestPresence: () => void;
   sendSignal: (to: string, signal: VoiceSignal) => void;
+  /** 服务器中继通道：把自己的 16kHz PCM 分片交给服务器转发（24 米内的人都能收到） */
+  sendAudio: (pcm: Uint8Array) => void;
   onState: (mode: VoiceMode) => void;
   onLocalLevel: (level: number) => void;
   onPeerLevel: (id: string, active: boolean, level: number) => void;
@@ -121,25 +123,22 @@ export class VoiceChat {
       this.localData = new Uint8Array(new ArrayBuffer(this.localAnalyser.fftSize));
       // 只接分析器，不接 destination，避免把自己的麦克风回放到耳机里。
       this.localSource.connect(this.localAnalyser);
+      // 中继采集：开麦即通过服务器转发——P2P（WebRTC 直连）在内网常被 VPN TUN/
+      // 防火墙/mDNS 问题打死，而游戏 WebSocket 本来就通着，走它就一定有声音。
+      // P2P 若连上，接收端会自动忽略中继分片（防双声）
+      this.startRelayCapture();
       this.callbacks.onState("on");
       if (this.online) {
         this.callbacks.sendPresence(true);
         this.callbacks.requestPresence();
         this.syncPeers();
       }
-      // 诊断：开麦 10 秒后仍无一条连通的语音通道——把原因说出口而不是无声失败
+      // 诊断：开麦 10 秒后附近没有任何人开麦——说明不是连接问题而是没人说话。
+      // （音频有服务器中继兜底，P2P 连不上不再算故障）
       window.setTimeout(() => {
         if (!this.enabled) return;
-        let connected = false;
-        for (const p of this.peers.values()) {
-          if (p.pc.connectionState === "connected") connected = true;
-        }
-        if (connected) return;
-        this.callbacks.onError(
-          this.remotePresence.size === 0
-            ? "麦克风已开，但附近还没有其他人开麦——对方也要点一下麦克风按钮（内网设备还需先做 chrome://flags 安全设置）"
-            : "语音通道没能建立（内网常见）：① 确认对方也开了麦克风；② 关掉 VPN 的 TUN/虚拟网卡模式再开一次；③ 双方离得近一点（24 米内）"
-        );
+        if (this.remotePresence.size > 0) return;
+        this.callbacks.onError("麦克风已开。附近还没有其他人开麦——对方点一下麦克风按钮，24 米内不开麦也能听见你");
       }, 10000);
     } catch (error) {
       this.enabled = false;
@@ -219,6 +218,120 @@ export class VoiceChat {
     this.disable();
     window.cancelAnimationFrame(this.sampleHandle);
     if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+  }
+
+  // ============ 服务器中继语音（保底通道：游戏 WebSocket 本来就通，走它必有声） ============
+
+  private relayNode: AudioWorkletNode | null = null;
+  /** 每个说话者的中继播放时间轴（抖动缓冲：按序排队，断流自动追赶） */
+  private relayNextAt = new Map<string, number>();
+  /** 中继说话者的最后活跃时刻（供 sample() 收拾 UI 电平） */
+  private relayLastAt = new Map<string, number>();
+  /** 免开麦的独立播放上下文：不随麦克风关闭而关闭（不开麦也要能听见） */
+  private _playCtx: AudioContext | null = null;
+
+  private playCtx(): AudioContext | null {
+    if (!this._playCtx) {
+      try {
+        this._playCtx = new AudioContext();
+      } catch {
+        return null;
+      }
+    }
+    // 进过游戏（点过按钮）就有 sticky activation，resume 能成功
+    if (this._playCtx.state === "suspended") void this._playCtx.resume();
+    return this._playCtx;
+  }
+
+  /** 开麦即启动中继采集：AudioWorklet 内重采样到 16kHz、打包 80ms 的 Int16 分片 */
+  private startRelayCapture() {
+    if (!this.audioContext || this.relayNode) return;
+    const code = `
+class RelayProc extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / 16000;
+    this.f = 0;
+    this.acc = new Float32Array(1280);
+    this.count = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    while (this.f < ch.length) {
+      const i = this.f | 0;
+      const t = this.f - i;
+      const nx = Math.min(i + 1, ch.length - 1);
+      this.acc[this.count++] = ch[i] + (ch[nx] - ch[i]) * t;
+      this.f += this.ratio;
+      if (this.count >= 1280) {
+        const out = new Int16Array(1280);
+        for (let j = 0; j < 1280; j++) {
+          const v = Math.max(-1, Math.min(1, this.acc[j]));
+          out[j] = v < 0 ? v * 32768 : v * 32767;
+        }
+        this.postMessage(out.buffer, [out.buffer]);
+        this.count = 0;
+      }
+    }
+    this.f -= ch.length;
+    return true;
+  }
+}
+registerProcessor("relay-proc", RelayProc);`;
+    const url = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+    this.audioContext
+      .audioWorklet.addModule(url)
+      .then(() => {
+        if (!this.audioContext || !this.stream || !this.localSource) return;
+        const node = new AudioWorkletNode(this.audioContext, "relay-proc");
+        node.port.onmessage = (e) => {
+          const buf = e.data as ArrayBuffer;
+          if (this.enabled && this.online && buf.byteLength === 2560) {
+            this.callbacks.sendAudio(new Uint8Array(buf));
+          }
+        };
+        // 本地麦克风分两路：分析器（UI 电平）+ 中继采集（worklet 不接目的地，无回声）
+        this.localSource.connect(node);
+        this.relayNode = node;
+      })
+      .catch(() => {
+        /* 中继采集失败：还有 P2P 路径 */
+      });
+  }
+
+  /** 收到中继语音：不开麦也能听（懒建播放上下文）；P2P 已通的说话者跳过防双声 */
+  handleVoiceAudio(from: string, pcm: Uint8Array) {
+    if (!from || from === this.sessionId) return;
+    const peer = this.peers.get(from);
+    if (peer?.pc.connectionState === "connected") return;
+    if (pcm.length < 320) return;
+    const ctx = this.playCtx();
+    if (!ctx) return;
+    const samples = pcm.length >> 1;
+    const buf = ctx.createBuffer(1, samples, 16000);
+    const ch = buf.getChannelData(0);
+    const dv = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    let sum = 0;
+    for (let i = 0; i < samples; i++) {
+      const v = dv.getInt16(i * 2, true) / 32768;
+      ch[i] = v;
+      sum += v * v;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.9;
+    src.connect(gain).connect(ctx.destination);
+    // 抖动缓冲：顺序排队播放；积压超过 0.4s（断流后的陈旧分片）直接追平到现在
+    let next = this.relayNextAt.get(from) ?? 0;
+    if (next - ctx.currentTime > 0.4) next = 0;
+    const startAt = Math.max(next, ctx.currentTime + 0.05);
+    src.start(startAt);
+    this.relayNextAt.set(from, startAt + buf.duration);
+    this.relayLastAt.set(from, performance.now());
+    // 说话电平供 UI 声浪
+    this.callbacks.onPeerLevel(from, true, Math.min(1, Math.sqrt(sum / samples) * 4));
   }
 
   /** ICE 失败后的自愈重试（去抖：1.2s 内只排一次） */
@@ -367,6 +480,8 @@ export class VoiceChat {
   private stopLocalAudio() {
     this.localSource?.disconnect();
     this.localAnalyser?.disconnect();
+    this.relayNode?.disconnect();
+    this.relayNode = null;
     this.localSource = null;
     this.localAnalyser = null;
     this.localData = new Uint8Array(new ArrayBuffer(0));
@@ -376,6 +491,7 @@ export class VoiceChat {
       void this.audioContext.close();
       this.audioContext = null;
     }
+    // 注意：_playCtx 不关——关麦后仍要能听见别人的中继语音
   }
 
   private sample() {
@@ -394,6 +510,15 @@ export class VoiceChat {
       if (Math.abs(level - previous) > 0.015) {
         this.lastPeerLevels.set(id, level);
         this.callbacks.onPeerLevel(id, true, level);
+      }
+    }
+    // 中继说话者停说 600ms → 收拾 UI 电平
+    const now = performance.now();
+    for (const [id, at] of this.relayLastAt) {
+      if (now - at > 600) {
+        this.relayLastAt.delete(id);
+        this.relayNextAt.delete(id);
+        if (!this.peers.has(id)) this.callbacks.onPeerLevel(id, false, 0);
       }
     }
     this.sampleHandle = window.requestAnimationFrame(() => this.sample());

@@ -256,6 +256,7 @@ voice = new VoiceChat({
   sendPresence: (active) => net?.sendVoicePresence(active),
   requestPresence: () => net?.requestVoicePresence(),
   sendSignal: (to, signal) => net?.sendVoiceSignal(to, signal),
+  sendAudio: (pcm) => net?.sendAudio(pcm),
   onState: (mode) => ui.setVoiceState(mode),
   onLocalLevel: (level) => {
     localVoiceLevel = level;
@@ -412,6 +413,8 @@ async function connectToIsland(name: string): Promise<NetHandle | null> {
     {
       onPresence: (id, active) => voice.handlePresence(id, active),
       onSignal: (from, signal) => voice.handleSignal(from, signal),
+      onAudio: (from, pcm) => voice.handleVoiceAudio(from, pcm),
+      sendAudio: (pcm) => net?.sendAudio(pcm),
     }
   );
 }
