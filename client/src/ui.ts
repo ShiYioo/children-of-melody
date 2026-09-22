@@ -33,6 +33,14 @@ export function createUI(handlers: {
   const npPlay = $("npPlay");
   const nearby = $("nearby");
   const toasts = $("toasts");
+  const helpModal = $("helpModal");
+  const helpTitle = $("helpTitle");
+  const helpBody = $("helpBody");
+  const helpClose = $("helpClose");
+  helpClose?.addEventListener("click", () => helpModal.classList.remove("open"));
+  helpModal?.addEventListener("click", (e) => {
+    if (e.target === helpModal) helpModal.classList.remove("open");
+  });
   const showToast = (text: string, ms = 2600) => {
     const el = document.createElement("div");
     el.className = "toast";
@@ -338,6 +346,12 @@ export function createUI(handlers: {
 
     toast(text: string, ms = 2600) {
       showToast(text, ms);
+    },
+    /** 长指引文案走正式弹窗（toast 装不下诊断步骤） */
+    notice(title: string, html: string) {
+      helpTitle.textContent = title;
+      helpBody.innerHTML = html;
+      helpModal.classList.add("open");
     },
     /** 绑定随身曲库的主人（连接成功后调用，列表/上传都会带上） */
     setSongOwner,

@@ -264,7 +264,20 @@ voice = new VoiceChat({
     if (active) remoteVoiceLevels.set(id, level);
     else remoteVoiceLevels.delete(id);
   },
-  onError: (message) => ui.toast(message, message.length > 40 ? 12000 : 3200), // 诊断指引类长文案给足阅读时间
+  onError: (message) => {
+    if (message.length > 40) {
+      // 长诊断走正式弹窗（小 toast 装不下操作步骤）；代码片段用 <code> 高亮方便长按复制
+      const origin = location.origin;
+      const html =
+        message.split("chrome://flags").join('<code>chrome://flags</code>')
+          .split("edge://flags").join('<code>edge://flags</code>')
+          .split(origin).join("<code>" + origin + "</code>") +
+        '<div class="hint">设置后重启浏览器、刷新页面，再点一次麦克风即可。正式上线（HTTPS 域名）无此问题。</div>';
+      ui.notice("语音打不开？", html);
+    } else {
+      ui.toast(message, 3200);
+    }
+  },
 });
 ui.focusName();
 

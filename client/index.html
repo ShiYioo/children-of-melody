@@ -211,6 +211,27 @@
     .modal-head { min-height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 1px 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
     .modal-head > div { flex: 1; min-width: 0; }
     #trackModal h2 { font-size: 13px; font-weight: 500; }
+    /* 帮助弹窗：长指引文案（如内网语音设置）用真正的对话框而不是小 toast */
+    #helpModal {
+      position: fixed; inset: 0; z-index: 62; display: flex; align-items: center; justify-content: center;
+      padding: 24px; background: rgba(8, 12, 20, .55); backdrop-filter: blur(3px);
+      opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, visibility .18s;
+    }
+    #helpModal.open { opacity: 1; visibility: visible; pointer-events: auto; }
+    #helpModal .box {
+      width: min(480px, 100%); max-height: 80vh; padding: 22px; overflow-y: auto;
+      border-radius: 10px; transform: translateY(8px) scale(.97); transform-origin: center;
+      transition: transform .18s ease; scrollbar-width: thin;
+    }
+    #helpModal.open .box { transform: none; }
+    #helpModal h2 { font-size: 16px; font-weight: 600; }
+    #helpBody { margin-top: 4px; color: var(--ink); font-size: 14px; line-height: 1.9; white-space: pre-wrap; word-break: break-word; }
+    #helpBody code {
+      display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12.5px;
+      background: rgba(255, 250, 240, .1); border: 1px solid var(--line); user-select: all;
+    }
+    #helpBody .hint { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 12px; }
+
     #trackModal .sub { margin-top: 4px; overflow: hidden; color: var(--ink-faint); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
     #trackModal .icon-btn { width: 38px; height: 38px; }
     #trackModal .icon-btn svg { width: 16px; height: 16px; }
@@ -288,8 +309,8 @@
     .book-row small { color: rgba(255, 250, 240, .55); font-size: 11px; }
     .book-empty { color: rgba(255, 250, 240, .6); font-size: 12px; line-height: 1.8; text-align: center; padding: 18px 6px; }
     .book-close { text-align: center; padding-top: 10px; color: rgba(255, 250, 240, .5); font-size: 12px; cursor: pointer; }
-    .chat-input { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 116px); z-index: 40; display: none; width: min(420px, calc(100vw - 36px)); height: 46px; padding: 0 17px; color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line-active); border-radius: 23px; box-shadow: var(--shadow); outline: none; transform: translateX(-50%); font-size: 14px; }
-    .chat-input::placeholder { color: var(--ink-faint); }
+    .chat-input { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 116px); z-index: 40; display: none; width: min(520px, calc(100vw - 32px)); height: 56px; padding: 0 22px; color: var(--ink); background: var(--glass-strong); border: 1px solid var(--line-active); border-radius: 16px; box-shadow: var(--shadow); outline: none; transform: translateX(-50%); font-size: 16px; }
+    .chat-input::placeholder { color: var(--ink-faint); font-size: 14px; }
     .emote-wheel { position: fixed; left: 50%; top: 50%; z-index: 50; display: none; grid-template-columns: repeat(3, 64px); gap: 8px; padding: 12px; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); transform: translate(-50%, -50%); }
     .emote-btn { width: 64px; height: 60px; display: grid; place-items: center; gap: 3px; color: var(--ink-soft); background: rgba(255, 255, 255, .04); border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 10px; }
     .emote-btn:hover, .emote-btn:focus { color: var(--ink); background: rgba(255, 255, 255, .1); border-color: var(--line); }
@@ -491,6 +512,15 @@
 
   <div id="toasts"></div>
 
+  <div id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <section class="box panel">
+      <header class="modal-head">
+        <div><h2 id="helpTitle">帮助</h2></div>
+        <button id="helpClose" class="icon-btn" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+      </header>
+      <div id="helpBody"></div>
+    </section>
+  </div>
   <div id="trackModal" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
     <section class="box panel">
       <header class="modal-head">

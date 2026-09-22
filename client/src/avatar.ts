@@ -68,10 +68,10 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
   const cv = document.createElement("canvas");
   cv.width = 512;
   const ctx = cv.getContext("2d")!;
-  const font = "500 33px 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif";
+  const font = "500 40px 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif";
   ctx.font = font;
-  // 手动折行（measureText 对中英文混排都可靠），最多 3 行
-  const maxW = 430;
+  // 手动折行（measureText 对中英文混排都可靠），最多 4 行（放大字号后行数多一点少截断）
+  const maxW = 436;
   const lines: string[] = [];
   for (const seg of text.split("\n")) {
     let line = "";
@@ -79,21 +79,21 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
       if (ctx.measureText(line + ch).width > maxW) {
         lines.push(line);
         line = ch;
-        if (lines.length === 3) break;
+        if (lines.length === 4) break;
       } else {
         line += ch;
       }
     }
-    if (lines.length === 3) {
-      if (line) lines[2] = (lines[2] + line).slice(0, -1) + "…";
+    if (lines.length === 4) {
+      if (line) lines[3] = (lines[3] + line).slice(0, -1) + "…";
       break;
     }
     lines.push(line);
   }
-  const lineH = 44;
-  const padX = 26;
-  const padY = 20;
-  const tail = 16;
+  const lineH = 54;
+  const padX = 30;
+  const padY = 24;
+  const tail = 18;
   const textW = Math.max(...lines.map((l) => ctx.measureText(l).width), 60);
   cv.height = Math.ceil(padY * 2 + lines.length * lineH + tail);
   // 尺寸变了之后画布会重置，重新设字体
@@ -103,7 +103,7 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
   c2.textBaseline = "middle";
   const boxW = textW + padX * 2;
   c2.beginPath();
-  c2.roundRect((512 - boxW) / 2, 4, boxW, cv.height - tail - 4, 22);
+  c2.roundRect((512 - boxW) / 2, 4, boxW, cv.height - tail - 4, 26);
   // 深色半透明底：和名牌同一套 UI 语言；场景有 UnrealBloom（阈值 0.72），
   // 浅色气泡会超过阈值被泛光点亮，像自带光源一样刺眼
   c2.fillStyle = "rgba(26, 18, 42, 0.88)";
@@ -123,7 +123,7 @@ function bubbleTexture(text: string): { texture: THREE.CanvasTexture; w: number;
   lines.forEach((l, i) => c2.fillText(l, 256, 4 + padY + i * lineH + lineH / 2));
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const w = Math.min(2.6, 0.9 + (textW / 512) * 2.6);
+  const w = Math.min(3.6, 1.35 + (textW / 512) * 3.4);
   return { texture: tex, w, h: w * (cv.height / 512) };
 }
 

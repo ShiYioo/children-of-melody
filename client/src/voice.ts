@@ -127,6 +127,20 @@ export class VoiceChat {
         this.callbacks.requestPresence();
         this.syncPeers();
       }
+      // 诊断：开麦 10 秒后仍无一条连通的语音通道——把原因说出口而不是无声失败
+      window.setTimeout(() => {
+        if (!this.enabled) return;
+        let connected = false;
+        for (const p of this.peers.values()) {
+          if (p.pc.connectionState === "connected") connected = true;
+        }
+        if (connected) return;
+        this.callbacks.onError(
+          this.remotePresence.size === 0
+            ? "麦克风已开，但附近还没有其他人开麦——对方也要点一下麦克风按钮（内网设备还需先做 chrome://flags 安全设置）"
+            : "语音通道没能建立（内网常见）：① 确认对方也开了麦克风；② 关掉 VPN 的 TUN/虚拟网卡模式再开一次；③ 双方离得近一点（24 米内）"
+        );
+      }, 10000);
     } catch (error) {
       this.enabled = false;
       this.stopLocalAudio();
@@ -204,6 +218,17 @@ export class VoiceChat {
   dispose() {
     this.disable();
     window.cancelAnimationFrame(this.sampleHandle);
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
+  }
+
+  /** ICE 失败后的自愈重试（去抖：1.2s 内只排一次） */
+  private retryTimer: number | null = null;
+  private retrySoon() {
+    if (this.retryTimer !== null) return;
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null;
+      if (this.enabled && this.online) this.syncPeers();
+    }, 1200);
   }
 
   private syncPeers() {
@@ -249,11 +274,20 @@ export class VoiceChat {
       this.attachRemoteAudio(peer, stream);
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") this.closePeer(id, peer);
+      console.info(`[voice] 与 ${id.slice(0, 6)} 的通道: ${pc.connectionState}`);
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        this.closePeer(id, peer);
+        // ICE 失败自愈：syncPeers 是事件驱动的，失败后没人再触发就永远哑着——
+        // 2 秒后自动重试（常见于内网里 VPN/虚拟网卡的候选路由劣化，重试常能换路建连）
+        this.retrySoon();
+      }
       if (pc.connectionState === "disconnected") {
         if (peer.disconnectTimer !== null) window.clearTimeout(peer.disconnectTimer);
         peer.disconnectTimer = window.setTimeout(() => {
-          if (pc.connectionState === "disconnected") this.closePeer(id, peer);
+          if (pc.connectionState === "disconnected") {
+            this.closePeer(id, peer);
+            this.retrySoon();
+          }
         }, 6000);
       }
     };
