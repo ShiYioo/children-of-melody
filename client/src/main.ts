@@ -886,11 +886,16 @@ function sendFlowerToNearest() {
     return;
   }
   const n = net;
-  const cands = remotes.infos(controls.state.pos).filter((i) => i.clarity > 0.2 && i.key !== n.sessionId);
+  // 献花对象：歌听得清的，或 2 秒内弹过琴的（noteFeed）——弹乐器的人也值得被献花
+  const cands = remotes.infos(controls.state.pos).filter((i) => {
+    if (i.key === n.sessionId) return false;
+    if (i.clarity > 0.2) return true;
+    return now - (noteFeed.get(i.key) ?? 0) < 2000;
+  });
   cands.sort((a, b) => a.dist - b.dist);
   const target = cands[0];
   if (!target) {
-    ui.toast("附近没有正在响起的歌——走近一点再献花", 2200);
+    ui.toast("附近没有正在响起的歌或琴声——走近一点再献花", 2200);
     return;
   }
   lastFlowerSent = now;
