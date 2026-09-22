@@ -75,7 +75,7 @@ export function createWorld(container: HTMLElement): World {
   sun.shadow.camera.right = 62;
   sun.shadow.camera.top = 62;
   sun.shadow.camera.bottom = -62;
-  sun.shadow.near = 1;
+  sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 200;
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.02;
