@@ -34,11 +34,30 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
   g.scale.setScalar(scale);
   g.rotation.y = Math.random() * Math.PI * 2;
 
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.24, 2.4, 7), kit.mat("#b98b6f"));
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.24, 2.4, 9), kit.mat("#b98b6f"));
   trunk.position.y = 1.2;
   trunk.rotation.z = (Math.random() - 0.5) * 0.12; // 微微歪一点，更自然
   trunk.castShadow = true;
   g.add(trunk);
+
+  // 根部张开的短锥裙（树不是插在地上的一根管子）
+  const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.46, 0.55, 9), kit.mat("#b98b6f"));
+  flare.position.y = 0.18;
+  flare.castShadow = true;
+  g.add(flare);
+
+  // 两根伸进树冠的枝桠（打破「一根棍子顶个球」）
+  for (const [bx, bz, tilt] of [
+    [0.42, 0.18, -0.75],
+    [-0.38, -0.26, 0.7],
+  ] as const) {
+    const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.1, 1.35, 7), kit.mat("#b98b6f"));
+    branch.position.set(bx * 0.9, 2.25, bz * 0.9);
+    branch.rotation.y = Math.atan2(bx, bz);
+    branch.rotation.z = tilt;
+    branch.castShadow = true;
+    g.add(branch);
+  }
 
   // 大圆冠：三颗压扁的球叠成云朵状冠，双色分层次
   const canopyGeos: THREE.BufferGeometry[] = [];
@@ -266,30 +285,88 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
   const x = 26, z = -28;
   g.position.set(x, terrainHeight(x, z) - 0.3, z);
 
-  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.25, 8.2, 12), kit.mat("#f7f0e4"));
+  // ---- 石砌两阶基座 ----
+  const base1 = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.95, 0.5, 24), kit.mat("#d9c9b8"));
+  base1.position.y = 0.25;
+  base1.castShadow = true;
+  const base2 = new THREE.Mesh(new THREE.CylinderGeometry(1.42, 1.6, 0.45, 24), kit.mat("#e2d5c4"));
+  base2.position.y = 0.7;
+  base2.castShadow = true;
+  g.add(base1, base2);
+
+  // ---- 塔身（24 段顺滑）+ 拱门朝岛心 + 三扇带窗台的小窗 ----
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.25, 8.2, 24), kit.mat("#f7f0e4"));
   tower.position.y = 4.1;
   tower.castShadow = true;
   g.add(tower);
+  const radiusAt = (y: number) => 1.25 - y * (0.4 / 8.2);
+  const doorA = Math.atan2(-x, -z); // 朝篝火广场
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.05, 0.14), kit.mat("#6a4a58"));
+  door.position.set(Math.sin(doorA) * (radiusAt(1.3) - 0.06), 1.35, Math.cos(doorA) * (radiusAt(1.3) - 0.06));
+  door.rotation.y = doorA;
+  g.add(door);
+  const doorArc = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.05, 6, 12, Math.PI), kit.mat("#d9c9b8"));
+  doorArc.position.set(Math.sin(doorA) * radiusAt(1.9), 1.87, Math.cos(doorA) * radiusAt(1.9));
+  doorArc.rotation.y = doorA;
+  g.add(doorArc);
+  for (const [wy, wa] of [[3.1, doorA + 1.9], [5.6, doorA - 1.9], [7.5, doorA + 0.9]] as const) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.12), kit.mat("#6a4a58"));
+    win.position.set(Math.sin(wa) * (radiusAt(wy) - 0.04), wy, Math.cos(wa) * (radiusAt(wy) - 0.04));
+    win.rotation.y = wa;
+    g.add(win);
+    const sill = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.07, 0.15), kit.mat("#d9c9b8"));
+    sill.position.copy(win.position).add(new THREE.Vector3(Math.sin(wa) * 0.04, -0.3, Math.cos(wa) * 0.04));
+    sill.rotation.y = wa;
+    g.add(sill);
+  }
 
-  for (const y of [2.2, 5.2]) {
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(1.02 - (8.2 - y) * 0.026, 1.06 - (8.2 - y) * 0.026, 0.9, 12), kit.mat("#e8aebf"));
+  for (const y of [2.7, 5.2, 7.2]) {
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(radiusAt(y + 0.45) + 0.04, radiusAt(y - 0.45) + 0.04, 0.9, 24), kit.mat("#e8aebf"));
     band.position.y = y;
     g.add(band);
   }
 
-  const gallery = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.28, 12), kit.mat("#d9c9b8"));
+  // ---- 环廊 + 栏杆（细柱一圈 + 扶手环） ----
+  const gallery = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 0.28, 24), kit.mat("#d9c9b8"));
   gallery.position.y = 8.3;
   gallery.castShadow = true;
   g.add(gallery);
+  const railMat = kit.mat("#e8aebf");
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.55, 6), railMat);
+    post.position.set(Math.cos(a) * 1.26, 8.72, Math.sin(a) * 1.26);
+    g.add(post);
+  }
+  const railRing = new THREE.Mesh(new THREE.TorusGeometry(1.26, 0.04, 6, 24), railMat);
+  railRing.rotation.x = Math.PI / 2;
+  railRing.position.y = 8.98;
+  g.add(railRing);
 
-  const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: "#ffd98f" }));
+  // ---- 灯室：玻璃罩 + 竖框 + 灯芯 ----
+  const glass = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.52, 0.52, 0.8, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: "#ffdf9f", transparent: true, opacity: 0.3, depthWrite: false })
+  );
+  glass.position.y = 9.0;
+  g.add(glass);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.06), railMat);
+    mullion.position.set(Math.cos(a) * 0.52, 9.0, Math.sin(a) * 0.52);
+    g.add(mullion);
+  }
+  const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.38, 14, 12), new THREE.MeshBasicMaterial({ color: "#ffd98f" }));
   lantern.position.y = 9.0;
   g.add(lantern);
 
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.95, 1.1, 12), kit.mat("#e8aebf"));
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.95, 1.1, 24), kit.mat("#e8aebf"));
   roof.position.y = 10.1;
   roof.castShadow = true;
   g.add(roof);
+  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), railMat);
+  finial.position.y = 10.72;
+  g.add(finial);
 
   const lamp = new THREE.PointLight("#ffcf8f", 30, 40, 1.6);
   lamp.position.y = 9.0;
@@ -340,15 +417,24 @@ function makeCampfire(kit: ToonKit): Campfire {
     stone.castShadow = true;
     g.add(stone);
   }
-  // 柴堆
-  for (let i = 0; i < 3; i++) {
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.2, 6), kit.mat("#8a6248"));
-    log.position.y = 0.2;
-    log.rotation.z = Math.PI / 2 - 0.25;
-    log.rotation.y = (i / 3) * Math.PI * 2;
+  // 柴堆：五根带锥度的柴交错架起（外端细内端粗），高低错落
+  for (let i = 0; i < 5; i++) {
+    const len = 1.05 + (i % 2) * 0.22;
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.09, len, 7), kit.mat("#8a6248"));
+    log.position.y = 0.14 + (i % 2) * 0.07;
+    log.rotation.z = Math.PI / 2 - 0.2 - (i % 2) * 0.12;
+    log.rotation.y = (i / 5) * Math.PI * 2 + 0.4;
     log.castShadow = true;
     g.add(log);
   }
+  // 炭火微光（火堆脚下一层暖光，夜里有余温感）
+  const ember = new THREE.Mesh(
+    new THREE.CircleGeometry(0.55, 16),
+    new THREE.MeshBasicMaterial({ color: "#ff9a4a", transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  ember.rotation.x = -Math.PI / 2;
+  ember.position.y = 0.09;
+  g.add(ember);
 
   // 火焰（双层扰动圆锥，additive）
   const flameMat = (colorA: string, colorB: string, scale: number) =>
