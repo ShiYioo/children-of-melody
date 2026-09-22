@@ -137,13 +137,13 @@ export class PlayerControls {
       this.lastCamInputAt = performance.now();
       if (document.pointerLockElement === dom) {
         this.camYaw -= e.movementX * 0.0026;
-        this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, 0.05, 1.15);
+        this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, -0.35, 1.25);
         return;
       }
       if (!this.dragging) return;
       // 未锁定时拖拽同样「右拖=视角右转」，两种模式方向一致
       this.camYaw -= (e.clientX - this.lastX) * 0.005;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + (e.clientY - this.lastY) * 0.004, 0.05, 1.15);
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch + (e.clientY - this.lastY) * 0.004, -0.35, 1.25);
       this.lastX = e.clientX;
       this.lastY = e.clientY;
     });
