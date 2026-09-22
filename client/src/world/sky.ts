@@ -66,6 +66,9 @@ export function createSky(): { mesh: THREE.Mesh; update: (t: number) => void; ap
         float sd = max(dot(d, uSunDir), 0.0);
         col += vec3(1.0, 0.85, 0.6) * pow(sd, 20.0) * 0.55 * (1.0 - uNight * 0.8);
         col += vec3(0.85, 0.92, 1.0) * pow(sd, 300.0) * (mix(1.1, 0.5, uNight));
+        // 月亮：夜里的光源位置就是月亮方向——清冷的圆面 + 一圈月晕（光遇的月）
+        col += vec3(0.93, 0.96, 1.0) * pow(sd, 1800.0) * 1.3 * uNight;
+        col += vec3(0.72, 0.8, 1.0) * pow(sd, 48.0) * 0.16 * uNight;
 
         // 星星：入夜后铺满天空，缓慢闪烁
         float starZone = smoothstep(0.18, 0.5, h);

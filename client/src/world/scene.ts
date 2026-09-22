@@ -151,7 +151,8 @@ export function createWorld(container: HTMLElement): World {
   scene.add(bursts.group);
 
   // ---- 从太阳方向斜射下来的柔光柱（丁达尔） ----
-  const sunDir = new THREE.Vector3(-0.62, 0.3, -0.42).normalize();
+  // 光柱必须永远顺着「当下」的太阳：太阳随昼夜在天上走（黄昏低垂→正午高照→夜里换成月亮），
+  // 钉死在黄昏方位的光柱在白天/夜里是穿帮的。这里只定每根的横向散布，基点与朝向每帧重算
   const shafts = new THREE.Group();
   const shaftMat = new THREE.MeshBasicMaterial({
     color: "#ffedc4",
@@ -163,16 +164,33 @@ export function createWorld(container: HTMLElement): World {
     fog: false,
   });
   const shaftGeo = new THREE.PlaneGeometry(3.2, 60);
-  for (let i = 0; i < 9; i++) {
+  const shaftOffsets: number[] = [];
+  for (let i = 0; i < 10; i++) {
     const m = new THREE.Mesh(shaftGeo, shaftMat);
-    const along = -14 + Math.random() * 40;
-    m.position.set(-30 + along * -0.62 + (Math.random() - 0.5) * 26, 16 + Math.random() * 6, -20 + along * -0.42 + (Math.random() - 0.5) * 26);
-    m.lookAt(m.position.clone().sub(sunDir.clone().multiplyScalar(30)));
-    m.rotateX(Math.PI / 2);
+    shaftOffsets.push((Math.random() - 0.5) * 46);
+    m.position.set(0, 16 + Math.random() * 6, shaftOffsets[i]);
     m.scale.set(0.6 + Math.random(), 1, 1);
+    m.userData.sway = Math.random() * Math.PI * 2;
     shafts.add(m);
   }
   scene.add(shafts);
+  /** 每帧：光柱基点移到「朝太阳 18m」的上空，朝向顺着当前太阳方向 */
+  function updateShafts(t: number) {
+    const sd = sun.position.clone().normalize();
+    const bx = sd.x * 18;
+    const bz = sd.z * 18;
+    // 与太阳方向垂直的横向轴（把散布铺开，而不是排成一串）
+    const px = -sd.z;
+    const pz = sd.x;
+    shafts.children.forEach((m, i) => {
+      const off = shaftOffsets[i] ?? 0;
+      m.position.set(bx + px * off, m.position.y, bz + pz * off);
+      m.lookAt(m.position.x - sd.x * 30, m.position.y - sd.y * 30, m.position.z - sd.z * 30);
+      m.rotateX(Math.PI / 2);
+      const sway = m.userData.sway as number;
+      m.rotation.z = Math.sin(t * 0.35 + sway) * 0.05; // 光柱随气流微微摇曳
+    });
+  }
 
   // ---- 后期：柔光 Bloom，让火焰/灯塔/光尘发出光遇式的柔辉 ----
   const composer = new EffectComposer(renderer);
@@ -336,6 +354,7 @@ export function createWorld(container: HTMLElement): World {
       sky.update(t);
       water.update(t);
       clouds.update(t);
+      updateShafts(t);
       props.updates.forEach((u) => u(t));
       motes.update(t);
       fireflies.update(t);
