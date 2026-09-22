@@ -672,6 +672,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     bubbleUntil = performance.now() + 6000;
   };
 
+  // 角色接收阴影：走进树荫/山影里身体跟着变暗（光遇的角色会"进入"阴影）
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) o.receiveShadow = true;
+  });
+
   return {
     group,
     say,

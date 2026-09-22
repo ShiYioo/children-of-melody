@@ -20,6 +20,9 @@ import { isTouchDevice } from "../touch";
 const SPEC_DAY = new THREE.Color("#ffe9c0");
 const SPEC_WARM = new THREE.Color("#ffb36b");
 const SPEC_NIGHT = new THREE.Color("#cfd8ff");
+// 光色随高度的真实大气散射：贴地平线的暖橙 / 月光的冷蓝
+const _warmHorizon = new THREE.Color("#ff9d62");
+const _moonLight = new THREE.Color("#a8b8e8");
 
 export interface World {
   scene: THREE.Scene;
@@ -67,11 +70,12 @@ export function createWorld(container: HTMLElement): World {
   sun.position.set(-37, 16, -25);
   sun.castShadow = true;
   sun.shadow.mapSize.set(mobile ? 1024 : 2048, mobile ? 1024 : 2048);
-  sun.shadow.camera.left = -80;
-  sun.shadow.camera.right = 80;
-  sun.shadow.camera.top = 80;
-  sun.shadow.camera.bottom = -80;
-  sun.shadow.camera.near = 1;
+  // 岛半径 58：±62 贴着岛界，阴影贴图像素密度提升 ~65%（边缘更利落）
+  sun.shadow.camera.left = -62;
+  sun.shadow.camera.right = 62;
+  sun.shadow.camera.top = 62;
+  sun.shadow.camera.bottom = -62;
+  sun.shadow.near = 1;
   sun.shadow.camera.far = 200;
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.02;
@@ -356,9 +360,16 @@ export function createWorld(container: HTMLElement): World {
     const moonElv = moonUp ? Math.sin(moonT * Math.PI) * 0.8 : -1;
     // 光源 = 主导天体（交叉时段按高度切换）；强度再乘高度因子——初升/将落的光更弱
     const lead = sunElv >= moonElv ? sunD : moonD;
+    const leadIsMoon = moonElv > sunElv;
     sun.position.copy(lead).multiplyScalar(60);
     const elvDim = 0.6 + 0.4 * THREE.MathUtils.clamp(Math.max(sunElv, moonElv) / 0.5, 0, 1);
     sun.intensity *= elvDim;
+    // 光色随高度连续变化（大气散射的真实行为）：贴地平线时最暖（长路径散射），
+    // 爬高逐渐转白；月亮主导时整体偏冷蓝——不再只靠相位关键帧的阶梯色
+    const leadElv = Math.max(sunElv, moonElv);
+    const lowSun = 1 - THREE.MathUtils.clamp(leadElv / 0.45, 0, 1);
+    sun.color.lerp(_warmHorizon, lowSun * 0.55);
+    if (leadIsMoon) sun.color.lerp(_moonLight, 0.6);
     const horizonFade = (elv: number) => THREE.MathUtils.clamp((elv + 0.08) / 0.14, 0, 1);
     sky.apply(skyPal, sunD, moonD, horizonFade(sunElv), horizonFade(moonElv));
     // 体积光基调：黄昏/黎明最盛（长光路），白昼中等，夜里月亮的冷光最克制
