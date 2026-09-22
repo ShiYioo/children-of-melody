@@ -19,6 +19,19 @@ interface NpcState {
 
 const NPC_NAMES = ["海风的诗", "星屑收集者", "花田看守", "潮汐信使", "拾光的人"];
 
+/** 选一个旱地落脚点：地标±散布多次采样，直到地形高于水面余量——
+ *  岸环洼地(湖)在 r≈45+ 一带，南沙岸/东北滩这类地标散出去就是水里 */
+function pickDrySpot(): THREE.Vector3 {
+  for (let tries = 0; tries < 10; tries++) {
+    const spot = LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)];
+    const x = spot.x + (Math.random() - 0.5) * 10;
+    const z = spot.z + (Math.random() - 0.5) * 10;
+    if (terrainHeight(x, z) > 0.9) return new THREE.Vector3(x, 0, z);
+  }
+  // 采不到就回广场（一定干燥）
+  return new THREE.Vector3((Math.random() - 0.5) * 8, 0, (Math.random() - 0.5) * 8);
+}
+
 export class NpcDriver {
   private npcs: NpcState[] = [];
   private t = 0;
@@ -42,8 +55,13 @@ export class NpcDriver {
     NPC_NAMES.forEach((name, i) => {
       const key = `npc-${i}`;
       const spot = LANDMARKS[(i + 1) % LANDMARKS.length];
-      const x = spot.x + (Math.random() - 0.5) * 6;
-      const z = spot.z + (Math.random() - 0.5) * 6;
+      // 出生点也要旱地：向地标中心回拉直到高于水面
+      let x = spot.x + (Math.random() - 0.5) * 6;
+      let z = spot.z + (Math.random() - 0.5) * 6;
+      for (let tries = 0; tries < 8 && terrainHeight(x, z) < 0.9; tries++) {
+        x = x * 0.7 + spot.x * 0.3;
+        z = z * 0.7 + spot.z * 0.3;
+      }
       const track = TRACKS[i % TRACKS.length];
       this.remotes.spawn(key, {
         name,
@@ -118,14 +136,15 @@ export class NpcDriver {
           if (Math.random() < 0.45) {
             n.sitUntil = this.t + 5 + Math.random() * 7;
           } else {
-            const spot = LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)];
-            n.target.set(
-              spot.x + (Math.random() - 0.5) * 10,
-              0,
-              spot.z + (Math.random() - 0.5) * 10
-            );
+            n.target.copy(pickDrySpot());
           }
           n.waitUntil = this.t + 1 + Math.random() * 3;
+          return;
+        }
+
+        // 走进水里了（目标点在岸环洼地）→ 立刻换个旱地目标
+        if (terrainHeight(pos.x, pos.z) < 0.7) {
+          n.target.copy(pickDrySpot());
           return;
         }
 
@@ -136,12 +155,7 @@ export class NpcDriver {
         if (resolveColliders(pos, null, 0.34)) {
           n.stuckFor += dt;
           if (n.stuckFor > 1.2) {
-            const spot = LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)];
-            n.target.set(
-              spot.x + (Math.random() - 0.5) * 10,
-              0,
-              spot.z + (Math.random() - 0.5) * 10
-            );
+            n.target.copy(pickDrySpot());
             n.stuckFor = 0;
           }
         } else {

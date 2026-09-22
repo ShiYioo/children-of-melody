@@ -284,14 +284,15 @@ function makeGrass(): THREE.Mesh {
 function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number) => void } {
   const g = new THREE.Group();
   const x = 26, z = -28;
-  g.position.set(x, terrainHeight(x, z) - 0.3, z);
+  // 山丘顶是陡坡，宽基座的下坡侧边缘会悬空——整体埋深 1.1m 让石基"长"进坡里
+  g.position.set(x, terrainHeight(x, z) - 1.1, z);
 
-  // ---- 石砌两阶基座 ----
-  const base1 = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.95, 0.5, 24), kit.mat("#d9c9b8"));
-  base1.position.y = 0.25;
+  // ---- 石砌两阶基座（收窄：太宽在陡坡上悬得更明显） ----
+  const base1 = new THREE.Mesh(new THREE.CylinderGeometry(1.55, 1.78, 0.7, 24), kit.mat("#d9c9b8"));
+  base1.position.y = 0.3;
   base1.castShadow = true;
-  const base2 = new THREE.Mesh(new THREE.CylinderGeometry(1.42, 1.6, 0.45, 24), kit.mat("#e2d5c4"));
-  base2.position.y = 0.7;
+  const base2 = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.56, 0.5, 24), kit.mat("#e2d5c4"));
+  base2.position.y = 0.85;
   base2.castShadow = true;
   g.add(base1, base2);
 
@@ -303,14 +304,14 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
   const radiusAt = (y: number) => 1.25 - y * (0.4 / 8.2);
   const doorA = Math.atan2(-x, -z); // 朝篝火广场
   const door = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.05, 0.14), kit.mat("#6a4a58"));
-  door.position.set(Math.sin(doorA) * (radiusAt(1.3) - 0.06), 1.35, Math.cos(doorA) * (radiusAt(1.3) - 0.06));
+  door.position.set(Math.sin(doorA) * (radiusAt(1.7) - 0.06), 1.68, Math.cos(doorA) * (radiusAt(1.7) - 0.06));
   door.rotation.y = doorA;
   g.add(door);
   const doorArc = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.05, 6, 12, Math.PI), kit.mat("#d9c9b8"));
-  doorArc.position.set(Math.sin(doorA) * radiusAt(1.9), 1.87, Math.cos(doorA) * radiusAt(1.9));
+  doorArc.position.set(Math.sin(doorA) * radiusAt(2.2), 2.2, Math.cos(doorA) * radiusAt(2.2));
   doorArc.rotation.y = doorA;
   g.add(doorArc);
-  for (const [wy, wa] of [[3.1, doorA + 1.9], [5.6, doorA - 1.9], [7.5, doorA + 0.9]] as const) {
+  for (const [wy, wa] of [[3.8, doorA + 1.9], [6.2, doorA - 1.9], [7.7, doorA + 0.9]] as const) {
     const win = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.12), kit.mat("#6a4a58"));
     win.position.set(Math.sin(wa) * (radiusAt(wy) - 0.04), wy, Math.cos(wa) * (radiusAt(wy) - 0.04));
     win.rotation.y = wa;
@@ -582,9 +583,10 @@ export function createProps(kit: ToonKit): {
   group.add(lh.group);
   updates.push(lh.update);
   {
-    // 灯塔塔身（含顶层环廊）——环廊顶面可以滑翔上去站着看海
+    // 灯塔塔身（含顶层环廊）——环廊顶面可以滑翔上去站着看海。
+    // 模型整体埋深 1.1（防陡坡悬空），环廊站立面同步下移
     const h = terrainHeight(26, -28);
-    addCollider({ x: 26, z: -28, r: 1.45, y0: h - 0.6, y1: h - 0.3 + 8.44, stand: true, standR: 1.25 });
+    addCollider({ x: 26, z: -28, r: 1.45, y0: h - 1.4, y1: h - 1.1 + 8.5, stand: true, standR: 1.25 });
   }
 
   const campfire = makeCampfire(kit);
