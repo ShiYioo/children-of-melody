@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { createSky, type SkyPalette } from "./sky";
 import { createTerrain } from "./terrain";
@@ -150,64 +151,84 @@ export function createWorld(container: HTMLElement): World {
   const bursts = createBursts();
   scene.add(bursts.group);
 
-  // ---- 从太阳方向斜射下来的柔光柱（丁达尔） ----
-  // 光柱必须永远顺着「当下」的太阳：太阳随昼夜在天上走（黄昏低垂→正午高照→夜里换成月亮），
-  // 钉死在黄昏方位的光柱在白天/夜里是穿帮的。这里只定每根的横向散布，基点与朝向每帧重算
-  const shafts = new THREE.Group();
-  const shaftMat = new THREE.MeshBasicMaterial({
-    color: "#ffedc4",
-    transparent: true,
-    opacity: 0.05,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-    fog: false,
-  });
-  const shaftGeo = new THREE.PlaneGeometry(3.2, 60);
-  const shaftOffsets: number[] = [];
-  for (let i = 0; i < 10; i++) {
-    const m = new THREE.Mesh(shaftGeo, shaftMat);
-    shaftOffsets.push((Math.random() - 0.5) * 46);
-    m.position.set(0, 16 + Math.random() * 6, shaftOffsets[i]);
-    m.userData.baseW = 0.6 + Math.random();
-    m.scale.set(m.userData.baseW as number, 1.6, 1); // 光路拉长：从高空一路斜到近地
-    m.userData.sway = Math.random() * Math.PI * 2;
-    shafts.add(m);
-  }
-  scene.add(shafts);
-  /**
-   * 每帧重算光柱：顶端锚在太阳（夜里=月亮）方向的高空、向下穿过玩家周围——
-   * 光「从太阳那里斜下来」并且跟着人走（走到哪光柱就在哪），缓慢漂移呼吸
-   */
-  function updateShafts(t: number, playerPos?: THREE.Vector3) {
-    const sd = sun.position.clone().normalize();
-    // 锚点：朝太阳方向 130m 的高空（视觉上光柱从太阳附近斜插下来）
-    const anchor = sd.clone().multiplyScalar(130);
-    // 落点：玩家附近偏太阳一侧 20m（光柱罩着人，随人移动）
-    const gtx = (playerPos?.x ?? 0) - sd.x * 20;
-    const gtz = (playerPos?.z ?? 0) - sd.z * 20;
-    // 与太阳方向垂直的横向轴（把光柱铺成一排有宽度的光帘）
-    const px = -sd.z;
-    const pz = sd.x;
-    shafts.children.forEach((m, i) => {
-      const off = (shaftOffsets[i] ?? 0) * 0.55 + Math.sin(t * 0.08 + i * 1.7) * 3; // 横向缓慢漂移
-      const k = (i % 5) / 5 + 0.08; // 沿光路分布：0=高空近太阳 1=近地面
-      const cx = anchor.x + (gtx - anchor.x) * k;
-      const cy = anchor.y + (0 - anchor.y) * k * 0.85;
-      const cz = anchor.z + (gtz - anchor.z) * k;
-      m.position.set(cx + px * off, cy, cz + pz * off);
-      m.lookAt(m.position.x - sd.x * 40, m.position.y - sd.y * 40, m.position.z - sd.z * 40);
-      m.rotateX(Math.PI / 2);
-      const sway = m.userData.sway as number;
-      m.rotation.z = Math.sin(t * 0.35 + sway) * 0.05; // 随气流微微摇曳
-      const breathe = 0.85 + 0.15 * Math.sin(t * 0.5 + sway * 2); // 宽度呼吸
-      m.scale.x = (m.userData.baseW as number) * breathe;
-    });
+  // ---- 屏幕空间体积光（god rays 后处理）：AAA 的丁达尔 ----
+  // 从太阳/月亮的「屏幕位置」向外径向采样：亮处（太阳圆盘/亮天空）沿光路泄漏成光芒，
+  // 被树/云/角色剪影遮挡处自然断裂—— billboard 假光柱无论怎么摆都做不出"从日轮里发出来"
+  const godRayShader = {
+    uniforms: {
+      tDiffuse: { value: null as THREE.Texture | null },
+      uLightPos: { value: new THREE.Vector2(0.5, 0.5) }, // 光源屏幕 UV
+      uIntensity: { value: 0 }, // 相位基调 × 朝向 × 地平线淡入
+      uThreshold: { value: 0.55 }, // 只有够亮的像素才泄漏成光（太阳盘/亮空）
+      uTint: { value: new THREE.Color("#ffe9c0") }, // 光芒色：昼暖夜冷
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tDiffuse;
+      uniform vec2 uLightPos;
+      uniform float uIntensity;
+      uniform float uThreshold;
+      uniform vec3 uTint;
+      varying vec2 vUv;
+
+      void main() {
+        vec4 base = texture2D(tDiffuse, vUv);
+        if (uIntensity <= 0.001) {
+          gl_FragColor = base;
+          return;
+        }
+        // 从当前像素向光源屏幕位置径向步进采样：沿途的亮度按衰减累计成光芒
+        vec2 delta = (uLightPos - vUv) / 40.0;
+        vec2 uv = vUv;
+        float decay = 1.0;
+        vec3 ray = vec3(0.0);
+        for (int i = 0; i < 40; i++) {
+          uv += delta;
+          vec3 s = texture2D(tDiffuse, clamp(uv, 0.0, 1.0)).rgb;
+          float lum = max(max(s.r, s.g), s.b);
+          ray += s * smoothstep(uThreshold, uThreshold + 0.35, lum) * decay;
+          decay *= 0.94;
+        }
+        ray *= uTint / 40.0;
+        gl_FragColor = vec4(base.rgb + ray * uIntensity * 2.2, base.a);
+      }
+    `,
+  };
+  const godState = {
+    base: 0.5, // 相位基调（setDayPhase 写入）
+    worldDir: new THREE.Vector3(0, 1, 0), // 当前主导天体方向（太阳或月亮）
+  };
+  // 复用临时量（体积光每帧投影，避免分配）
+  const _godWorld = new THREE.Vector3();
+  const _godNdc = new THREE.Vector3();
+  const _godView = new THREE.Vector3();
+  function updateGodRays() {
+    const dir = godState.worldDir;
+    // 光源世界点：沿天体方向放到天空球附近
+    _godWorld.copy(dir).multiplyScalar(800).add(camera.position);
+    _godNdc.copy(_godWorld).project(camera);
+    const behind = _godNdc.z > 1 || _godNdc.z < -1;
+    // 面向系数：背对太阳时没有径向光
+    camera.getWorldDirection(_godView);
+    const facing = Math.max(0, _godView.dot(dir));
+    // 屏幕边缘软化：光源快出画面时收掉，避免边缘拉丝
+    const ex = THREE.MathUtils.clamp(1.15 - Math.abs(_godNdc.x), 0, 1);
+    const ey = THREE.MathUtils.clamp(1.15 - Math.abs(_godNdc.y), 0, 1);
+    (godPass.uniforms.uLightPos.value as THREE.Vector2).set(_godNdc.x * 0.5 + 0.5, _godNdc.y * 0.5 + 0.5);
+    godPass.uniforms.uIntensity.value = behind ? 0 : godState.base * facing * facing * ex * ey;
   }
 
-  // ---- 后期：柔光 Bloom，让火焰/灯塔/光尘发出光遇式的柔辉 ----
+  // ---- 后期：体积光 → Bloom → 输出 ----
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
+  const godPass = new ShaderPass(godRayShader);
+  composer.addPass(godPass); // 体积光在 Bloom 之前：光芒先成形再被柔化
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(container.clientWidth, container.clientHeight),
     0.42, // strength：光遇的泛光很克制——发光的应该只有光源本身，不是整个画面
@@ -340,7 +361,12 @@ export function createWorld(container: HTMLElement): World {
     sun.intensity *= elvDim;
     const horizonFade = (elv: number) => THREE.MathUtils.clamp((elv + 0.08) / 0.14, 0, 1);
     sky.apply(skyPal, sunD, moonD, horizonFade(sunElv), horizonFade(moonElv));
-    shaftMat.opacity = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u);
+    // 体积光基调：黄昏/黎明最盛（长光路），白昼中等，夜里月亮的冷光最克制
+    godState.base = THREE.MathUtils.lerp(a.shaftOpacity, b.shaftOpacity, u) * 10;
+    godState.worldDir.copy(lead);
+    (godPass.uniforms.uTint.value as THREE.Color)
+      .set("#ffe3b0")
+      .lerp(new THREE.Color("#c9d6ff"), skyPal.night);
     renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
     // 萤火虫入夜点亮（白天几乎看不见），白天光尘入夜淡出（萤火虫接管）
     fireflyMat.opacity = 0.75 * THREE.MathUtils.clamp(skyPal.night * 1.6, 0.04, 1);
@@ -381,7 +407,7 @@ export function createWorld(container: HTMLElement): World {
       sky.update(t);
       water.update(t);
       clouds.update(t);
-      updateShafts(t, playerPos);
+      updateGodRays();
       props.updates.forEach((u) => u(t));
       motes.update(t);
       fireflies.update(t);
