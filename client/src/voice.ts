@@ -11,6 +11,8 @@ interface VoiceCallbacks {
   sendSignal: (to: string, signal: VoiceSignal) => void;
   /** 服务器中继通道：把自己的 16kHz PCM 分片交给服务器转发（24 米内的人都能收到） */
   sendAudio: (pcm: Uint8Array) => void;
+  /** 说话人 sessionId → 立体声像 -1~1（说话人在哪声在哪，由主循环按相机方位算） */
+  panOf: (id: string) => number;
   onState: (mode: VoiceMode) => void;
   onLocalLevel: (level: number) => void;
   onPeerLevel: (id: string, active: boolean, level: number) => void;
@@ -322,7 +324,15 @@ registerProcessor("relay-proc", RelayProc);`;
     src.buffer = buf;
     const gain = ctx.createGain();
     gain.gain.value = 0.9;
-    src.connect(gain).connect(ctx.destination);
+    // 空间声像：说话人在左边就左耳响（pan 由 main 按说话人位置 vs 相机实时算好传入）
+    const pan = this.callbacks.panOf ? this.callbacks.panOf(from) : 0;
+    if (Math.abs(pan) > 0.01) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      src.connect(gain).connect(p).connect(ctx.destination);
+    } else {
+      src.connect(gain).connect(ctx.destination);
+    }
     // 抖动缓冲：顺序排队播放；积压超过 0.4s（断流后的陈旧分片）直接追平到现在
     let next = this.relayNextAt.get(from) ?? 0;
     if (next - ctx.currentTime > 0.4) next = 0;

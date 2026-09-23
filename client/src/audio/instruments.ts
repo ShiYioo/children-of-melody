@@ -29,14 +29,21 @@ export class Instruments {
     this.bus.connect(this.ctx.destination);
   }
 
-  /** 弹一个音。vol 0~1（远端按距离衰减后传入） */
-  play(kind: InstrumentKind, midi: number, vol = 1) {
+  /** 弹一个音。vol 0~1（远端按距离衰减后传入）；pan -1~1（-1=声源在正左→左耳，空间声像） */
+  play(kind: InstrumentKind, midi: number, vol = 1, pan = 0) {
     if (!this.ctx || !this.bus || vol <= 0.01) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const f = midiToFreq(midi);
     const g = ctx.createGain();
-    g.connect(this.bus);
+    // 空间声像：声源不在正前方时，音符经立体声定位器再进总线（左声偏左耳）
+    if (pan < -0.01 || pan > 0.01) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      g.connect(p).connect(this.bus);
+    } else {
+      g.connect(this.bus);
+    }
 
     if (kind === "harp") {
       // 拨弦：双失谐三角波 + 快速指数衰减

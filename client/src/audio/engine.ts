@@ -13,6 +13,11 @@ import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, is
 const AUDIBLE_RADIUS = 38; // 米：能听见别人音乐的距离
 const MAX_MIX = 3; // 最多清晰混入的曲目数
 
+// 监听者方位的复用临时量（每帧 setListener 用，避免分配）
+import * as THREE from "three";
+const _fwd = new THREE.Vector3();
+const _up = new THREE.Vector3();
+
 /** 32 位确定性随机（同一 beat 序号在各端产生相同序列） */
 function seeded(seed: number) {
   let a = seed >>> 0;
@@ -26,8 +31,7 @@ function seeded(seed: number) {
 }
 
 interface Source {
-  kind: "gen" | "file" | "url";
-  def: TrackDef | null;
+  kind: "gen" | "file" | "url";  def: TrackDef | null;
   songId: number; // file 源的服务器曲目 id
   songName: string;
   url: string; // url 源的音频直链
@@ -43,6 +47,7 @@ interface Source {
   analyser: AnalyserNode | null; // file 源的实时能量（光环脉动）
   trackId: number;
   html: HTMLAudioElement | null; // 无 CORS 链接的降级播放（纯音量，无滤波）
+  panner: PannerNode; // HRTF 声像（方向感）
 }
 
 export interface MixInfo {
@@ -175,15 +180,23 @@ export class MusicEngine {
     const bus = ctx.createGain();
     const gain = ctx.createGain();
     gain.gain.value = 0;
+    // HRTF 声像：每个曲源一个 3D 声像节点——声音在左边就左耳响、
+    // 走到脑后就闷过去（距离衰减仍由 gain 管，panner 只管方向）
+    const panner = ctx.createPanner();
+    panner.panningModel = "HRTF";
+    panner.distanceModel = "linear";
+    panner.refDistance = 1;
+    panner.maxDistance = 1e6;
+    panner.rolloffFactor = 0; // 距离衰减交给清晰度系统
     let filter: BiquadFilterNode | null = null;
     let analyser: AnalyserNode | null = null;
     if (remote) {
       filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
       filter.frequency.value = 400;
-      bus.connect(filter).connect(gain).connect(this.master);
+      bus.connect(filter).connect(gain).connect(panner).connect(this.master);
     } else {
-      bus.connect(gain).connect(this.master);
+      bus.connect(gain).connect(panner).connect(this.master);
     }
 
     const custom = isCustomTrack(trackId);
@@ -210,6 +223,7 @@ export class MusicEngine {
       bus,
       filter,
       gain,
+      panner,
       startCtx,
       nextBeat,
       nextBeatTime: startCtx + nextBeat * beatSec,
@@ -350,6 +364,44 @@ export class MusicEngine {
   trackKeyOf(key: string): string {
     const src = this.sources.get(key);
     return src ? `${src.trackId}|${src.songName}|${src.url}` : "";
+  }
+
+  // ---------- 空间声像：声音在哪边，哪只耳朵响 ----------
+
+  /** 每帧写入某个曲源的世界位置（HRTF 声像跟随） */
+  setSourcePos(key: string, x: number, y: number, z: number) {
+    const src = this.sources.get(key);
+    if (!src) return;
+    const p = src.panner.positionX;
+    if (p) {
+      src.panner.positionX.value = x;
+      src.panner.positionY.value = y;
+      src.panner.positionZ.value = z;
+    } else {
+      src.panner.setPosition(x, y, z); // 旧版 Safari
+    }
+  }
+
+  /** 每帧写入监听者（= 相机）的位置与朝向，HRTF 以此计算双耳差 */
+  setListener(cam: { position: THREE.Vector3; matrixWorld: THREE.Matrix4 }) {
+    const l = this.ctx!.listener;
+    const fwd = _fwd.set(0, 0, -1).transformDirection(cam.matrixWorld);
+    const up = _up.set(0, 1, 0).transformDirection(cam.matrixWorld);
+    if (l.positionX) {
+      l.positionX.value = cam.position.x;
+      l.positionY.value = cam.position.y;
+      l.positionZ.value = cam.position.z;
+      l.forwardX.value = fwd.x;
+      l.forwardY.value = fwd.y;
+      l.forwardZ.value = fwd.z;
+      l.upX.value = up.x;
+      l.upY.value = up.y;
+      l.upZ.value = up.z;
+    } else {
+      (l as unknown as { setPosition(x: number, y: number, z: number): void }).setPosition(cam.position.x, cam.position.y, cam.position.z);
+      (l as unknown as { setOrientation(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): void })
+        .setOrientation(fwd.x, fwd.y, fwd.z, up.x, up.y, up.z);
+    }
   }
 
   /** 自己换歌（立即从当前时刻开始）；自定义曲目传编号与名字，链接曲目传 URL_TRACK 与直链 */

@@ -67,6 +67,16 @@ const NOTE_KEYS = "qwertyu"; // C 大调 do~si
 const noteColor = new THREE.Color();
 const remoteNoteColor = new THREE.Color("#ffe9b8");
 
+// 空间声像辅助：世界位置 → 相机右向分量（-1 正左 → +1 正右，0 正前/正后）
+const _panDir = new THREE.Vector3();
+const _panRight = new THREE.Vector3();
+function panOf(pos: THREE.Vector3): number {
+  if (!entered) return 0;
+  _panDir.subVectors(pos, world.camera.position).normalize();
+  _panRight.set(1, 0, 0).transformDirection(world.camera.matrixWorld);
+  return THREE.MathUtils.clamp(_panDir.dot(_panRight), -1, 1);
+}
+
 function attachInstrument(avatarGroup: THREE.Group, kindIdx: number) {
   const until = performance.now() + 3000;
   const hit = remoteInstruments.get(avatarGroup);
@@ -257,6 +267,10 @@ voice = new VoiceChat({
   requestPresence: () => net?.requestVoicePresence(),
   sendSignal: (to, signal) => net?.sendVoiceSignal(to, signal),
   sendAudio: (pcm) => net?.sendAudio(pcm),
+  panOf: (id) => {
+    const pos = remotes.posOf(id);
+    return pos ? panOf(pos) : 0;
+  },
   onState: (mode) => ui.setVoiceState(mode),
   onLocalLevel: (level) => {
     localVoiceLevel = level;
@@ -378,13 +392,13 @@ async function connectToIsland(name: string): Promise<NetHandle | null> {
       if (!av || !selfAvatar) return;
       if (av.group.position.distanceTo(selfAvatar.group.position) <= 30) av.playEmote(emoteName);
     },
-    // 别人弹琴：28 米内听到（按距离衰减）+ 光效 + 乐器显形 3 秒
+    // 别人弹琴：28 米内听到（按距离衰减）+ 方位声像（左声左耳）+ 光效 + 乐器显形 3 秒
     (from, kindIdx, midi, vel) => {
       const av = remotes.avatarOf(from);
       if (!av || !selfAvatar) return;
       const d = av.group.position.distanceTo(selfAvatar.group.position);
       if (d > 28) return;
-      instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel);
+      instruments.play(INSTRUMENTS[kindIdx]?.kind ?? "harp", midi, Math.pow(1 - d / 28, 1.5) * vel, panOf(av.group.position));
       musicfx.noteBurst(av.group.position, remoteNoteColor, vel);
       attachInstrument(av.group, kindIdx);
       noteFeed.set(from, performance.now());
@@ -1024,6 +1038,13 @@ function tick(dt: number) {
       songUrl: remotes.songUrlOf(i.key),
     }))
   );
+  // 空间声像：监听者=相机朝向；每首在放的歌写入其演奏者位置（声音在哪边哪只耳朵响）
+  music.setListener(world.camera);
+  for (const i of infos) {
+    if (i.trackId < 0) continue;
+    const pos = remotes.posOf(i.key);
+    if (pos) music.setSourcePos(i.key, pos.x, pos.y + 1.5, pos.z);
+  }
   // 音乐特征（分频段包络+节拍）→ 光环节拍能量 + 头顶动效（涟漪/音符）
   const beatMap = new Map<string, number>();
   musicfx.beginFrame();
