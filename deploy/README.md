@@ -5,7 +5,9 @@
 ```
 玩家浏览器 ──HTTPS──▶ 腾讯 EdgeOne Pages（前端静态 + CDN，自动构建）
       │
-      └──WSS──▶ 你的服务器（Docker 跑游戏服务端，nginx TLS 反代 2567）
+      ├─ /colyseus/*、/songs/* ──▶ functions/ 边缘函数反代 ──HTTP──▶ 你的服务器 Docker :2567
+      │
+      └─（有已备案域名时的替代方案）WSS ──▶ nginx TLS 反代 2567
 ```
 
 推一次 main 到 GitHub：**EdgeOne 自动重新构建前端发布，Actions 自动 SSH 到你的服务器拉代码重建容器**——双端同时更新，全程无手工操作。
@@ -19,12 +21,16 @@
    - **构建命令**：`cd client && npm ci && npm run build`
    - **输出目录**：`client/dist`
    - **自动部署**：推到 `main` 自动构建（默认行为，确认开启）
-3. **环境变量**（项目设置 → 环境变量 → 生产环境）：
-   - `VITE_SERVER_URL` = `https://ws.你的域名.com`（服务端对外的 **HTTPS/WSS** 地址，末尾不带斜杠和端口）
-   - 没有域名给服务器？用 `https://IP:端口` 也行但浏览器要求 WSS，必须先解决 TLS（见第二节）
-4. 绑定自己的域名（可选但推荐）：Pages → 域名管理 → 添加 `你的游戏域名.com`
+3. **服务端反代（免域名备案方案，当前采用）**：
+   - EdgeOne Pages **没有**"反代设置"的控制台开关——反代就是**仓库根目录 `functions/` 文件夹**，
+     文件路径即路由（`functions/colyseus/[[default]].js` → `/colyseus/*`），推上去随构建自动部署。
+   - 目标服务器 IP 写死在两个函数文件顶部的 `TARGET` 里，服务器换 IP 时改这里。
+   - 什么都不用配就能生效；**部署完成后务必实测 WebSocket 握手**（见检查单）。
+4. 环境变量（可选）：`VITE_SERVER_URL` 只有在你走"独立 wss 域名"方案时才设；
+   同源反代方案**不要设**，客户端会自动用 `同源/colyseus`。
+5. 绑定自己的域名（可选但推荐）：Pages → 域名管理 → 添加 `你的游戏域名.com`
 
-> 客户端地址逻辑（已写进代码）：`VITE_SERVER_URL` > 同源 > 开发态 `hostname:2567`。EdgeOne 构建时注入即可。
+> 客户端地址逻辑（已写进代码）：`VITE_SERVER_URL` > 同源 `/colyseus` > 开发态 `hostname:2567`。
 
 ## 二、服务端：自己的服务器 + Docker
 
@@ -41,9 +47,11 @@ git clone https://github.com/ShiYioo/children-of-melody.git yinyu
 cd yinyu/server
 
 # 环境变量（docker-compose 读同目录 .env）
+# ALLOW_ORIGINS 必须写 EdgeOne 分配的前端域名（形如 https://xxx.edgeone.app），
+# 否则玩家会被 onAuth 的来源白名单拦下
 cat > .env <<'EOF'
 TRUST_PROXY=1
-ALLOW_ORIGINS=https://你的游戏域名.com
+ALLOW_ORIGINS=https://你的项目名.edgeone.app
 EOF
 
 # 先跑起来（裸 2567，验证通了再套 nginx）
@@ -51,8 +59,9 @@ docker compose up -d --build
 curl http://127.0.0.1:2567/   # 200 = OK
 ```
 
-### 2) nginx TLS 反代（WebSocket 必须）
+### 2) nginx TLS 反代（可选——仅当你有**已备案**域名、想甩开 EdgeOne 反代时）
 
+同源反代方案不需要这一节。要走独立 `wss.你的域名.com` 才用得上：
 **宝塔面板**（/www 一般就是宝塔）：网站 → 添加站点（`ws.你的域名.com`）→ SSL 里用 Let's Encrypt 签证书 →
 配置文件里把 `deploy/nginx.conf.example` 的 `location /` 段抄进去（Upgrade/Connection 头是 WebSocket 的关键，宝塔默认模板没有）。
 **手动 nginx**：配置放 `/etc/nginx/sites-available/yinyu`，改 `server_name` 和证书路径，`certbot --nginx` 一条命令搞定证书。
@@ -91,10 +100,10 @@ git push origin main
 
 - [ ] `client && npm run build` 本地通过
 - [ ] `node scripts/attack-test.mjs` 四项全绿（本地对着 dev 服务器跑）
-- [ ] EdgeOne 环境变量 `VITE_SERVER_URL` 已设且是 **https** 地址
+- [ ] EdgeOne 构建成功且**没有设** `VITE_SERVER_URL`（同源反代方案）
+- [ ] 反代实测：浏览器控制台 `new WebSocket("wss://你的域名/colyseus")` 能看到握手（101/服务端响应），HTTP 实测 `curl https://你的域名/songs/list?owner=x` 返回 JSON
 - [ ] 服务器 `.env` 里 `ALLOW_ORIGINS` 包含 EdgeOne 的前端域名
-- [ ] 服务器 2567 不直接暴露公网（防火墙只放行 nginx 的 80/443）
-- [ ] `TRUST_PROXY=1`（在 nginx 后）
+- [ ] `TRUST_PROXY=1`（在 EdgeOne 反代后）
 - [ ] Actions 的 4 个 Secrets 配好，Actions 页面跑一次全绿
 - [ ] 手机 4G 网络访问一次前端域名（验证 EdgeOne CDN 生效）
 
@@ -119,4 +128,4 @@ git push origin main
 - 服务器单房间 64 人上限；超过要分房间（matchmaking 目前没有）
 - 语音走服务器中继（32KB/说话者/秒），10 人同时开麦 ≈ 320KB/s 上行，注意带宽
 - 没有管理后台：封禁、踢人、清曲库要 SSH 服务器操作
-- 音频文件走你服务器不走 EdgeOne，CDN 压力不大但服务器带宽要够
+- 音频文件经 EdgeOne 边缘函数反代回源，服务器带宽要够；歌多后可考虑挂对象存储
