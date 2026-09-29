@@ -19,6 +19,8 @@ export interface FurnEntry {
   collider: CylinderCollider | null;
   /** 秋千两个座位的枢轴（绕顶部横杆摆动） */
   pivots: THREE.Group[];
+  /** 船的甲板碰撞柱（前后各一，顶面可站立；随船移动同步位置） */
+  boatCols: CylinderCollider[];
   /** 家具的泊位（放置点）：船被开走后别人看着它回这里 */
   home: { x: number; y: number; z: number; ry: number };
 }
@@ -153,7 +155,8 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     if (!e) {
       const built = data.kind === 1 ? makeSwing(kit) : data.kind === 2 ? makeBoat(kit) : makeChair(kit);
       sceneAdd(built.group);
-      // 船不设行走碰撞（水上没有走路的人），别让隐形墙挡住泳者
+      // 船用前后两根可站甲板柱（顶面可站立，从水里跳上来）；椅子/秋千仍是单柱挡人
+      const boatCols: CylinderCollider[] = [];
       const col: CylinderCollider | null =
         data.kind === 2
           ? null
@@ -164,7 +167,15 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
               y0: data.y,
               y1: data.y + 0.55,
             };
-      if (col) addCollider(col);
+      if (data.kind === 2) {
+        for (const sz of [-0.45, 0.45]) {
+          const c: CylinderCollider = { x: data.x, z: data.z + sz, r: 0.55, y0: data.y - 0.4, y1: data.y + 0.55, stand: true, standR: 0.5 };
+          boatCols.push(c);
+          addCollider(c);
+        }
+      } else if (col) {
+        addCollider(col);
+      }
       e = {
         key,
         owner: data.owner,
@@ -172,6 +183,7 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
         group: built.group,
         collider: col,
         pivots: built.pivots,
+        boatCols,
         home: { x: data.x, y: data.y, z: data.z, ry: data.ry },
       };
       entries.set(key, e);
@@ -190,6 +202,7 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     const e = entries.get(key);
     if (!e) return;
     if (e.collider) removeCollider(e.collider);
+    for (const c of e.boatCols) removeCollider(c);
     sceneRemove(e.group);
     e.group.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).geometry.dispose();
@@ -302,7 +315,7 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     }
   }
 
-  /** 驾驶跟随：把船平滑移到目标位（碰撞器不存在，纯渲染；home 不变，下船后自己漂回去） */
+  /** 驾驶跟随：把船平滑移到目标位（home 不变，下船后自己漂回去）；甲板碰撞柱同步跟随 */
   function setBoatTransform(key: string, x: number, y: number, z: number, ry: number) {
     const e = entries.get(key);
     if (!e || e.kind !== 2) return;
@@ -315,6 +328,17 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     e.group.rotation.y += d * k;
+    // 甲板碰撞柱贴着船走（局部 ±0.45 随朝向旋转），y1 = 甲板顶
+    const sin = Math.sin(e.group.rotation.y);
+    const cos = Math.cos(e.group.rotation.y);
+    for (let i = 0; i < e.boatCols.length; i++) {
+      const c = e.boatCols[i];
+      const lz = i === 0 ? -0.45 : 0.45;
+      c.x = e.group.position.x + sin * lz;
+      c.z = e.group.position.z + cos * lz;
+      c.y0 = e.group.position.y - 0.4;
+      c.y1 = e.group.position.y + 0.55;
+    }
   }
 
   /** 所有船的只读快照（main 层做跟随/骑乘逻辑用） */

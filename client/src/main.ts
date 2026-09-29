@@ -727,7 +727,7 @@ desktopActions.innerHTML = `
       <div class="action-grid">
         <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
         <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
-        <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>3</kbd></button>
+        <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>6</kbd></button>
       </div>
     </section>
     <section class="action-section">
@@ -834,8 +834,12 @@ window.addEventListener("keydown", (e) => {
     if (chatInput.style.display === "none") openChat();
     return;
   }
-  if (k === "1" || k === "2" || k === "3") {
-    toggleFurniture(k === "1" ? 0 : k === "2" ? 1 : 2);
+  if (k === "6") {
+    toggleFurniture(2);
+    return;
+  }
+  if (k === "1" || k === "2") {
+    toggleFurniture(k === "1" ? 0 : 1);
     return;
   }
   if (k === "f") {
