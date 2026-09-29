@@ -297,12 +297,15 @@ export class CharacterPhysics {
       }
     }
 
-    // ---- 实体碰撞 + 岛界（所有模式统一） ----
+    // ---- 实体碰撞 + 外海边界（所有模式统一） ----
     resolveColliders(this.pos, this.vel);
     const r = Math.hypot(this.pos.x, this.pos.z);
-    if (r > ISLAND_RADIUS - 1) {
-      this.pos.x *= (ISLAND_RADIUS - 1) / r;
-      this.pos.z *= (ISLAND_RADIUS - 1) / r;
+    // 近海航行边界：与服务器 POS_BOUND(90) 对齐、留 2m 缓冲防夹取拉扯；
+    // 水面网格覆盖到 500，边界内永远是合法水域
+    const OCEAN_BOUND = ISLAND_RADIUS + 30;
+    if (r > OCEAN_BOUND) {
+      this.pos.x *= OCEAN_BOUND / r;
+      this.pos.z *= OCEAN_BOUND / r;
     }
 
     // ---- 落地检测 ----
