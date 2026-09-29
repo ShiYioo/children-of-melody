@@ -63,10 +63,11 @@ export class CapeSim {
    *                  否则人弯腰时布被「直立身体」的隐形墙拦在原地（鞠躬披风不跟身）
    * @param pivotY 身体根节点 y 偏移（碰撞体按「先旋转后平移」同渲染变换跟随）
    * @param bodyScaleXZ 身体横缩放（落地压缩时 XZ 鼓大 ~10%，碰撞体要跟着变大才不穿模）
+   * @param waterMix 0=空气 1=水中：湿披风重力骤减、风被水挡住、阻尼大增——又轻又慢贴着划水节奏荡
    */
-  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0, bodyPitch = 0, pivotY = 0, bodyScaleXZ = 1) {
-    const gravity = this.opts.gravity ?? 14;
-    const damping = this.opts.damping ?? 0.985;
+  step(dt: number, pins: Float32Array, windLocal: THREE.Vector3, wingPose?: Float32Array | null, wingBlend = 0, bodyPitch = 0, pivotY = 0, bodyScaleXZ = 1, waterMix = 0) {
+    const gravity = (this.opts.gravity ?? 14) * (1 - waterMix * 0.78);
+    const damping = (this.opts.damping ?? 0.985) + (0.9 - (this.opts.damping ?? 0.985)) * waterMix;
     const iters = this.opts.iters ?? 5;
 
     const sinP = Math.sin(bodyPitch);
