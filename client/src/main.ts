@@ -1051,6 +1051,7 @@ function tick(dt: number) {
   voice.updateNearby(infos.map((i) => ({ id: i.key, distance: i.dist })));
 
   music.tick();
+  voice.setSubmerged(controls.state.swimming); // 彩蛋：水里说话有水下闷响+气泡音
   voicefx.beginFrame();
   if (selfAvatar && speakingActive("self", localVoiceLevel)) {
     voiceColor.setHSL(selfHue / 360, 0.52, 0.7);

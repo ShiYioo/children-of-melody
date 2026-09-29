@@ -225,6 +225,14 @@ export class VoiceChat {
   // ============ 服务器中继语音（保底通道：游戏 WebSocket 本来就通，走它必有声） ============
 
   private relayNode: AudioWorkletNode | null = null;
+  private submerged = false;
+
+  /** 彩蛋：说话者泡在水里时给麦克风加"水下闷响+气泡"处理（发给采集 worklet 的开关） */
+  setSubmerged(on: boolean) {
+    if (on === this.submerged) return;
+    this.submerged = on;
+    this.relayNode?.port.postMessage({ water: on });
+  }
   /** 每个说话者的中继播放时间轴（抖动缓冲：按序排队，断流自动追赶） */
   private relayNextAt = new Map<string, number>();
   /** 中继说话者的最后活跃时刻（供 sample() 收拾 UI 电平） */
@@ -256,21 +264,38 @@ class RelayProc extends AudioWorkletProcessor {
     this.f = 0;
     this.acc = new Float32Array(1280);
     this.count = 0;
+    // 水下音效彩蛋：目标混合量、平滑混合值、低通状态、气泡颤音相位
+    this.waterTarget = 0;
+    this.waterMix = 0;
+    this.lp = 0;
+    this.lfo = 0;
+    this.port.onmessage = (e) => { this.waterTarget = e.data && e.data.water ? 1 : 0; };
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
+    const alpha = 0.24;    // 一阶低通 ≈700Hz @16kHz：水下闷响
+    const dw = 0.003;      // 混合量平滑（进出水的过渡 ~20ms，防爆音）
     while (this.f < ch.length) {
       const i = this.f | 0;
       const t = this.f - i;
       const nx = Math.min(i + 1, ch.length - 1);
-      this.acc[this.count++] = ch[i] + (ch[nx] - ch[i]) * t;
+      let v = ch[i] + (ch[nx] - ch[i]) * t;
+      this.waterMix += (this.waterTarget - this.waterMix) * dw;
+      if (this.waterMix > 0.001) {
+        this.lp += (v - this.lp) * alpha;
+        this.lfo += 0.0024; // 6Hz 气泡颤音 @16kHz
+        const gurgle = 1 - this.waterMix * 0.22 * (0.5 + 0.5 * Math.sin(this.lfo));
+        const wet = this.lp * gurgle * 0.8;
+        v = v * (1 - this.waterMix) + wet * this.waterMix;
+      }
+      this.acc[this.count++] = v;
       this.f += this.ratio;
       if (this.count >= 1280) {
         const out = new Int16Array(1280);
         for (let j = 0; j < 1280; j++) {
-          const v = Math.max(-1, Math.min(1, this.acc[j]));
-          out[j] = v < 0 ? v * 32768 : v * 32767;
+          const s = Math.max(-1, Math.min(1, this.acc[j]));
+          out[j] = s < 0 ? s * 32768 : s * 32767;
         }
         this.port.postMessage(out.buffer, [out.buffer]);
         this.count = 0;
@@ -293,6 +318,8 @@ registerProcessor("relay-proc", RelayProc);`;
             this.callbacks.sendAudio(new Uint8Array(buf));
           }
         };
+        // 下水后才开麦的情况：把当前水下状态补给新建的 worklet
+        if (this.submerged) node.port.postMessage({ water: true });
         // 本地麦克风分两路：分析器（UI 电平）+ 中继采集（worklet 不接目的地，无回声）
         this.localSource.connect(node);
         this.relayNode = node;

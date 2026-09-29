@@ -21,6 +21,7 @@ export interface ControlsState {
   mov: number;
   sit: boolean;
   airborne: boolean;
+  swimming: boolean; // 在深水里游泳（语音水下音效等读这个）
   flaps: number; // 剩余扑翼 0-3
 }
 
@@ -34,6 +35,7 @@ export class PlayerControls {
     mov: 0,
     sit: false,
     airborne: false,
+    swimming: false,
     flaps: MAX_FLAPS,
   };
 
@@ -284,6 +286,7 @@ export class PlayerControls {
     s.yaw = this.phys.yaw;
     s.yawVel = this.phys.yawVel;
     s.airborne = this.phys.airborne;
+    s.swimming = this.phys.inWater;
     s.flaps = this.phys.flaps;
 
     // ---- 物理事件 → 游戏回调 ----
