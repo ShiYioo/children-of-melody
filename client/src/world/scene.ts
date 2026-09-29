@@ -43,7 +43,8 @@ export interface World {
 export function createWorld(container: HTMLElement): World {
   // ---- 渲染器（移动端降载：像素比 1.5 + 半分辨率阴影，保住手机帧率） ----
   const mobile = isTouchDevice();
-  const renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: "high-performance" });
+  // preserveDrawingBuffer：拍照模式截图（快门时 toDataURL）需要保留帧缓冲
+  const renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: "high-performance", preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;

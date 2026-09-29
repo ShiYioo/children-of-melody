@@ -728,6 +728,7 @@ desktopActions.innerHTML = `
         <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
         <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
         <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>6</kbd></button>
+        <button class="action-item" id="photoEntry"><i data-lucide="camera"></i><span class="label">拍照</span><kbd>P</kbd></button>
       </div>
     </section>
     <section class="action-section">
@@ -825,6 +826,14 @@ window.addEventListener("keydown", (e) => {
   if (k === "3" || k === "4" || k === "5") {
     takeOutInstrument(Number(k) - 3);
     return;
+  }
+  if (k === "p") {
+    setPhotoMode(!photoMode);
+    return;
+  }
+  if (photoMode) {
+    if (k === "escape") setPhotoMode(false);
+    return; // 拍照时其余游戏快捷键全部让路
   }
   if (k === "v") {
     sendFlowerToNearest();
@@ -998,6 +1007,55 @@ for (const k of ["music", "sfx", "voice"] as const) {
   });
 }
 
+// ---------------- 拍照模式（P / 操作菜单；自拍会对镜摆姿势） ----------------
+let photoMode = false;
+let photoSelfie = true;
+let photoShotPending = false;
+
+function setPhotoMode(on: boolean) {
+  if (photoMode === on) return;
+  photoMode = on;
+  document.body.classList.toggle("photo-mode", on);
+  document.getElementById("photoLayer")?.classList.toggle("open", on);
+  touchUI.setVisible(!on);
+  controls.inputLocked = on;
+  if (on) {
+    setPhotoSelfie(true);
+    ui.toast("拍照模式——右侧换姿势，圆钮快门，P/Esc 退出", 2800);
+  } else {
+    controls.camDist = 7.5;
+    controls.camPitch = 0.32;
+  }
+}
+
+function setPhotoSelfie(selfie: boolean) {
+  photoSelfie = selfie;
+  document.getElementById("photoTabSelfie")?.classList.toggle("on", selfie);
+  document.getElementById("photoTabOrbit")?.classList.toggle("on", !selfie);
+  if (selfie) {
+    controls.camDist = 1.75;
+    controls.camPitch = 0.12;
+    controls.camYaw = controls.state.yaw; // 相机绕到角色面前
+    doEmote("wave"); // 对镜自动来个招手
+  } else {
+    controls.camDist = 9;
+    controls.camPitch = 0.22;
+  }
+}
+
+for (const em of EMOTES) {
+  const b = document.createElement("button");
+  b.textContent = em.icon;
+  b.title = em.label;
+  b.addEventListener("click", () => doEmote(em.key));
+  document.getElementById("photoPoses")?.appendChild(b);
+}
+document.getElementById("photoExit")?.addEventListener("click", () => setPhotoMode(false));
+document.getElementById("photoEntry")?.addEventListener("click", () => setPhotoMode(true));
+document.getElementById("photoTabSelfie")?.addEventListener("click", () => setPhotoSelfie(true));
+document.getElementById("photoTabOrbit")?.addEventListener("click", () => setPhotoSelfie(false));
+document.getElementById("photoShot")?.addEventListener("click", () => { photoShotPending = true; });
+
 /** 献花给正在听的人：音乐回应（V 键） */
 let lastFlowerSent = 0;
 function sendFlowerToNearest() {
@@ -1067,6 +1125,13 @@ function tick(dt: number) {
   }
 
   controls.update(dt);
+
+  // 拍照-自拍：角色始终正对镜头，机位参数锁死（构图只随拖动的角度变）
+  if (photoMode && photoSelfie) {
+    controls.state.yaw = controls.camYaw;
+    controls.camDist += (1.75 - controls.camDist) * Math.min(1, dt * 6);
+    controls.camPitch += (0.12 - controls.camPitch) * Math.min(1, dt * 6);
+  }
 
   // ---- 家具乘坐 ----
   if (seatedOn && !controls.state.sit) seatedOn = null; // 走动/跳跃起身的兜底清理
@@ -1435,5 +1500,20 @@ function tick(dt: number) {
   }
 
   world.render(dt, t, controls.state.pos); // 光柱跟随玩家
+
+  // 快门：渲染完成后截当前帧（preserveDrawingBuffer 已开）
+  if (photoShotPending) {
+    photoShotPending = false;
+    try {
+      const canvas = world.composer.renderer.domElement;
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = `yinyu-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
+      a.click();
+      ui.toast("照片已保存到下载");
+    } catch {
+      ui.toast("截图失败了，再按一次试试");
+    }
+  }
 }
 loop();

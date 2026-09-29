@@ -191,6 +191,9 @@ export class PlayerControls {
   moveX = 0;
   moveZ = 0;
 
+  /** 拍照模式：锁移动/跳跃，但保留视角环转（构图用） */
+  inputLocked = false;
+
   /** 触屏按钮模拟按键：down=true 走与物理键盘同一套逻辑（E 切坐、空格跳/按住滑翔） */
   virtualKey(key: string, down: boolean) {
     const k = key.toLowerCase();
@@ -249,7 +252,7 @@ export class PlayerControls {
     }
     let ix = 0;
     let iz = 0;
-    if (this.enabled) {
+    if (this.enabled && !this.inputLocked) {
       if (this.keys.has("w") || this.keys.has("arrowup")) iz -= 1;
       if (this.keys.has("s") || this.keys.has("arrowdown")) iz += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) ix -= 1;
@@ -280,7 +283,7 @@ export class PlayerControls {
         moveX: moving ? ix : 0,
         moveZ: moving ? iz : 0,
         running,
-        jumpPressed: this.jumpQueued,
+        jumpPressed: this.jumpQueued && !this.inputLocked,
         glideHeld,
         camYaw: this.camYaw,
       },
