@@ -102,11 +102,15 @@ export async function connectIsland(
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
-  // 生产地址三级配置：VITE_SERVER_URL 环境变量（EdgeOne 构建时注入，如 https://ws.example.com）
-  // > 同源（前后端同域部署时）> 开发态按主机名直连 2567
-  const endpoint =
-    (import.meta.env.VITE_SERVER_URL as string | undefined) ||
-    (import.meta.env.DEV ? `http://${window.location.hostname}:2567` : window.location.origin);
+  // 生产地址三级配置：VITE_SERVER_URL 环境变量（构建时注入，如 https://ws.example.com）
+  // > 同源 + /colyseus 路径前缀（EdgeOne 边缘函数反代回源大陆 IP:2567，免域名备案方案）
+  // > 开发态按主机名直连 2567
+  const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
+  const endpoint = envUrl
+    ? envUrl
+    : import.meta.env.DEV
+      ? `http://${window.location.hostname}:2567`
+      : `${window.location.origin}/colyseus`;
   const client = new Client(endpoint);
 
   let room: any;
