@@ -315,7 +315,9 @@
     .emote-btn { width: 64px; height: 60px; display: grid; place-items: center; gap: 3px; color: var(--ink-soft); background: rgba(255, 255, 255, .04); border: 1px solid transparent; border-radius: 6px; cursor: pointer; font-size: 10px; }
     .emote-btn:hover, .emote-btn:focus { color: var(--ink); background: rgba(255, 255, 255, .1); border-color: var(--line); }
     .emote-btn span { font-size: 18px; }
-    .ping-badge { display: none !important; }
+    /* 性能 HUD：帧率常显，联机后追加延迟/丢包 */
+    .stats-hud { position: fixed; right: calc(var(--safe-right) + 16px); bottom: calc(var(--safe-bottom) + 152px); z-index: 30; pointer-events: none; color: rgba(255, 250, 240, .58); font-size: 11px; letter-spacing: .05em; text-shadow: 0 1px 3px rgba(20, 28, 38, .75); opacity: 0; transition: opacity .6s ease; }
+    body.playing .stats-hud { opacity: 1; }
 
     /* 桌面操作层：默认只露出一个入口，按需展开键盘功能。 */
     .desktop-actions {
@@ -388,7 +390,6 @@
       .btn-main { flex: none; }
       .enter-tip { display: none; }
       .instrument-key { width: 42px; }
-      .ping-badge { display: none !important; }
     }
 
     @media (orientation: portrait) and (max-width: 720px) {

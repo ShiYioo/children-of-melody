@@ -96,8 +96,8 @@ export async function connectIsland(
   onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {},
   /** 非主动关闭的掉线（网络闪断/服务器重启），主循环据此自动重连 */
   onDrop: () => void = () => {},
-  /** 延迟探针：每 2 秒回报一次往返毫秒数 */
-  onPing: (ms: number) => void = () => {},
+  /** 延迟探针：每 2 秒回报一次往返毫秒数与丢包率（%） */
+  onPing: (ms: number, lossPct: number) => void = () => {},
   voice: VoiceEvents = { onPresence: () => {}, onSignal: () => {}, onAudio: () => {}, sendAudio: () => {} }
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
@@ -143,12 +143,21 @@ export async function connectIsland(
   let pingMs = 0;
   let lastPongAt = performance.now();
   let dropped = false;
+  // 丢包率：滑动窗口 30 个探针样本，回执超过 4s 未到记为丢（正常 RTT 远小于 1s）
+  const lossSamples: number[] = [];
+  let lossPct = 0;
+  const noteLoss = (lost: number) => {
+    lossSamples.push(lost);
+    if (lossSamples.length > 30) lossSamples.shift();
+    lossPct = Math.round((lossSamples.reduce((a, b) => a + b, 0) / lossSamples.length) * 100);
+  };
   room.onMessage("time", ({ t }: { t: number }) => {
     lastPongAt = performance.now();
     if (pingSentAt > 0) {
       pingMs = Math.max(1, Math.round(performance.now() - pingSentAt));
       pingSentAt = 0;
-      onPing(pingMs);
+      noteLoss(0);
+      onPing(pingMs, lossPct);
     }
     applyTime(t);
   });
@@ -162,6 +171,11 @@ export async function connectIsland(
         onDrop();
       }
       return;
+    }
+    if (pingSentAt > 0 && performance.now() - pingSentAt > 4000) {
+      noteLoss(1); // 上一次探针超时未归，记一次丢包后重发
+      pingSentAt = 0;
+      onPing(pingMs, lossPct);
     }
     try {
       pingSentAt = performance.now();

@@ -423,7 +423,7 @@ async function connectToIsland(name: string): Promise<NetHandle | null> {
     // 非主动掉线 → 自动重连
     startReconnect,
     // ping 探针回报
-    updatePingBadge,
+    updateStatsBadge,
     {
       onPresence: (id, active) => voice.handlePresence(id, active),
       onSignal: (from, signal) => voice.handleSignal(from, signal),
@@ -440,7 +440,8 @@ function startReconnect() {
   reconnecting = true;
   net = null;
   voice.setNetwork(null);
-  pingBadge.style.display = "none";
+  pingShown = -1;
+  renderStats();
   // 旧会话的家具在服务器端已被清掉，本地也清（重连后从新状态重建别人的）
   seatedOn = null;
   for (const k of [...furniture.entries.keys()]) furniture.remove(k);
@@ -455,7 +456,6 @@ function startReconnect() {
         reconnecting = false;
         ui.setStatus("online");
         ui.setSongOwner(net.sessionId);
-        pingBadge.style.display = "block";
         // 新会话：把自己正在放的歌重新上报（按已播进度续上）
         if (music.ownTrackId >= 0 && !music.isOwnPaused) {
           const resumeMs = Math.max(0, Date.now() - (music as unknown as { ownStartWall: number }).ownStartWall);
@@ -472,15 +472,28 @@ function startReconnect() {
   })();
 }
 
-// ---------------- 延迟徽章（右下角） ----------------
-const pingBadge = document.createElement("div");
-pingBadge.className = "ping-badge";
-document.body.appendChild(pingBadge);
+// ---------------- 性能 HUD（右下角：帧率常显，联机后追加延迟/丢包） ----------------
+const statsBadge = document.createElement("div");
+statsBadge.className = "stats-hud";
+document.body.appendChild(statsBadge);
 
-function updatePingBadge(ms: number) {
-  pingBadge.textContent = `${ms} ms`;
-  pingBadge.style.color = ms < 80 ? "#9ff0b2" : ms < 200 ? "#ffd98e" : "#ff9d8a";
-  pingBadge.style.display = "block";
+let fpsShown = 0;
+let pingShown = -1; // -1 = 未联机
+let lossShown = 0;
+
+function renderStats() {
+  const netPart =
+    pingShown >= 0
+      ? ` · <span style="color:${pingShown < 80 ? "#9ff0b2" : pingShown < 200 ? "#ffd98e" : "#ff9d8a"}">${pingShown} ms</span> · 丢包 ${lossShown}%`
+      : "";
+  statsBadge.innerHTML = `${fpsShown} FPS${netPart}`;
+}
+setInterval(renderStats, 500);
+
+function updateStatsBadge(ms: number, lossPct: number) {
+  pingShown = ms;
+  lossShown = lossPct;
+  renderStats();
 }
 
 function spawnSelf() {
@@ -826,9 +839,20 @@ const nearBefore = new Map<string, boolean>();
 /** 模拟时钟（测试钩子 crescendo.step 在 rAF 冻结时也走同一份逻辑） */
 let simT = 0;
 
+// FPS 计数：每 500ms 结一次账喂给性能 HUD
+let fpsCount = 0;
+let fpsAt = performance.now();
+
 function loop() {
   requestAnimationFrame(loop);
   tick(Math.min(clock.getDelta(), 0.05));
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt >= 500) {
+    fpsShown = Math.min(999, Math.round((fpsCount * 1000) / (now - fpsAt)));
+    fpsCount = 0;
+    fpsAt = now;
+  }
 }
 
 // ---------------- 音乐世界六件套的状态 ----------------
