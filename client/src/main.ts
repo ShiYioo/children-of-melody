@@ -10,7 +10,7 @@ import { RemotePlayers } from "./remote";
 import { connectIsland, type NetHandle } from "./net";
 import { NpcDriver } from "./npcs";
 import { createUI } from "./ui";
-import { terrainHeight } from "./heightfield";
+import { terrainHeight, WATER_LEVEL } from "./heightfield";
 import { createMusicFX } from "./world/musicfx";
 import { createVoiceFX } from "./world/voicefx";
 import { createBeacons } from "./world/beacons";
@@ -47,6 +47,10 @@ const furnKit = createToonKit();
 const furniture = createFurniture(furnKit, world.addToScene, (o) => world.scene.remove(o));
 /** 自己正坐着的座位 */
 let seatedOn: { key: string; seat: number } | null = null;
+/** 驾船状态：只有船主能开（vel 前向速度 / ry 船头朝向）；乘客为 null */
+let boatDrive: { key: string; vel: number; ry: number } | null = null;
+/** 船跟随渲染用的主人上一帧位置（差分估朝向） */
+const boatPrevPos = new Map<string, { x: number; z: number }>();
 /** 秋千摆动物理（自己的座位） */
 const swingSim = { angle: 0, vel: 0 };
 const SWING_ROPE = 1.64; // 绳长（横杆 2.15 − 座面 0.51）
@@ -523,17 +527,28 @@ function spawnSelf() {
   };
   controls.onSit = (sitting) => {
     if (sitting && !seatedOn && !controls.state.airborne) {
-      // 光遇式互动：靠近椅子/秋千按 E 是「坐上去」，而不是原地躺下
+      // 光遇式互动：靠近椅子/秋千/船按 E 是「坐上去」，而不是原地躺下
       const near = furniture.nearestSeat(controls.state.pos, 1.7);
       if (near) {
         seatedOn = { key: near.key, seat: near.seat };
-        swingSim.angle = furniture.pivotAngle(near.key, near.seat);
-        swingSim.vel = 0;
+        const kind = furniture.entries.get(near.key)?.kind;
+        if (kind === 2) {
+          const mine = near.key.startsWith(`${net?.sessionId ?? "solo"}:`);
+          const entry = furniture.entries.get(near.key)!;
+          boatDrive = mine
+            ? { key: near.key, vel: 0, ry: entry.group.rotation.y }
+            : null; // 乘客：位置锚定到船，跟着船长走
+          ui.toast(mine ? "上船了——WASD 划船，E 下船" : "坐上了别人的船，坐稳啦");
+        } else {
+          swingSim.angle = furniture.pivotAngle(near.key, near.seat);
+          swingSim.vel = 0;
+        }
         music.sfxSit();
         return;
       }
     }
     if (!sitting && seatedOn) {
+      boatDrive = null;
       seatedOn = null; // E 起身（走动/跳跃起身由 tick 里的兜底清理）
     }
     if (sitting) music.sfxSit();
@@ -654,17 +669,30 @@ const touchUI = createTouchUI(controls, {
   takeInstrument: (idx) => takeOutInstrument(idx),
 });
 
-/** 背包家具：放着就收回，没放就放在面前（键盘 1/2 与触屏菜单共用） */
+/** 背包家具：放着就收回，没放就放在面前（键盘 1/2/3 与触屏菜单共用） */
 function toggleFurniture(kind: number) {
   const key = ownFurnKey(kind);
   if (furniture.has(key)) {
     if (seatedOn?.key === key) {
       seatedOn = null;
+      boatDrive = null;
       controls.state.sit = false;
     }
     furniture.remove(key);
     net?.sendFurnRemove(kind);
-    ui.toast(kind === 0 ? "椅子收回了" : "秋千收回了");
+    ui.toast(kind === 0 ? "椅子收回了" : kind === 1 ? "秋千收回了" : "船收回来了");
+  } else if (kind === 2) {
+    // 双人船：只能放在深水水面上，船头朝向面前
+    const s = controls.state;
+    const x = s.pos.x + Math.sin(s.yaw) * 3.2;
+    const z = s.pos.z + Math.cos(s.yaw) * 3.2;
+    if (terrainHeight(x, z) >= WATER_LEVEL - 0.8) {
+      ui.toast("船要放在深水里——到湖心或近海再放吧");
+    } else {
+      furniture.upsert(key, { owner: net ? net.sessionId : "solo", kind, x, y: WATER_LEVEL - 0.12, z, ry: s.yaw });
+      net?.sendFurnPlace(kind, x, WATER_LEVEL - 0.12, z, s.yaw);
+      ui.toast("放下了双人船——游过去「坐」上船，WASD 划水");
+    }
   } else {
     const s = controls.state;
     const yaw = s.yaw;
@@ -699,6 +727,7 @@ desktopActions.innerHTML = `
       <div class="action-grid">
         <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
         <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
+        <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>3</kbd></button>
       </div>
     </section>
     <section class="action-section">
@@ -805,8 +834,8 @@ window.addEventListener("keydown", (e) => {
     if (chatInput.style.display === "none") openChat();
     return;
   }
-  if (k === "1" || k === "2") {
-    toggleFurniture(k === "1" ? 0 : 1);
+  if (k === "1" || k === "2" || k === "3") {
+    toggleFurniture(k === "1" ? 0 : k === "2" ? 1 : 2);
     return;
   }
   if (k === "f") {
@@ -1053,6 +1082,21 @@ function tick(dt: number) {
         swingSim.angle = Math.max(-1.05, Math.min(1.05, swingSim.angle + swingSim.vel * dt));
         furniture.setPivotAngle(seatedOn.key, seatedOn.seat, swingSim.angle);
       }
+      if (entry.kind === 2 && boatDrive) {
+        // 划船：W 前进 / S 倒划 / A·D 转舵，速度越快转向越灵；撞浅滩急减速
+        const fwd = (controls.isKeyDown("w") ? 1 : 0) - (controls.isKeyDown("s") ? 0.45 : 0);
+        const turn = (controls.isKeyDown("a") ? 1 : 0) - (controls.isKeyDown("d") ? 1 : 0);
+        boatDrive.vel += (fwd * 4.3 - boatDrive.vel) * Math.min(1, dt * 1.8);
+        boatDrive.ry += turn * 1.45 * dt * (0.3 + Math.min(1, Math.abs(boatDrive.vel) / 2));
+        const g = entry.group;
+        const nx = g.position.x + Math.sin(boatDrive.ry) * boatDrive.vel * dt;
+        const nz = g.position.z + Math.cos(boatDrive.ry) * boatDrive.vel * dt;
+        if (terrainHeight(nx, nz) < WATER_LEVEL - 0.5) {
+          furniture.setBoatTransform(seatedOn.key, nx, WATER_LEVEL - 0.12, nz, boatDrive.ry);
+        } else {
+          boatDrive.vel *= Math.pow(0.02, dt); // 岸边搁浅：船头顶住不动
+        }
+      }
       if (furniture.seatAnchor(seatedOn.key, seatedOn.seat, tmpDir)) {
         s.pos.copy(tmpDir);
         s.mov = 0;
@@ -1064,6 +1108,38 @@ function tick(dt: number) {
   // 家具摆动：跟随所有坐着的人（自己 + 远端）；顺手标记谁坐在家具上（远端坐姿用）
   const sittersAll = [{ key: "self", pos: controls.state.pos, sit: controls.state.sit }, ...remotes.sitters()];
   furniture.update(sittersAll);
+
+  // ---- 船：跟着乘船的主人走（其他端的视角），空船慢慢漂回泊位，全程随波轻摇 ----
+  {
+    const selfId = net?.sessionId ?? "solo";
+    for (const b of furniture.boats()) {
+      const ownerSelf = b.owner === selfId;
+      const driving = ownerSelf && !!boatDrive;
+      if (!driving) {
+        const p = ownerSelf ? controls.state.pos : remotes.posOf(b.owner);
+        // 主人正坐着（乘船中）→ 船贴到主人身边；朝向按主人移动方向差分估算
+        const riding = ownerSelf ? controls.state.sit : remotes.sitOf(b.owner);
+        if (p && riding && p.y < WATER_LEVEL) {
+          let ry = b.ry;
+          const prev = boatPrevPos.get(b.key);
+          if (prev) {
+            const dx = p.x - prev.x;
+            const dz = p.z - prev.z;
+            if (dx * dx + dz * dz > 4e-6) ry = Math.atan2(dx, dz);
+          }
+          boatPrevPos.set(b.key, { x: p.x, z: p.z });
+          furniture.setBoatTransform(b.key, p.x, WATER_LEVEL - 0.12, p.z, ry);
+        } else {
+          boatPrevPos.delete(b.key);
+          // 主人上岸/游泳：船慢慢漂回泊位
+          if (Math.hypot(b.x - b.hx, b.z - b.hz) > 0.05) {
+            furniture.setBoatTransform(b.key, b.hx, WATER_LEVEL - 0.12, b.hz, b.hry);
+          }
+        }
+      }
+    }
+    furniture.updateBoats(t);
+  }
   const seatedRemotes = new Set<string>();
   for (const p of sittersAll) {
     if (!p.sit) continue;
@@ -1077,7 +1153,7 @@ function tick(dt: number) {
     selfAvatar.group.rotation.y = s.yaw;
     const speed = controls.horizSpeed;
     const air = s.mov === 3 || s.mov === 4 ? 2 : s.airborne ? 1 : 0;
-    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel, vx: controls.horizVel.x, vz: controls.horizVel.z, seated: !!seatedOn, swim: s.swimming });
+    selfAvatar.animate(dt, t, speed, s.sit, air, s.yawVel, { vy: controls.verticalVel, vx: controls.horizVel.x, vz: controls.horizVel.z, seated: !!seatedOn, swim: s.swimming && !seatedOn });
     net?.sendPos({ x: s.pos.x, y: s.pos.y, z: s.pos.z, ry: s.yaw, mov: s.mov, sit: s.sit });
   }
 

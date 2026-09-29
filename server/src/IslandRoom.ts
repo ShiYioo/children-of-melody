@@ -121,8 +121,9 @@ export class IslandRoom extends Room {
       this.broadcast("voice-presence", { id: client.sessionId, active: false });
     }
     // 背包家具随人离岛收回
-    this.state.furniture.delete(`${client.sessionId}:0`);
-    this.state.furniture.delete(`${client.sessionId}:1`);
+      this.state.furniture.delete(`${client.sessionId}:0`);
+      this.state.furniture.delete(`${client.sessionId}:1`);
+      this.state.furniture.delete(`${client.sessionId}:2`);
     // 随身曲库：离岛即带走——他上传的歌自动删除
     const removed = removeSongsOf(client.sessionId);
     if (removed > 0) console.log(`[island] ${player?.name ?? "旅人"} 离开，随身曲库的 ${removed} 首歌已收起`);
@@ -352,13 +353,14 @@ export class IslandRoom extends Room {
       target?.send("flower", { id: client.sessionId });
     },
 
-    // ---- 背包家具（椅子/双人秋千）：每人每件只能放一个，收回才能再放 ----
+    // ---- 背包家具（椅子/双人秋千/双人船）：每人每件只能放一个，收回才能再放 ----
     "furn-place": (client: Client, m: any) => {
       const kind = m?.kind | 0;
-      if (kind !== 0 && kind !== 1) return;
+      if (kind !== 0 && kind !== 1 && kind !== 2) return;
       if (!Number.isFinite(m?.x) || !Number.isFinite(m?.z) || !Number.isFinite(m?.y)) return;
       const r = Math.hypot(m.x, m.z);
-      if (r > ISLAND_RADIUS - 2) return; // 别放到岛外
+      // 船可以放到近海（玩家会划出去兜风）；椅子/秋千仍限岛内
+      if (r > (kind === 2 ? ISLAND_RADIUS + 16 : ISLAND_RADIUS - 2)) return;
       const key = `${client.sessionId}:${kind}`;
       if (this.state.furniture.has(key)) return; // 已放着：必须先收回
       const f = new Furniture();
@@ -373,7 +375,7 @@ export class IslandRoom extends Room {
 
     "furn-remove": (client: Client, m: any) => {
       const kind = m?.kind | 0;
-      if (kind !== 0 && kind !== 1) return;
+      if (kind !== 0 && kind !== 1 && kind !== 2) return;
       this.state.furniture.delete(`${client.sessionId}:${kind}`);
     },
   };

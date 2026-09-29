@@ -14,11 +14,13 @@ import { terrainHeight } from "../heightfield";
 export interface FurnEntry {
   key: string; // `${owner}:${kind}`
   owner: string;
-  kind: number; // 0 椅子 / 1 秋千
+  kind: number; // 0 椅子 / 1 秋千 / 2 双人船
   group: THREE.Group;
   collider: CylinderCollider | null;
   /** 秋千两个座位的枢轴（绕顶部横杆摆动） */
   pivots: THREE.Group[];
+  /** 家具的泊位（放置点）：船被开走后别人看着它回这里 */
+  home: { x: number; y: number; z: number; ry: number };
 }
 
 interface PlayerLike {
@@ -103,6 +105,44 @@ function makeSwing(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } 
   return { group: g, pivots };
 }
 
+/** 双人小木船：前后两块座板，船头一盏暖灯。仅供水面放置与乘坐。 */
+function makeBoat(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } {
+  const g = new THREE.Group();
+  const wood = "#a8794e";
+  const dark = "#7c5636";
+  const trim = "#e0c296";
+  const plank = (w: number, h: number, d: number, x: number, y: number, z: number, rx = 0, rz = 0, color = wood) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), kit.mat(color));
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(rx, 0, rz);
+    g.add(mesh);
+    return mesh;
+  };
+  plank(0.98, 0.13, 2.35, 0, 0.1, 0, 0, 0, dark);            // 船底
+  plank(0.09, 0.36, 2.35, -0.53, 0.33, 0, 0, 0.32);          // 左舷（外倾）
+  plank(0.09, 0.36, 2.35, 0.53, 0.33, 0, 0, -0.32);          // 右舷
+  plank(0.98, 0.36, 0.09, 0, 0.36, -1.2, 0.38);              // 船头封板（翘）
+  plank(0.98, 0.3, 0.09, 0, 0.3, 1.2, -0.3);                 // 船尾封板
+  plank(0.92, 0.07, 0.52, 0, 0.46, -0.42, 0, 0, trim);       // 前座板
+  plank(0.92, 0.07, 0.52, 0, 0.46, 0.42, 0, 0, trim);        // 后座板
+  // 船头小灯：夜航时的那一点暖光
+  const lamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 12, 10),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color("#ffd98e") })
+  );
+  lamp.position.set(0, 0.68, -1.22);
+  g.add(lamp);
+  const lampShade = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.16, 0.14), kit.mat(dark));
+  lampShade.position.set(0, 0.68, -1.22);
+  lampShade.scale.set(1.15, 0.9, 1.15);
+  g.add(lampShade);
+  g.traverse((o) => {
+    o.castShadow = true;
+    o.receiveShadow = true;
+  });
+  return { group: g, pivots: [] };
+}
+
 export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => void, sceneRemove: (o: THREE.Object3D) => void) {
   const entries = new Map<string, FurnEntry>();
   const tmpV = new THREE.Vector3();
@@ -111,17 +151,29 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
   function upsert(key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number }) {
     let e = entries.get(key);
     if (!e) {
-      const built = data.kind === 1 ? makeSwing(kit) : makeChair(kit);
+      const built = data.kind === 1 ? makeSwing(kit) : data.kind === 2 ? makeBoat(kit) : makeChair(kit);
       sceneAdd(built.group);
-      const col: CylinderCollider = {
-        x: data.x,
-        z: data.z,
-        r: data.kind === 1 ? 0.9 : 0.42,
-        y0: data.y,
-        y1: data.y + 0.55,
+      // 船不设行走碰撞（水上没有走路的人），别让隐形墙挡住泳者
+      const col: CylinderCollider | null =
+        data.kind === 2
+          ? null
+          : {
+              x: data.x,
+              z: data.z,
+              r: data.kind === 1 ? 0.9 : 0.42,
+              y0: data.y,
+              y1: data.y + 0.55,
+            };
+      if (col) addCollider(col);
+      e = {
+        key,
+        owner: data.owner,
+        kind: data.kind,
+        group: built.group,
+        collider: col,
+        pivots: built.pivots,
+        home: { x: data.x, y: data.y, z: data.z, ry: data.ry },
       };
-      addCollider(col);
-      e = { key, owner: data.owner, kind: data.kind, group: built.group, collider: col, pivots: built.pivots };
       entries.set(key, e);
     }
     e.owner = data.owner;
@@ -162,13 +214,18 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     return e.pivots[seat === 1 ? 1 : 0].rotation.x;
   }
 
-  /** 世界系座位锚点：椅子 1 个（kind 0, seat=-1）；秋千 2 个（seat 0/1） */
+  /** 世界系座位锚点：椅子 1 个（kind 0, seat=-1）；秋千/双人船 2 个（seat 0/1） */
   function seatAnchor(key: string, seat: number, out: THREE.Vector3): boolean {
     const e = entries.get(key);
     if (!e) return false;
     e.group.updateMatrixWorld(true);
     if (e.kind === 0) {
       out.set(0, SEAT_H + 0.06, 0.04).applyMatrix4(e.group.matrixWorld);
+      return true;
+    }
+    if (e.kind === 2) {
+      // 船：前后两块座板的板面中心
+      out.set(0, 0.52, seat === 1 ? 0.42 : -0.42).applyMatrix4(e.group.matrixWorld);
       return true;
     }
     const pivot = e.pivots[seat === 1 ? 1 : 0];
@@ -232,5 +289,53 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     }
   }
 
-  return { upsert, remove, has, seatAnchor, nearestSeat, update, setPivotAngle, pivotAngle, entries };
+  /**
+   * 船的水面行为（每帧）：
+   * - 空船/泊位：原地随波轻摇
+   * - setBoatTransform 已把船移到主人身边：随速度轻微俯仰摇晃
+   */
+  function updateBoats(t: number) {
+    for (const e of entries.values()) {
+      if (e.kind !== 2) continue;
+      e.group.rotation.z = Math.sin(t * 1.1 + e.home.x) * 0.035;
+      e.group.rotation.x = Math.sin(t * 0.8 + e.home.z * 0.7) * 0.028;
+    }
+  }
+
+  /** 驾驶跟随：把船平滑移到目标位（碰撞器不存在，纯渲染；home 不变，下船后自己漂回去） */
+  function setBoatTransform(key: string, x: number, y: number, z: number, ry: number) {
+    const e = entries.get(key);
+    if (!e || e.kind !== 2) return;
+    const k = 0.18;
+    e.group.position.x += (x - e.group.position.x) * k;
+    e.group.position.y += (y - e.group.position.y) * k;
+    e.group.position.z += (z - e.group.position.z) * k;
+    // 朝向走最短弧
+    let d = ry - e.group.rotation.y;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    e.group.rotation.y += d * k;
+  }
+
+  /** 所有船的只读快照（main 层做跟随/骑乘逻辑用） */
+  function boats(): Array<{ key: string; owner: string; x: number; y: number; z: number; ry: number; hx: number; hz: number; hry: number }> {
+    const out: Array<{ key: string; owner: string; x: number; y: number; z: number; ry: number; hx: number; hz: number; hry: number }> = [];
+    for (const e of entries.values()) {
+      if (e.kind !== 2) continue;
+      out.push({
+        key: e.key,
+        owner: e.owner,
+        x: e.group.position.x,
+        y: e.group.position.y,
+        z: e.group.position.z,
+        ry: e.group.rotation.y,
+        hx: e.home.x,
+        hz: e.home.z,
+        hry: e.home.ry,
+      });
+    }
+    return out;
+  }
+
+  return { upsert, remove, has, seatAnchor, nearestSeat, update, setPivotAngle, pivotAngle, entries, updateBoats, setBoatTransform, boats };
 }

@@ -158,6 +158,11 @@ export class RemotePlayers {
     this.entries.get(key)?.avatar.setHand(dir);
   }
 
+  /** 是否处于坐姿（船跟随渲染要区分"乘船"和"游泳"） */
+  sitOf(key: string): boolean {
+    return this.entries.get(key)?.target.sit ?? false;
+  }
+
   /** 遍历所有远程玩家（牵手光带配对用） */
   forEachRemote(cb: (key: string, pos: THREE.Vector3, yaw: number, handWith: string) => void) {
     for (const e of this.entries.values()) {
@@ -245,8 +250,8 @@ export class RemotePlayers {
         vx: clampV(Math.sin(g.rotation.y) * e.speed),
         vz: clampV(Math.cos(g.rotation.y) * e.speed),
         seated: seatedKeys?.has(e.key) ?? false,
-        // 远端无物理状态机：按浮在水面之下的深度推断游泳（漂浮 y≈水面-0.28，潜得更低）
-        swim: g.position.y < WATER_LEVEL - 0.35,
+        // 远端无物理状态机：按浸深推断游泳；坐着（乘船/家具）不算
+        swim: g.position.y < WATER_LEVEL - 0.35 && !e.target.sit,
       });
     }
     return [];
