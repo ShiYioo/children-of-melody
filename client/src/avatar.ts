@@ -368,14 +368,14 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const skinDark = "#e6d5ba";
   const faceDark = "#2e2745"; // 面具脸
 
-  // ---- 腿（两段：大腿+小腿+脚，膝盖能弯） ----
+  // 腿（两段：大腿+小腿+脚，膝盖能弯）——短粗化：半径加粗，幼儿的胖藕腿
   interface Limb2 {
     root: THREE.Group; // 髋/肩
     joint: THREE.Group; // 膝/肘
   }
-  const thighGeo = new THREE.CapsuleGeometry(0.08, 0.13, 4, 8);
-  const shinGeo = new THREE.CapsuleGeometry(0.062, 0.11, 4, 8);
-  const footGeo = new THREE.SphereGeometry(0.075, 8, 6);
+  const thighGeo = new THREE.CapsuleGeometry(0.092, 0.12, 4, 8);
+  const shinGeo = new THREE.CapsuleGeometry(0.074, 0.10, 4, 8);
+  const footGeo = new THREE.SphereGeometry(0.086, 8, 6);
   const makeLeg = (side: number): Limb2 => {
     const root = new THREE.Group();
     root.position.set(0.11 * side, 0.46, 0);
@@ -398,17 +398,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const legL = makeLeg(-1);
   const legR = makeLeg(1);
 
-  // ---- 身体 ----
+  // ---- 身体：蛋形（下宽上窄的胖藕躯干，比上下一样粗的胶囊更幼态） ----
   const torso = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 14), kit.mat(skin));
-  torso.scale.set(0.3, 0.36, 0.26);
-  torso.position.y = 0.62;
+  torso.scale.set(0.315, 0.345, 0.275);
+  torso.position.y = 0.60;
   torso.castShadow = true;
   bodyGroup.add(torso);
 
-  // ---- 手臂（两段：大臂+小臂+手，手肘微弯） ----
-  const upperArmGeo = new THREE.CapsuleGeometry(0.05, 0.12, 4, 8);
-  const foreArmGeo = new THREE.CapsuleGeometry(0.042, 0.1, 4, 8);
-  const handGeo = new THREE.SphereGeometry(0.052, 8, 6);
+  // ---- 手臂（两段：大臂+小臂+手，手肘微弯）——同样短粗，手是圆手套 ----
+  const upperArmGeo = new THREE.CapsuleGeometry(0.058, 0.10, 4, 8);
+  const foreArmGeo = new THREE.CapsuleGeometry(0.05, 0.085, 4, 8);
+  const handGeo = new THREE.SphereGeometry(0.062, 8, 6);
   const makeArm = (side: number): Limb2 => {
     const root = new THREE.Group();
     root.position.set(0.30 * side, 0.82, 0);
@@ -433,8 +433,11 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const armR = makeArm(1);
 
   // ---- 头（大、圆、戴兜帽的面具脸） ----
+  // 光遇的可爱一半来自头身比：整头再放大 12%（脸/眼/腮红/兜帽一起，
+  // 兜帽压过的五官比例自动跟着对）——接近三头身的幼态比例
   const headGroup = new THREE.Group();
   headGroup.position.y = 1.18;
+  headGroup.scale.setScalar(1.12);
   bodyGroup.add(headGroup);
 
   const face = new THREE.Mesh(new THREE.SphereGeometry(0.32, 18, 16), kit.mat(faceDark));
@@ -442,14 +445,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   face.castShadow = true;
   headGroup.add(face);
 
-  // 灵魂大眼睛（bloom 里会微微发光）
-  const eyeMat = new THREE.MeshBasicMaterial({ color: "#fdf6e3" });
-  const eyeGeo = new THREE.SphereGeometry(0.088, 10, 10);
+  // 灵魂大眼睛（bloom 里会微微发光）——光遇角色的脸只有眼睛，眼睛就是全部表情：
+  // 再大一号、水滴形（下圆上尖）、带一点内八倾角 = 无辜感
+  const eyeMat = new THREE.MeshBasicMaterial({ color: "#fffdf4" });
+  const eyeGeo = new THREE.SphereGeometry(0.108, 12, 10);
   const eyes: THREE.Mesh[] = [];
-  for (const dx of [-0.115, 0.115]) {
+  for (const dx of [-0.112, 0.112]) {
     const eye = new THREE.Mesh(eyeGeo, eyeMat);
-    eye.scale.set(1, 1.5, 0.55);
-    eye.position.set(dx, 0.02, 0.235);
+    eye.scale.set(1.12, 1.66, 0.6);
+    eye.position.set(dx, 0.015, 0.225);
+    eye.rotation.z = dx < 0 ? 0.1 : -0.1; // 内八：外角微吊，幼态无辜
     headGroup.add(eye);
     eyes.push(eye);
   }
@@ -1127,7 +1132,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;
-      eyes.forEach((e) => e.scale.set(1, 1.5 * blink, 0.55));
+      eyes.forEach((e) => e.scale.set(1.12, 1.66 * blink, 0.6));
 
       // ---- 接触阴影：贴地暗斑随高度淡出扩散（水面/深海上自然沉底不可见） ----
       const shadowGroundY = terrainHeight(group.position.x, group.position.z);
