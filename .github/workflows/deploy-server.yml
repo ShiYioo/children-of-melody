@@ -36,12 +36,17 @@ jobs:
             echo "重建并重启容器…"
             cd server
             docker compose up -d --build
-            echo "等待健康检查…"
-            sleep 5
-            if docker inspect --format='{{.State.Health.Status}}' yinyu-server | grep -q healthy; then
-              echo "✅ 部署成功，容器健康"
+            echo "等待服务就绪（轮询 60s）…"
+            ok=0
+            for i in $(seq 1 12); do
+              sleep 5
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:2567/ || true)
+              if [ "$code" = "200" ]; then ok=1; break; fi
+            done
+            if [ "$ok" = "1" ] && docker inspect --format='{{.State.Health.Status}}' yinyu-server | grep -qE "healthy|starting"; then
+              echo "✅ 部署成功，服务已就绪"
             else
-              echo "⚠️ 容器未通过健康检查，最近日志："
+              echo "⚠️ 服务未就绪，最近日志："
               docker logs --tail 20 yinyu-server
               exit 1
             fi
