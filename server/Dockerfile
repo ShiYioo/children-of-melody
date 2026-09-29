@@ -10,9 +10,12 @@ RUN npx tsc --noEmit && echo "typecheck passed"
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-# tsx 直接跑 TS（服务端体量小，省掉编译产物同步问题）
+# Colyseus 的 @type() 装饰器需要 legacy 语义：tsx 直跑时这两个必须显式开
+# （本地 dev 走 tsconfig 没事；容器里 esbuild 编译 TS 不读 tsconfig 的这两个字段）
+ENV TSX_TSCONFIG_PATH=/app/tsconfig.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./
+COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/src ./src
 # 曲库持久化卷挂这里（上传的歌重启不丢）
 RUN mkdir -p /app/songs
