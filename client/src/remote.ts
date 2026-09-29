@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { createAvatar, type Avatar } from "./avatar";
 import { trackMeta } from "./audio/tracks";
-import { terrainHeight } from "./heightfield";
+import { terrainHeight, WATER_LEVEL } from "./heightfield";
 import type { AvatarModel } from "./avatar";
 import { SpringV3 } from "./motion";
 
@@ -245,6 +245,8 @@ export class RemotePlayers {
         vx: clampV(Math.sin(g.rotation.y) * e.speed),
         vz: clampV(Math.cos(g.rotation.y) * e.speed),
         seated: seatedKeys?.has(e.key) ?? false,
+        // 远端无物理状态机：按浮在水面之下的深度推断游泳（漂浮 y≈水面-0.28，潜得更低）
+        swim: g.position.y < WATER_LEVEL - 0.35,
       });
     }
     return [];

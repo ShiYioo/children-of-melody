@@ -24,7 +24,7 @@ export type AvatarModel = "classic" | "hooded" | "minion" | "corgi" | "duck" | "
 export interface Avatar {
   group: THREE.Group; // 挂在场景的根（原点在脚底）
   /** air: 0 地面 / 1 腾空 / 2 滑翔；state 提供速度分量（披风的风）、vy（姿势分层）与 seated（坐家具） */
-  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, state?: { vy?: number; vx?: number; vz?: number; seated?: boolean }) => void;
+  animate: (dt: number, t: number, speed: number, sit: boolean, air?: number, yawVel?: number, state?: { vy?: number; vx?: number; vz?: number; seated?: boolean; swim?: boolean }) => void;
   /** 落地缓冲（着地瞬间调用） */
   land: () => void;
   /** 扑翼脉冲（腾空按跳时调用，披风向后上方一抖） */
@@ -591,6 +591,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   let sitLerp = 0;
   let walkPhase = 0;
   let ringEnergy = 0;
+  let swimBlend = 0; // 游泳姿态混合（入水快、出水稍慢，避免"弹射"上岸）
+  let swimPhase = 0; // 划水相位：频率随游速
   let jumpBlend = 0;
   let glideBlend = 0;
   let riseBlend = 0; // 腾空上升（vy>0）
@@ -698,6 +700,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedMixer?.update(dt);
       if (importedReady) {
         if (sit) playImported(singleAnimModels.has(modelChoice) ? "Lie_Idle" : "Sit_Floor_Idle", true);
+        else if (swimBlend > 0.5) playImported("Unarmed_Idle", true); // GLB 无游泳片段：水中改待机漂（程序化小人才有完整游泳动作）
         else if (air === 2) playImported("Jump_Idle", true);
         else if (air === 1) playImported("Jump_Start", false);
         else if (animalModels.has(modelChoice)) playImported(speed > 0.2 && modelChoice !== "minion" ? "walk" : "idle", true);
@@ -715,6 +718,8 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       walkPhase += dt * (stepRate + Math.min(6, Math.abs(yawVel)) * 1.4);
       jumpBlend = THREE.MathUtils.lerp(jumpBlend, air > 0 ? 1 : 0, Math.min(1, dt * 6));
       glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
+      swimBlend = THREE.MathUtils.lerp(swimBlend, state.swim ? 1 : 0, Math.min(1, dt * (state.swim ? 5 : 3)));
+      swimPhase += dt * (2.0 + speedN * 4.5) * (0.15 + swimBlend);
       riseBlend = THREE.MathUtils.lerp(riseBlend, air > 0 && vy > 0.8 ? 1 : 0, Math.min(1, dt * 5));
       fallBlend = THREE.MathUtils.lerp(fallBlend, air > 0 && vy < -0.8 ? 1 : 0, Math.min(1, dt * 5));
       squash = Math.max(0, squash - dt * 4);
@@ -837,9 +842,10 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         (1 - sitLerp);
       const torsoTarget =
         -0.5 * sitLerp +
-        (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground +
+        (0.1 * speedN + leanAcc) * (1 - sitLerp) * ground * (1 - swimBlend) +
         THREE.MathUtils.clamp(0.38 - vy * 0.07, 0.08, 0.95) * glideBlend + // 俯冲低头/爬升抬头（能量飞行的姿态反馈）
         0.15 * jumpBlend * (1 - glideBlend) +
+        1.25 * swimBlend + // 游泳俯卧：躯干几乎放平（脸朝前下）
         slopeLean;
       bodyGroup.rotation.x = mTorsoX.step(torsoTarget, dt) + mEmTorso.step(eTorso, dt);
       // 压弯（整体侧倾，过弹簧：入弯压肩回正带一点回弹）
@@ -857,8 +863,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       bodyGroup.position.y =
         -0.3 * sitLerp +
-        (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.055 * (0.45 + speedN) : Math.sin(t * 1.4) * 0.012) -
+        (speed > 0.2 ? Math.abs(Math.sin(walkPhase)) * 0.055 * (0.45 + speedN) : Math.sin(t * 1.4) * 0.012) * (1 - swimBlend) -
         airN * 0.06 +
+        Math.sin(swimPhase * 2) * 0.035 * swimBlend + // 划水节拍的浮沉
         mEmHop.step(eHop, dt);
 
       // ---- 四肢（两段关节：步态 → 空中分层 → 盘坐） ----
@@ -866,37 +873,49 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       // 幅度过弹簧：起步甩开、急停收步有半拍惯性，步频和身体重量对上。
       // 转身碎步：慢速大角速度转向时叠加小幅迈步（光遇转身会挪小步）
       const turnShuffle = THREE.MathUtils.clamp(Math.abs(yawVel) * 0.3, 0, 0.55) * (1 - Math.min(1, speed * 1.6)) * ground * (1 - sitLerp);
-      const walkAmp = mGaitAmp.step(Math.max(speed > 0.2 ? 0.35 + speedN * 0.65 : 0, turnShuffle) * ground * (1 - sitLerp), dt);
+      const walkAmp = mGaitAmp.step(Math.max(speed > 0.2 ? 0.35 + speedN * 0.65 : 0, turnShuffle) * ground * (1 - sitLerp) * (1 - swimBlend), dt);
       const strideL = Math.sin(walkPhase);
       const strideR = Math.sin(walkPhase + Math.PI);
       const kneeBase = 0.5 + speedN * 0.6;
       const kneeL = Math.max(0, Math.sin(walkPhase - 1.15)) * kneeBase;
       const kneeR = Math.max(0, Math.sin(walkPhase + Math.PI - 1.15)) * kneeBase;
+      // 游泳：双腿交替打水（髋部 ±0.4rad，膝微屈保持流线型）
+      const kickL = Math.sin(swimPhase * 2);
+      const kickR = Math.sin(swimPhase * 2 + Math.PI);
 
-      // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 并拢后掠（与躯干轴对齐） + sit 盘腿
+      // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 并拢后掠（与躯干轴对齐） + sit 盘腿 + swim 打水
       legL.root.rotation.x =
-        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp;
+        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
+        kickL * 0.4 * swimBlend;
       legL.joint.rotation.x =
-        kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp;
+        kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp +
+        0.25 * swimBlend;
       legR.root.rotation.x =
-        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp;
+        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
+        kickR * 0.4 * swimBlend;
       legR.joint.rotation.x =
-        kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp;
+        kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp +
+        0.25 * swimBlend;
 
       // 臂：walk 反相摆 + rise 后上摆 + fall 侧举 + glide 向前上方伸出（从翼面前缘探出，不被布盖住） + sit 放前
       // 动作轮盘增量（弹簧）叠加在基础姿态上，替换原来的绝对覆盖
       const armSwL = -strideL;
       const armSwR = -strideR;
+      // 游泳：双臂交替大回环划水（相位差半圈），外展让手肘离开躯干
+      const strokeL = Math.sin(swimPhase);
+      const strokeR = Math.sin(swimPhase + Math.PI);
       armL.root.rotation.x =
         armSwL * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
+        strokeL * 1.05 * swimBlend +
         mEmArmX.step(eArmX, dt) +
         mIdleArmX.step(idleAct === 2 ? 0.38 : 0, dt);
       armR.root.rotation.x =
         armSwR * (0.18 + speedN * 0.5) * walkAmp * 2 - 0.6 * riseBlend - 0.25 * fallBlend + 0.28 * glideBlend - 0.5 * sitLerp +
+        strokeR * 1.05 * swimBlend +
         mEmArmX.x +
         mIdleArmX.x;
-      armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp + mEmArmLZ.step(eArmLZ, dt);
-      armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp + mEmArmRZ.step(eArmRZ, dt);
+      armL.root.rotation.z = 0.16 + 1.45 * glideBlend + 0.8 * fallBlend - flapPulse * 0.45 + armSwL * 0.08 * walkAmp + 0.3 * swimBlend + mEmArmLZ.step(eArmLZ, dt);
+      armR.root.rotation.z = -0.16 - 1.45 * glideBlend - 0.8 * fallBlend + flapPulse * 0.45 + armSwR * 0.08 * walkAmp - 0.3 * swimBlend + mEmArmRZ.step(eArmRZ, dt);
       // 肘：跑步更弯、滑翔前伸、其余自然微弯
       const elbow = -(0.3 + (0.35 + speedN * 0.55) * walkAmp + 0.25 * riseBlend + 0.5 * glideBlend + 0.15 * fallBlend) * (1 - sitLerp) - 0.35 * sitLerp;
       armL.joint.rotation.x = elbow;
