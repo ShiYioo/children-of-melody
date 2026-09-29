@@ -1,0 +1,42 @@
+# 音遇 · 双端部署流水线
+# push main → ① EdgeOne 自动构建前端（EdgeOne 侧配置，见 deploy/README.md）
+#           → ② Actions SSH 到你的服务器，git pull + docker 重建重启
+name: deploy-server
+on:
+  push:
+    branches: [main]
+    paths: ["server/**", ".github/workflows/deploy-server.yml"]
+  workflow_dispatch: # 允许手动触发
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false # 部署不并发，排队执行
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 部署
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }} # 服务器 IP
+          username: ${{ secrets.DEPLOY_USER }} # SSH 用户
+          key: ${{ secrets.DEPLOY_SSH_KEY }} # 私钥（公钥放服务器 authorized_keys）
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }} # 服务器上的仓库路径，如 /opt/yinyu
+            echo "[$(date '+%H:%M:%S')] 拉取最新代码…"
+            git fetch origin main
+            git reset --hard origin/main
+            echo "重建并重启容器…"
+            cd server
+            docker compose up -d --build
+            echo "等待健康检查…"
+            sleep 5
+            if docker inspect --format='{{.State.Health.Status}}' yinyu-server | grep -q healthy; then
+              echo "✅ 部署成功，容器健康"
+            else
+              echo "⚠️ 容器未通过健康检查，最近日志："
+              docker logs --tail 20 yinyu-server
+              exit 1
+            fi

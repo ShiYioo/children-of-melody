@@ -1,0 +1,23 @@
+# 音遇服务端容器编排
+# 用法：docker compose up -d --build（GitHub Actions 会自动执行）
+services:
+  yinyu:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: yinyu-server
+    restart: unless-stopped
+    ports:
+      - "2567:2567" # 生产建议只暴露给 nginx 反代；直连时改成 "127.0.0.1:2567:2567"
+    environment:
+      # 部署在 nginx 反代后时设 1（信任 X-Forwarded-For）
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
+      # EdgeOne 前端域名白名单（逗号分隔），空 = 放行同 host
+      ALLOW_ORIGINS: "${ALLOW_ORIGINS:-}"
+    volumes:
+      - ./songs:/app/songs # 上传歌曲持久化
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
