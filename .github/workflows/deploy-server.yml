@@ -24,8 +24,13 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }} # 私钥（公钥放服务器 authorized_keys）
           script: |
             set -e
-            cd ${{ secrets.DEPLOY_PATH }} # 服务器上的仓库路径，如 /opt/yinyu
+            cd ${{ secrets.DEPLOY_PATH }} # 服务器上的仓库路径，如 /www/yinyu
             echo "[$(date '+%H:%M:%S')] 拉取最新代码…"
+            # 国内服务器直连 GitHub 被墙：origin 缺失或不可达时改用 ghproxy 镜像
+            if ! git remote get-url origin >/dev/null 2>&1 || ! git ls-remote origin >/dev/null 2>&1; then
+              git remote remove origin 2>/dev/null || true
+              git remote add origin https://ghproxy.net/https://github.com/ShiYioo/children-of-melody.git
+            fi
             git fetch origin main
             git reset --hard origin/main
             echo "重建并重启容器…"
