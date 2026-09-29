@@ -915,6 +915,16 @@ bookBtn.addEventListener("click", () => {
   bookPanel.style.display = bookPanel.style.display === "none" ? "block" : "none";
 });
 
+// 说话检测滞回：电平越过 0.09 才算开口、跌回 0.045 以下才算闭嘴——
+// 麦克风底噪/空调风扇不再点亮声波光圈，两道门限的落差防止临界闪烁
+const speakingOn = new Map<string, boolean>();
+function speakingActive(key: string, level: number): boolean {
+  const on = speakingOn.get(key) ?? false;
+  if (!on && level > 0.09) speakingOn.set(key, true);
+  else if (on && level < 0.045) speakingOn.set(key, false);
+  return speakingOn.get(key) ?? false;
+}
+
 /** 献花给正在听的人：音乐回应（V 键） */
 let lastFlowerSent = 0;
 function sendFlowerToNearest() {
@@ -1042,13 +1052,13 @@ function tick(dt: number) {
 
   music.tick();
   voicefx.beginFrame();
-  if (selfAvatar && localVoiceLevel > 0.008) {
+  if (selfAvatar && speakingActive("self", localVoiceLevel)) {
     voiceColor.setHSL(selfHue / 360, 0.52, 0.7);
     voicefx.drive("self", controls.state.pos, voiceColor, localVoiceLevel);
   }
   for (const [key, level] of remoteVoiceLevels) {
     const pos = remotes.posOf(key);
-    if (!pos || level <= 0.008) continue;
+    if (!pos || !speakingActive(key, level)) continue;
     voiceColor.setHSL(remotes.hueOf(key) / 360, 0.52, 0.7);
     voicefx.drive(key, pos, voiceColor, level);
   }
