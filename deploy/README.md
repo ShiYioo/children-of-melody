@@ -5,10 +5,15 @@
 ```
 玩家浏览器 ──HTTPS──▶ 腾讯 EdgeOne Pages（前端静态 + CDN，自动构建）
       │
-      ├─ /colyseus/*、/songs/* ──▶ edge-functions/ 边缘函数反代 ──HTTP──▶ 你的服务器 Docker :2567
+      ├─ 联机（实时连接）──WSS──▶ ws.shiyio.uk:8443（nginx TLS 反代）──▶ 本机 2567
+      │                        Let's Encrypt 证书，acme.sh DNS 验证自动续签
       │
-      └─（有已备案域名时的替代方案）WSS ──▶ nginx TLS 反代 2567
+      └─ 曲库 /songs/* ──▶ edge-functions/ 边缘函数反代 ──HTTP──▶ 160.30.231.236:2567
 ```
+
+> 为什么联机不走 EdgeOne 反代：实测 EdgeOne 边缘函数**只转发 101 握手响应、不桥接
+> WebSocket 数据通道**（open 后 1ms 内断开 1006）。HTTP 类请求（曲库）反代正常。
+> 为什么用 8443 非标端口：境内机房对未备案域名的 80/443 有拦截，非标端口没有。
 
 推一次 main 到 GitHub：**EdgeOne 自动重新构建前端发布，Actions 自动 SSH 到你的服务器拉代码重建容器**——双端同时更新，全程无手工操作。
 
