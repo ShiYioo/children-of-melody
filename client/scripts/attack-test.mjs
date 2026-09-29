@@ -85,6 +85,49 @@ async function main() {
     room.leave();
   }
 
+  // ---- 5. 外挂：瞬移（单条 100m 跳，应被软校正到限速内） ----
+  {
+    const room = await connect("瞬移挂");
+    await sleep(400);
+    room.send("pos", { x: 0, y: 1, z: 0, ry: 0, mov: 2, sit: false });
+    await sleep(250);
+    room.send("pos", { x: 100, y: 1, z: 0, ry: 0, mov: 2, sit: false });
+    await sleep(350);
+    const me = room.state.players.get(room.sessionId);
+    const ok = !!me && Number(me.x) < 20;
+    check("瞬移挂：位置被软校正", ok, me ? `校正后 x=${Number(me.x).toFixed(1)}（限速 12m/s × 0.25s ≈ 3）` : "无状态");
+    room.leave();
+  }
+
+  // ---- 6. 外挂：飞天（y=35，应被夹回高度上限） ----
+  {
+    const room = await connect("飞天挂");
+    await sleep(300);
+    room.send("pos", { x: 0, y: 35, z: 0, ry: 0, mov: 3, sit: false });
+    await sleep(350);
+    const me = room.state.players.get(room.sessionId);
+    const ok = !!me && Number(me.y) <= 26.01;
+    check("飞天挂：高度被夹回", ok, me ? `y=${Number(me.y).toFixed(1)}（上限 26）` : "无状态");
+    room.leave();
+  }
+
+  // ---- 7. 外挂：持续超速（50m/s 连续移动，10s 窗口内 12 次超速应被踢） ----
+  {
+    const room = await connect("超速挂");
+    let kicked = false;
+    room.onLeave(() => (kicked = true));
+    let x = 0;
+    room.send("pos", { x: 0, y: 1, z: 0, ry: 0, mov: 2, sit: false });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 6000 && !kicked) {
+      x += 5; // 100ms 一条 5m = 50 m/s
+      room.send("pos", { x, y: 1, z: 0, ry: 0, mov: 2, sit: false });
+      await sleep(100);
+    }
+    check("超速挂：累犯被踢出", kicked, "50m/s 持续移动 ~1.5s 触发");
+    try { room.leave(); } catch {}
+  }
+
   // ---- 汇总 ----
   const failed = results.filter((r) => !r.ok);
   console.log(failed.length ? `\n✗ ${failed.length} 项未通过` : "\n全部通过：防护有效");

@@ -4,6 +4,10 @@ import { MsgGuard, finite, finiteClamp, safeStr } from "./guard.js";
 import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
+/** 玩家可达边界：岛 58 + 近海放船 74，留到 78；外挂再远也会被夹回 */
+const POS_BOUND = 78;
+/** 高度上限：滑翔+扑翼的合法爬升远够不到 26，飞天挂被夹在地表附近 */
+const MAX_Y = 26;
 const MAX_NAME_LEN = 12;
 const AVATARS = new Set(["classic", "hooded", "minion", "corgi", "duck", "platypus", "seal", "owl", "elaina"]);
 
@@ -27,6 +31,21 @@ export class IslandRoom extends Room {
   private lastEmoteOf = new Map<string, number>();
   /** 移动校验：sessionId → 上次接受的位置与时间 */
   private lastPosAt = new Map<string, { x: number; y: number; z: number; t: number }>();
+  /** 移动反作弊：10 秒窗口内超速校正次数（正常网络抖动 1~2 次，外挂每条都超） */
+  private posStrikes = new Map<string, { n: number; t: number }>();
+
+  /** 超速软校正记账：10 秒内累计 12 次 → 踢出（判定延迟 ~1.2 秒，误伤概率趋近于零） */
+  private posStrike(client: Client) {
+    const now = Date.now();
+    let s = this.posStrikes.get(client.sessionId);
+    if (!s || now - s.t > 10_000) {
+      s = { n: 0, t: now };
+      this.posStrikes.set(client.sessionId, s);
+    }
+    s.n++;
+    if (s.n === 12) console.warn(`[guard] 移动异常踢出 ${client.sessionId}`);
+    if (s.n >= 12) client.leave(4004, "移动数据异常");
+  }
   private lastFlowerAt = new Map<string, number>(); // 献花节流（3s 一朵）
   /** 开启语音的会话；音频本身只在客户端 WebRTC 点对点传输 */
   private voiceActive = new Set<string>();
@@ -106,6 +125,7 @@ export class IslandRoom extends Room {
 
   async onLeave(client: Client) {
     this.guard.cleanup(client.sessionId);
+    this.posStrikes.delete(client.sessionId);
     const ip = (client as unknown as { __ip?: string }).__ip;
     if (ip) MsgGuard.releaseIp(ip);
     const player = this.state.players.get(client.sessionId);
@@ -151,29 +171,41 @@ export class IslandRoom extends Room {
   }
 
   messages = {
-    // 客户端 10Hz 上报自身位置；服务端只做岛屿边界约束
+    // 客户端 10Hz 上报自身位置；服务端做边界约束 + 分状态限速（反作弊核心）
     pos: (client: Client, m: any) => {
       const p = this.state.players.get(client.sessionId);
       // NaN/Infinity 会被 typeof 放行且让一切比较为 false（速度检查直接失效），
       // 广播出去还会毒死所有客户端——必须 Number.isFinite 显式拦截
       if (!p || !Number.isFinite(m?.x) || !Number.isFinite(m?.z)) return;
-      const mx = finiteClamp(m.x, -ISLAND_RADIUS * 2, ISLAND_RADIUS * 2, p.x);
-      const my = finiteClamp(m.y, 0, 40, p.y);
-      const mz = finiteClamp(m.z, -ISLAND_RADIUS * 2, ISLAND_RADIUS * 2, p.z);
-      // 移动合法性：合法极速 ~15m/s（滑翔/被牵飞行），40 是宽松上限，超了当瞬移丢弃
+      const mx = finiteClamp(m.x, -POS_BOUND, POS_BOUND, p.x);
+      const my = finiteClamp(m.y, 0, MAX_Y, p.y);
+      const mz = finiteClamp(m.z, -POS_BOUND, POS_BOUND, p.z);
+      m.x = mx; m.y = my; m.z = mz;
       const now = Date.now();
       const last = this.lastPosAt.get(client.sessionId);
       if (last) {
         const dt = Math.max(0.05, (now - last.t) / 1000);
-        const dist = Math.hypot(mx - last.x, my - last.y, mz - last.z);
-        if (dist / dt > 40) return;
+        const dx = m.x - last.x;
+        const dy = m.y - last.y;
+        const dz = m.z - last.z;
+        const dist = Math.hypot(dx, dy, dz);
+        // 分状态限速：跑 7.2 / 滑翔俯冲合法极速 ~15，留出网络抖动余量后
+        // 地面 12、滑翔扑翼 20。超速不丢弃（丢弃会让卡顿玩家瞬移回滚）——
+        // 软校正：保留移动方向、把位移截断到允许值，外挂被钉死在限速线上
+        const cap = (m.mov | 0) >= 3 ? 20 : 12;
+        if (dist / dt > cap) {
+          const k = (cap * dt) / dist;
+          m.x = last.x + dx * k;
+          m.y = last.y + dy * k;
+          m.z = last.z + dz * k;
+          this.posStrike(client);
+        }
       }
-      m.x = mx; m.y = my; m.z = mz;
       this.lastPosAt.set(client.sessionId, { x: m.x, y: m.y, z: m.z, t: now });
       const r = Math.hypot(m.x, m.z);
-      if (r > ISLAND_RADIUS) {
-        m.x = (m.x / r) * ISLAND_RADIUS;
-        m.z = (m.z / r) * ISLAND_RADIUS;
+      if (r > POS_BOUND) {
+        m.x = (m.x / r) * POS_BOUND;
+        m.z = (m.z / r) * POS_BOUND;
       }
       p.x = m.x;
       p.y = clamp(m.y, 0, 40);
