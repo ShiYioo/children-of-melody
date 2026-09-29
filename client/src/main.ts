@@ -728,7 +728,7 @@ desktopActions.innerHTML = `
         <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
         <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
         <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>6</kbd></button>
-        <button class="action-item" id="photoEntry"><i data-lucide="camera"></i><span class="label">拍照</span><kbd>P</kbd></button>
+        <button class="action-item" id="photoEntry"><i data-lucide="camera"></i><span class="label">拍照</span><kbd>C</kbd></button>
       </div>
     </section>
     <section class="action-section">
@@ -827,7 +827,7 @@ window.addEventListener("keydown", (e) => {
     takeOutInstrument(Number(k) - 3);
     return;
   }
-  if (k === "p") {
+  if (k === "c") {
     setPhotoMode(!photoMode);
     return;
   }
@@ -1021,7 +1021,7 @@ function setPhotoMode(on: boolean) {
   controls.inputLocked = on;
   if (on) {
     setPhotoSelfie(true);
-    ui.toast("拍照模式——右侧换姿势，圆钮快门，P/Esc 退出", 2800);
+    ui.toast("拍照模式——右侧换姿势，圆钮快门，C/Esc 退出", 2800);
   } else {
     controls.camDist = 7.5;
     controls.camPitch = 0.32;
