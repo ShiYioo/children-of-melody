@@ -181,12 +181,15 @@ export class PlayerControls {
   }
 
   /** 某个键当前是否按住（秋千蹬踏等外围系统用） */
-  isKeyDown(key: string) {
-    return this.keys.has(key.toLowerCase());
+  isKeyDown(key: string) {    return this.keys.has(key.toLowerCase());
   }
 
   /** 虚拟摇杆输入（触屏层写入；屏幕系 x 右 z 下，与 WASD 同约定） */
   touchMove = { x: 0, z: 0 };
+
+  /** 本帧合成的移动输入（键盘+摇杆，-1~1）：载具驾驶（船）读这个，触屏同样生效 */
+  moveX = 0;
+  moveZ = 0;
 
   /** 触屏按钮模拟按键：down=true 走与物理键盘同一套逻辑（E 切坐、空格跳/按住滑翔） */
   virtualKey(key: string, down: boolean) {
@@ -258,6 +261,9 @@ export class PlayerControls {
         iz = this.touchMove.z;
       }
     }
+    // 原始输入透传（坐船等载具驾驶读这个：键盘/摇杆统一，且不受 sit 状态屏蔽）
+    this.moveX = ix;
+    this.moveZ = iz;
     const inputLen = Math.hypot(ix, iz);
     const moving = inputLen > 0.01 && !s.sit;
     if (moving) s.sit = false; // 走动即起立

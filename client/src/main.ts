@@ -1083,11 +1083,12 @@ function tick(dt: number) {
         furniture.setPivotAngle(seatedOn.key, seatedOn.seat, swingSim.angle);
       }
       if (entry.kind === 2 && boatDrive) {
-        // 划船：W 前进 / S 倒划 / A·D 转舵，速度越快转向越灵；撞浅滩急减速
-        const fwd = (controls.isKeyDown("w") ? 1 : 0) - (controls.isKeyDown("s") ? 0.45 : 0);
-        const turn = (controls.isKeyDown("a") ? 1 : 0) - (controls.isKeyDown("d") ? 1 : 0);
-        boatDrive.vel += (fwd * 4.3 - boatDrive.vel) * Math.min(1, dt * 1.8);
-        boatDrive.ry += turn * 1.45 * dt * (0.3 + Math.min(1, Math.abs(boatDrive.vel) / 2));
+        // 划船：读 controls 的合成输入（键盘/触屏摇杆统一）；摇杆推得越满越快，
+        // 空档时船缓缓滑行减速；转向量随船速放大（静止时舵是死的）
+        const fwd = Math.max(0, -controls.moveZ); // W / 摇杆上
+        const back = Math.max(0, controls.moveZ); // S / 摇杆下（倒划）
+        boatDrive.vel += (fwd * 5.2 - back * 2.2 - boatDrive.vel) * Math.min(1, dt * 3.2);
+        boatDrive.ry -= controls.moveX * 1.5 * dt * (0.3 + Math.min(1, Math.abs(boatDrive.vel) / 2));
         const g = entry.group;
         const nx = g.position.x + Math.sin(boatDrive.ry) * boatDrive.vel * dt;
         const nz = g.position.z + Math.cos(boatDrive.ry) * boatDrive.vel * dt;
@@ -1117,9 +1118,10 @@ function tick(dt: number) {
       const driving = ownerSelf && !!boatDrive;
       if (!driving) {
         const p = ownerSelf ? controls.state.pos : remotes.posOf(b.owner);
-        // 主人正坐着（乘船中）→ 船贴到主人身边；朝向按主人移动方向差分估算
+        // 主人正坐着（乘船中）→ 船贴到主人身边；朝向按主人移动方向差分估算。
+        // 注意不能用 y 高度判断：座位锚点在船帮上，比水面高出大半米
         const riding = ownerSelf ? controls.state.sit : remotes.sitOf(b.owner);
-        if (p && riding && p.y < WATER_LEVEL) {
+        if (p && riding) {
           let ry = b.ry;
           const prev = boatPrevPos.get(b.key);
           if (prev) {

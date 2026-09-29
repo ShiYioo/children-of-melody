@@ -306,7 +306,7 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
   function setBoatTransform(key: string, x: number, y: number, z: number, ry: number) {
     const e = entries.get(key);
     if (!e || e.kind !== 2) return;
-    const k = 0.18;
+    const k = 0.35;
     e.group.position.x += (x - e.group.position.x) * k;
     e.group.position.y += (y - e.group.position.y) * k;
     e.group.position.z += (z - e.group.position.z) * k;
