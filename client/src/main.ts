@@ -344,7 +344,6 @@ async function connectToIsland(name: string, hue: number): Promise<NetHandle | n
     selectedAvatar,
     hue,
     {
-    {
       onInvite: (from, fromName) => {
         if (hand.withId) {
           // 已牵着别人：直接婉拒
