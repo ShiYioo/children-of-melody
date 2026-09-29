@@ -272,7 +272,7 @@ class RelayProc extends AudioWorkletProcessor {
           const v = Math.max(-1, Math.min(1, this.acc[j]));
           out[j] = v < 0 ? v * 32768 : v * 32767;
         }
-        this.postMessage(out.buffer, [out.buffer]);
+        this.port.postMessage(out.buffer, [out.buffer]);
         this.count = 0;
       }
     }
@@ -344,14 +344,18 @@ registerProcessor("relay-proc", RelayProc);`;
     this.callbacks.onPeerLevel(from, true, Math.min(1, Math.sqrt(sum / samples) * 4));
   }
 
-  /** ICE 失败后的自愈重试（去抖：1.2s 内只排一次） */
+  /** ICE 失败后的自愈重试（指数退避 1.2s→19.2s：打不通的 NAT 反复抢跑只会刷屏白耗电；
+   *  一旦任何通道 connected 就重置，网络环境变化后恢复快速重试） */
   private retryTimer: number | null = null;
+  private retryDelay = 1200;
   private retrySoon() {
     if (this.retryTimer !== null) return;
+    const delay = this.retryDelay;
+    this.retryDelay = Math.min(this.retryDelay * 2, 19200);
     this.retryTimer = window.setTimeout(() => {
       this.retryTimer = null;
       if (this.enabled && this.online) this.syncPeers();
-    }, 1200);
+    }, delay);
   }
 
   private syncPeers() {
@@ -398,6 +402,7 @@ registerProcessor("relay-proc", RelayProc);`;
     };
     pc.onconnectionstatechange = () => {
       console.info(`[voice] 与 ${id.slice(0, 6)} 的通道: ${pc.connectionState}`);
+      if (pc.connectionState === "connected") this.retryDelay = 1200;
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         this.closePeer(id, peer);
         // ICE 失败自愈：syncPeers 是事件驱动的，失败后没人再触发就永远哑着——
