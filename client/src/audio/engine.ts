@@ -78,6 +78,7 @@ interface FeatureState {
 export class MusicEngine {
   ctx: AudioContext | null = null;
   private master!: GainNode;
+  private musicVol = 1;
   private sources = new Map<string, Source>();
   private feat = new Map<string, FeatureState>(); // features() 的每源状态
   private ownKey = "self";
@@ -121,7 +122,7 @@ export class MusicEngine {
     this.ctx = ctx;
     ctx.resume().catch(() => {});
     this.master = ctx.createGain();
-    this.master.gain.value = 0.9;
+    this.master.gain.value = 0.9 * this.musicVol;
     this.master.connect(ctx.destination);
 
     // 白噪声底料（环境声与动作音效共用）
@@ -367,6 +368,12 @@ export class MusicEngine {
   }
 
   // ---------- 空间声像：声音在哪边，哪只耳朵响 ----------
+
+  /** 音乐/环境总音量（1=默认线路电平 0.9；0=静音；上限 1.5 允许调响） */
+  setMusicVolume(v: number) {
+    this.musicVol = v;
+    if (this.master) this.master.gain.value = 0.9 * v;
+  }
 
   /** 每帧写入某个曲源的世界位置（HRTF 声像跟随） */
   setSourcePos(key: string, x: number, y: number, z: number) {

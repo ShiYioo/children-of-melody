@@ -226,12 +226,33 @@ export class VoiceChat {
 
   private relayNode: AudioWorkletNode | null = null;
   private submerged = false;
+  /** 每个播放用 AudioContext 一个总输出增益（用户音量滑条控制） */
+  private playOuts = new Map<AudioContext, GainNode>();
+  private voiceVol = 1;
 
   /** 彩蛋：说话者泡在水里时给麦克风加"水下闷响+气泡"处理（发给采集 worklet 的开关） */
   setSubmerged(on: boolean) {
     if (on === this.submerged) return;
     this.submerged = on;
     this.relayNode?.port.postMessage({ water: on });
+  }
+
+  /** 语音播放总音量（0-1.5）：P2P 与中继两个播放上下文同时生效 */
+  setVoiceVolume(v: number) {
+    this.voiceVol = v;
+    for (const out of this.playOuts.values()) out.gain.value = v;
+  }
+
+  /** 懒建该上下文的播放总线（所有语音最终汇入它再进扬声器） */
+  private playOut(ctx: AudioContext): GainNode {
+    let out = this.playOuts.get(ctx);
+    if (!out) {
+      out = ctx.createGain();
+      out.gain.value = this.voiceVol;
+      out.connect(ctx.destination);
+      this.playOuts.set(ctx, out);
+    }
+    return out;
   }
   /** 每个说话者的中继播放时间轴（抖动缓冲：按序排队，断流自动追赶） */
   private relayNextAt = new Map<string, number>();
@@ -356,9 +377,9 @@ registerProcessor("relay-proc", RelayProc);`;
     if (Math.abs(pan) > 0.01) {
       const p = ctx.createStereoPanner();
       p.pan.value = Math.max(-1, Math.min(1, pan));
-      src.connect(gain).connect(p).connect(ctx.destination);
+      src.connect(gain).connect(p).connect(this.playOut(ctx));
     } else {
-      src.connect(gain).connect(ctx.destination);
+      src.connect(gain).connect(this.playOut(ctx));
     }
     // 抖动缓冲：顺序排队播放；积压超过 0.4s（断流后的陈旧分片）直接追平到现在
     let next = this.relayNextAt.get(from) ?? 0;
@@ -492,7 +513,7 @@ registerProcessor("relay-proc", RelayProc);`;
     const gain = this.audioContext.createGain();
     const distance = this.nearby.get(peer.id) ?? VOICE_RADIUS;
     gain.gain.value = 0.12 + Math.max(0, 1 - distance / VOICE_RADIUS) * 0.7;
-    source.connect(analyser).connect(gain).connect(this.audioContext.destination);
+    source.connect(analyser).connect(gain).connect(this.playOut(this.audioContext));
     peer.source = source;
     peer.analyser = analyser;
     peer.gain = gain;

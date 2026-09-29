@@ -925,6 +925,46 @@ function speakingActive(key: string, level: number): boolean {
   return speakingOn.get(key) ?? false;
 }
 
+// ---------------- 音量设置（音乐/音效/语音，localStorage 记忆） ----------------
+type Vols = { music: number; sfx: number; voice: number };
+const VOL_KEY = "yinyu-vol";
+const vols: Vols = Object.assign({ music: 1, sfx: 1, voice: 1 }, JSON.parse(localStorage.getItem(VOL_KEY) || "{}"));
+for (const k of ["music", "sfx", "voice"] as const) vols[k] = Math.max(0, Math.min(1.5, Number(vols[k]) || 0));
+
+function applyVols() {
+  music.setMusicVolume(vols.music);
+  instruments.setSfxVolume(vols.sfx);
+  voice.setVoiceVolume(vols.voice);
+  for (const k of ["music", "sfx", "voice"] as const) {
+    const input = document.getElementById(`vol-${k}`) as HTMLInputElement | null;
+    const pct = document.getElementById(`pct-${k}`);
+    if (input) input.value = String(Math.round(vols[k] * 100));
+    if (pct) pct.textContent = `${Math.round(vols[k] * 100)}%`;
+  }
+}
+applyVols();
+
+const volBtn = document.getElementById("volBtn");
+const volPop = document.getElementById("volPop");
+volBtn?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = volPop!.classList.toggle("open");
+  volBtn.classList.toggle("open", open);
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!volPop?.classList.contains("open")) return;
+  if (volPop.contains(e.target as Node) || volBtn?.contains(e.target as Node)) return;
+  volPop.classList.remove("open");
+  volBtn?.classList.remove("open");
+});
+for (const k of ["music", "sfx", "voice"] as const) {
+  document.getElementById(`vol-${k}`)?.addEventListener("input", (e) => {
+    vols[k] = Number((e.target as HTMLInputElement).value) / 100;
+    applyVols();
+    localStorage.setItem(VOL_KEY, JSON.stringify(vols));
+  });
+}
+
 /** 献花给正在听的人：音乐回应（V 键） */
 let lastFlowerSent = 0;
 function sendFlowerToNearest() {

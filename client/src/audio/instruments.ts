@@ -19,14 +19,21 @@ const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 export class Instruments {
   private ctx: AudioContext | null = null;
   private bus: GainNode | null = null;
+  private sfxVol = 1;
 
   /** 必须在用户手势解锁后调用；接音乐引擎的上下文 */
   init(engine: MusicEngine) {
     if (this.ctx || !engine.ctx) return;
     this.ctx = engine.ctx;
     this.bus = this.ctx.createGain();
-    this.bus.gain.value = 0.5;
+    this.bus.gain.value = 0.5 * this.sfxVol;
     this.bus.connect(this.ctx.destination);
+  }
+
+  /** 音效（乐器）总音量：1=默认线路电平 0.5；init 前设置也会在解锁时生效 */
+  setSfxVolume(v: number) {
+    this.sfxVol = v;
+    if (this.bus) this.bus.gain.value = 0.5 * v;
   }
 
   /** 弹一个音。vol 0~1（远端按距离衰减后传入）；pan -1~1（-1=声源在正左→左耳，空间声像） */
