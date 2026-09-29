@@ -84,6 +84,8 @@ export async function connectIsland(
   name: string,
   remotes: RemotePlayers,
   avatar: AvatarModel = "classic",
+  /** 自己的披风色相（0-359）：本地已按它渲染，传给服务器广播给其他人，保证所见一致 */
+  hue = -1,
   hand: HandEvents = { onInvite: () => {}, onResult: () => {}, onHandChange: () => {} },
   /** 收到聊天（自己发的也会回声回来；由调用方决定远近是否显示） */
   onChat: (from: string, name: string, text: string) => void = () => {},
@@ -121,7 +123,7 @@ export async function connectIsland(
   let room: any;
   try {
     room = await Promise.race([
-      client.joinOrCreate("island", { name, avatar }),
+      client.joinOrCreate("island", { name, avatar, hue }),
       new Promise((_, rej) => setTimeout(() => rej(new Error("连接超时")), 6000)),
     ]);
   } catch (e) {

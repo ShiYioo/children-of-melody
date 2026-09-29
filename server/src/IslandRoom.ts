@@ -93,7 +93,10 @@ export class IslandRoom extends Room {
     player.name = name;
     player.x = Math.cos(angle) * r;
     player.z = Math.sin(angle) * r;
-    player.hue = Math.floor(Math.random() * 360);
+    // 披颜色相以客户端传来的为准（本地已按它渲染自己，两边不一致会"自己看自己是
+    // 一个颜色、别人看你是另一个"）；缺失或不合法才退回随机
+    const hue = Number(options?.hue);
+    player.hue = Number.isFinite(hue) && hue >= 0 ? ((Math.floor(hue) % 360) + 360) % 360 : Math.floor(Math.random() * 360);
     player.avatar = AVATARS.has(options?.avatar) ? options.avatar : "classic";
     this.state.players.set(client.sessionId, player);
 

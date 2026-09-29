@@ -309,7 +309,7 @@ async function handleEnter(name: string) {
   spawnSelf();
 
   // 连接服务器；失败则进入独自漫游（NPC 陪伴）
-  net = await connectToIsland(name);
+  net = await connectToIsland(name, selfHue);
   if (net) {
     voice.setNetwork(net.sessionId);
     ui.setStatus("online");
@@ -337,11 +337,13 @@ async function handleEnter(name: string) {
 }
 
 /** 连接（与重连共用同一套事件处理）；name 为进入时的名字 */
-async function connectToIsland(name: string): Promise<NetHandle | null> {
+async function connectToIsland(name: string, hue: number): Promise<NetHandle | null> {
   return connectIsland(
     name,
     remotes,
     selectedAvatar,
+    hue,
+    {
     {
       onInvite: (from, fromName) => {
         if (hand.withId) {
@@ -449,7 +451,7 @@ function startReconnect() {
   void (async () => {
     for (let attempt = 0; attempt < 8; attempt++) {
       await new Promise((r) => setTimeout(r, 2600));
-      const h = await connectToIsland(playerName);
+      const h = await connectToIsland(playerName, selfHue);
       if (h) {
         net = h;
         voice.setNetwork(h.sessionId);
