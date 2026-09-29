@@ -35,8 +35,8 @@
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && relogin
 
-# 拉代码
-mkdir -p /opt && cd /opt
+# 拉代码（存储盘 /www）
+mkdir -p /www && cd /www
 git clone https://github.com/ShiYioo/children-of-melody.git yinyu
 cd yinyu/server
 
@@ -53,8 +53,9 @@ curl http://127.0.0.1:2567/   # 200 = OK
 
 ### 2) nginx TLS 反代（WebSocket 必须）
 
-用仓库里的 `deploy/nginx.conf.example`：放到 `/etc/nginx/sites-available/yinyu`，改两个地方——
-`server_name` 和证书路径（Let's Encrypt：`certbot --nginx -d ws.你的域名.com` 一条命令搞定）。
+**宝塔面板**（/www 一般就是宝塔）：网站 → 添加站点（`ws.你的域名.com`）→ SSL 里用 Let's Encrypt 签证书 →
+配置文件里把 `deploy/nginx.conf.example` 的 `location /` 段抄进去（Upgrade/Connection 头是 WebSocket 的关键，宝塔默认模板没有）。
+**手动 nginx**：配置放 `/etc/nginx/sites-available/yinyu`，改 `server_name` 和证书路径，`certbot --nginx` 一条命令搞定证书。
 
 ### 3) 服务器上的曲库持久化
 
@@ -71,7 +72,7 @@ curl http://127.0.0.1:2567/   # 200 = OK
 | `DEPLOY_HOST` | `1.2.3.4` | 服务器 IP |
 | `DEPLOY_USER` | `root` 或专用用户 | SSH 用户名 |
 | `DEPLOY_SSH_KEY` | 私钥全文 | `ssh-keygen -t ed25519` 生成，公钥追加到服务器 `~/.ssh/authorized_keys` |
-| `DEPLOY_PATH` | `/opt/yinyu` | 服务器上仓库路径 |
+| `DEPLOY_PATH` | `/www/yinyu` | 服务器上仓库路径（存储盘 /www） |
 
 前端侧不需要任何配置——EdgeOne 的 Git 集成本来就是 push 即构建。
 
