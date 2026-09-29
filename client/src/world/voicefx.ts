@@ -18,7 +18,7 @@ interface VoiceEmitter {
  */
 export function createVoiceFX() {
   const group = new THREE.Group();
-  const ringGeo = new THREE.RingGeometry(0.88, 0.94, 48);
+  const ringGeo = new THREE.RingGeometry(0.8, 0.98, 48);
   const emitters = new Map<string, VoiceEmitter>();
 
   function hashKey(key: string) {
@@ -29,7 +29,8 @@ export function createVoiceFX() {
 
   function createEmitter(key: string): VoiceEmitter {
     const rings: THREE.Mesh[] = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
+      // 前 3 个是向外扩散的涟漪，第 4 个是脚下常驻呼吸底环（对齐音乐光圈的 setRing 角色）
       const mesh = new THREE.Mesh(
         ringGeo,
         new THREE.MeshBasicMaterial({
@@ -87,15 +88,32 @@ export function createVoiceFX() {
 
       const y = terrainHeight(emitter.pos.x, emitter.pos.z) + 0.08;
       const active = emitter.level > 0.008;
-      for (let i = 0; i < emitter.rings.length; i++) {
+      // 弱信号提亮：level^0.65 让轻声说话也有可读的光圈（对齐音乐涟漪的存在感）
+      const glow = Math.pow(emitter.level, 0.65);
+
+      // 脚下底环：随音量呼吸的常驻光环
+      const base = emitter.rings[3];
+      const baseMat = base.material as THREE.MeshBasicMaterial;
+      if (active) {
+        const pulse = 0.62 + glow * 0.3 + 0.05 * Math.sin(time * 7 + emitter.phase * 6);
+        base.position.set(emitter.pos.x, y, emitter.pos.z);
+        base.scale.setScalar(pulse / 0.89);
+        baseMat.color.copy(emitter.color);
+        baseMat.opacity = Math.min(1, glow * 0.62);
+        base.visible = true;
+      } else {
+        base.visible = false;
+      }
+
+      for (let i = 0; i < 3; i++) {
         const ring = emitter.rings[i];
         const material = ring.material as THREE.MeshBasicMaterial;
-        const phase = (time * (1.05 + emitter.level * 0.45) + emitter.phase + i * 0.31) % 1;
-        const radius = 0.42 + phase * (0.95 + emitter.level * 1.75);
-        const fade = Math.pow(1 - phase, 1.35);
-        const opacity = active ? emitter.level * fade * (0.34 + 0.12 * Math.sin(time * 5 + i)) : 0;
+        const phase = (time * (1.15 + emitter.level * 0.5) + emitter.phase + i * 0.31) % 1;
+        const radius = 0.5 + phase * (1.25 + emitter.level * 2.4);
+        const fade = Math.pow(1 - phase, 1.3);
+        const opacity = active ? glow * fade * (0.85 + 0.2 * Math.sin(time * 5 + i)) : 0;
         ring.position.set(emitter.pos.x, y, emitter.pos.z);
-        ring.scale.setScalar(radius / 0.91);
+        ring.scale.setScalar(radius / 0.89);
         material.color.copy(emitter.color);
         material.opacity = opacity;
         ring.visible = opacity > 0.006;
