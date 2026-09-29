@@ -1136,11 +1136,8 @@ function tick(dt: number) {
           boatPrevPos.set(b.key, { x: p.x, z: p.z });
           furniture.setBoatTransform(b.key, p.x, WATER_LEVEL - 0.12, p.z, ry);
         } else {
+          // 主人不在船上：船就停在水面的当前位置（下船在哪船就在哪，不回泊位）
           boatPrevPos.delete(b.key);
-          // 主人上岸/游泳：船慢慢漂回泊位
-          if (Math.hypot(b.x - b.hx, b.z - b.hz) > 0.05) {
-            furniture.setBoatTransform(b.key, b.hx, WATER_LEVEL - 0.12, b.hz, b.hry);
-          }
         }
       }
     }

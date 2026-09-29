@@ -155,7 +155,7 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     if (!e) {
       const built = data.kind === 1 ? makeSwing(kit) : data.kind === 2 ? makeBoat(kit) : makeChair(kit);
       sceneAdd(built.group);
-      // 船用前后两根可站甲板柱（顶面可站立，从水里跳上来）；椅子/秋千仍是单柱挡人
+      // 船用一根居中的可站立柱（覆盖全船甲板，与朝向无关）；椅子/秋千仍是单柱挡人
       const boatCols: CylinderCollider[] = [];
       const col: CylinderCollider | null =
         data.kind === 2
@@ -168,11 +168,9 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
               y1: data.y + 0.55,
             };
       if (data.kind === 2) {
-        for (const sz of [-0.45, 0.45]) {
-          const c: CylinderCollider = { x: data.x, z: data.z + sz, r: 0.55, y0: data.y - 0.4, y1: data.y + 0.55, stand: true, standR: 0.5 };
-          boatCols.push(c);
-          addCollider(c);
-        }
+        const c: CylinderCollider = { x: data.x, z: data.z, r: 1.0, y0: data.y - 0.4, y1: data.y + 0.55, stand: true, standR: 0.85 };
+        boatCols.push(c);
+        addCollider(c);
       } else if (col) {
         addCollider(col);
       }
@@ -328,14 +326,11 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     e.group.rotation.y += d * k;
-    // 甲板碰撞柱贴着船走（局部 ±0.45 随朝向旋转），y1 = 甲板顶
-    const sin = Math.sin(e.group.rotation.y);
-    const cos = Math.cos(e.group.rotation.y);
-    for (let i = 0; i < e.boatCols.length; i++) {
-      const c = e.boatCols[i];
-      const lz = i === 0 ? -0.45 : 0.45;
-      c.x = e.group.position.x + sin * lz;
-      c.z = e.group.position.z + cos * lz;
+    // 甲板碰撞柱贴着船走（居中单柱），y1 = 甲板顶
+    const c = e.boatCols[0];
+    if (c) {
+      c.x = e.group.position.x;
+      c.z = e.group.position.z;
       c.y0 = e.group.position.y - 0.4;
       c.y1 = e.group.position.y + 0.55;
     }

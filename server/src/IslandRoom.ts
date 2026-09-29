@@ -4,8 +4,8 @@ import { MsgGuard, finite, finiteClamp, safeStr } from "./guard.js";
 import { clearAllSongs, removeSongsOf } from "./songs.js";
 
 const ISLAND_RADIUS = 58;
-/** 玩家可达边界：岛 58 + 近海放船 74，留到 78；外挂再远也会被夹回 */
-const POS_BOUND = 78;
+/** 玩家可达边界：近海放船 78，留出环带航行空间到 90；再远外挂也会被夹回 */
+const POS_BOUND = 90;
 /** 高度上限：滑翔+扑翼的合法爬升远够不到 26，飞天挂被夹在地表附近 */
 const MAX_Y = 26;
 const MAX_NAME_LEN = 12;
@@ -392,7 +392,7 @@ export class IslandRoom extends Room {
       if (!Number.isFinite(m?.x) || !Number.isFinite(m?.z) || !Number.isFinite(m?.y)) return;
       const r = Math.hypot(m.x, m.z);
       // 船可以放到近海（玩家会划出去兜风）；椅子/秋千仍限岛内
-      if (r > (kind === 2 ? ISLAND_RADIUS + 16 : ISLAND_RADIUS - 2)) return;
+      if (r > (kind === 2 ? ISLAND_RADIUS + 20 : ISLAND_RADIUS - 2)) return;
       const key = `${client.sessionId}:${kind}`;
       if (this.state.furniture.has(key)) return; // 已放着：必须先收回
       const f = new Furniture();
