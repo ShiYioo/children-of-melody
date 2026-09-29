@@ -5,7 +5,7 @@
 ```
 玩家浏览器 ──HTTPS──▶ 腾讯 EdgeOne Pages（前端静态 + CDN，自动构建）
       │
-      ├─ /colyseus/*、/songs/* ──▶ functions/ 边缘函数反代 ──HTTP──▶ 你的服务器 Docker :2567
+      ├─ /colyseus/*、/songs/* ──▶ edge-functions/ 边缘函数反代 ──HTTP──▶ 你的服务器 Docker :2567
       │
       └─（有已备案域名时的替代方案）WSS ──▶ nginx TLS 反代 2567
 ```
@@ -22,8 +22,9 @@
    - **输出目录**：`client/dist`
    - **自动部署**：推到 `main` 自动构建（默认行为，确认开启）
 3. **服务端反代（免域名备案方案，当前采用）**：
-   - EdgeOne Pages **没有**"反代设置"的控制台开关——反代就是**仓库根目录 `functions/` 文件夹**，
-     文件路径即路由（`functions/colyseus/[[default]].js` → `/colyseus/*`），推上去随构建自动部署。
+   - EdgeOne Pages **没有**"反代设置"的控制台开关——反代就是**仓库根目录 `edge-functions/` 文件夹**
+     （中国站文档 [127416](https://cloud.tencent.com/document/product/1552/127416) 的约定；国际站叫 `functions/`，别混），
+     文件路径即路由（`edge-functions/colyseus/[[default]].js` → `/colyseus/*`），推上去随构建自动部署。
    - 目标服务器 IP 写死在两个函数文件顶部的 `TARGET` 里，服务器换 IP 时改这里。
    - 什么都不用配就能生效；**部署完成后务必实测 WebSocket 握手**（见检查单）。
 4. 环境变量（可选）：`VITE_SERVER_URL` 只有在你走"独立 wss 域名"方案时才设；
@@ -129,3 +130,5 @@ git push origin main
 - 语音走服务器中继（32KB/说话者/秒），10 人同时开麦 ≈ 320KB/s 上行，注意带宽
 - 没有管理后台：封禁、踢人、清曲库要 SSH 服务器操作
 - 音频文件经 EdgeOne 边缘函数反代回源，服务器带宽要够；歌多后可考虑挂对象存储
+- **边缘函数请求 body 上限 1MB**（EdgeOne 限制）：经反代的歌曲**上传**会失败（下载/播放不受影响）——
+  上传要么直连服务器 IP（http 页面才可行），要么上对象存储，要么接受"上传只在局域网/直连环境可用"
