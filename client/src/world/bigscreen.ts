@@ -64,9 +64,14 @@ function solveHomography(src: number[][], dst: number[][]): number[] | null {
     if (Math.abs(A[piv][col]) < 1e-9) return null;
     [A[col], A[piv]] = [A[piv], A[col]];
     [b[col], b[piv]] = [b[piv], b[col]];
+    // 主元归一 + 全列消元（Gauss-Jordan）：结束后 b 即解
+    const d = A[col][col];
+    for (let c = col; c < 8; c++) A[col][c] /= d;
+    b[col] /= d;
     for (let r = 0; r < 8; r++) {
       if (r === col) continue;
-      const f = A[r][col] / A[col][col];
+      const f = A[r][col];
+      if (f === 0) continue;
       for (let c = col; c < 8; c++) A[r][c] -= f * A[col][c];
       b[r] -= f * b[col];
     }
@@ -76,11 +81,14 @@ function solveHomography(src: number[][], dst: number[][]): number[] | null {
 
 // 复用临时量
 const _v = new THREE.Vector3();
+// 屏面四角（局部坐标），顺序与 host 像素坐标一一对应（左上/右上/右下/左下）。
+// 注意 group.lookAt(主人) 后 +z 指向观察者，正面视角下局部 +x 出现在画面左侧——
+// 实测结论，别按直觉改成 -x 在左（会左右镜像出病态矩阵）
 const _corners = [
-  new THREE.Vector3(-W / 2, CY + H / 2, 0.05),
   new THREE.Vector3(W / 2, CY + H / 2, 0.05),
-  new THREE.Vector3(W / 2, CY - H / 2, 0.05),
+  new THREE.Vector3(-W / 2, CY + H / 2, 0.05),
   new THREE.Vector3(-W / 2, CY - H / 2, 0.05),
+  new THREE.Vector3(W / 2, CY - H / 2, 0.05),
 ];
 const _src = [[0, 0], [240, 0], [240, 135], [0, 135]];
 const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
