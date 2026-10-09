@@ -46,7 +46,7 @@ world.addToScene(beacons.group);
 // ---- 背包家具：椅子 & 双人荡秋千（每人每件放一个，1/2 键放收，靠近 E 坐） ----
 const furnKit = createToonKit();
 const furniture = createFurniture(furnKit, world.addToScene, (o) => world.scene.remove(o));
-const screenSys = createScreenSystem(document.getElementById("app")!, world.addToScene, (o) => world.scene.remove(o));
+const screenSys = createScreenSystem(document.body, world.addToScene, (o) => world.scene.remove(o));
 /** 自己正坐着的座位 */
 let seatedOn: { key: string; seat: number } | null = null;
 /** 驾船状态：只有船主能开（vel 前向速度 / ry 船头朝向）；乘客为 null */
@@ -442,7 +442,6 @@ async function connectToIsland(name: string, hue: number): Promise<NetHandle | n
         const r = resolveMediaUrl(m.url);
         if (r) {
           screenSys.setMedia(m.id, r.url, r.kind, false);
-          screenSys.load(m.id, r.url);
         }
       }
       if (m.act === 1) screenSys.setPlay(m.id, true, m.t);
@@ -1094,6 +1093,10 @@ function toggleMyScreen() {
   document.getElementById("screenBar")?.classList.toggle("open", myScreenOn);
   if (myScreenOn) {
     screenSys.setOpen("self", true);
+    // 看屏机位：相机对齐到角色正后方，视线越过肩膀直视屏幕正面
+    controls.camYaw = controls.state.yaw;
+    controls.camDist = 4.6;
+    controls.camPitch = 0.22;
     net?.sendScreen({ on: 1 });
     ui.toast("展开了随身大屏——输入视频或网页地址，24m 内的人一起看", 3000);
   } else {
@@ -1115,7 +1118,6 @@ function loadOnMyScreen(raw: string) {
   myScreenUrl = r.url;
   myScreenPlaying = true;
   screenSys.setMedia("self", r.url, r.kind, true);
-  screenSys.load("self", r.url);
   if (r.kind === "video") screenSys.setPlay("self", true, 0);
   net?.sendScreen({ on: 1, url: r.url, act: 1, t: 0 });
 }
@@ -1267,6 +1269,9 @@ function tick(dt: number) {
     }
     screenSys.update(
       dt,
+      world.camera,
+      window.innerWidth,
+      window.innerHeight,
       { pos: controls.state.pos, yaw: controls.state.yaw },
       (id) => {
         const pos = remotes.posOf(id);
@@ -1279,7 +1284,6 @@ function tick(dt: number) {
         return Math.max(0, Math.min(1, 1 - Math.max(0, p.distanceTo(controls.state.pos) - 3) / 21));
       }
     );
-    screenSys.renderOn(world.scene, world.camera);
   }
 
   // ---- 船：跟着乘船的主人走（其他端的视角），空船慢慢漂回泊位，全程随波轻摇 ----
