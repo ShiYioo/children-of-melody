@@ -272,6 +272,24 @@
     .songs-empty { grid-column: 1 / -1; padding: 6px 3px 8px; color: var(--ink-faint); font-size: 9px; }
 
     #toasts { position: fixed; top: calc(var(--safe-top) + 56px); left: 50%; z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateX(-50%); pointer-events: none; }
+    /* 随身大屏控制条 */
+    #screenBar {
+      position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 12px); transform: translateX(-50%);
+      z-index: 42; display: none; gap: 8px; align-items: center; width: min(620px, calc(100vw - 24px));
+      padding: 8px 10px; background: var(--glass-strong); border: 1px solid var(--line); border-radius: 12px;
+      box-shadow: var(--shadow); backdrop-filter: blur(12px);
+    }
+    #screenBar.open { display: flex; }
+    #screenUrl {
+      flex: 1; height: 38px; padding: 0 12px; color: var(--ink); font-size: 13px;
+      background: rgba(255, 255, 255, .06); border: 1px solid var(--line); border-radius: 8px; outline: none;
+    }
+    #screenUrl::placeholder { color: var(--ink-faint); }
+    #screenGo, #screenClose {
+      height: 38px; padding: 0 14px; color: var(--ink); font-size: 13px; white-space: nowrap;
+      background: rgba(255, 250, 240, .1); border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+    }
+    #screenGo:hover, #screenClose:hover { background: rgba(255, 250, 240, .18); }
     /* 拍照模式：隐藏所有游戏 HUD，只留取景层 */
     body.photo-mode .hud, body.photo-mode .desktop-actions, body.photo-mode #volBtn,
     body.photo-mode #volPop, body.photo-mode .stats-hud, body.photo-mode .emote-wheel,
@@ -544,6 +562,13 @@
       <input id="vol-voice" type="range" min="0" max="150" value="100" />
       <span class="vol-pct" id="pct-voice">100%</span>
     </div>
+  </div>
+
+  <!-- 随身大屏控制条（展开屏幕后显示） -->
+  <div id="screenBar">
+    <input id="screenUrl" type="text" placeholder="粘贴 B站/YouTube 链接、mp4 直链或网页地址" spellcheck="false" maxlength="500" />
+    <button id="screenGo" title="在屏上打开">打开</button>
+    <button id="screenClose" title="收起大屏">收屏</button>
   </div>
 
   <!-- 拍照模式：自拍/环绕 + 姿势 + 快门（绝区零式） -->

@@ -66,6 +66,8 @@ export interface NetHandle {
   sendEmote: (name: string) => void;
   sendNote: (kind: number, midi: number, vel: number) => void;
   sendFlower: (to: string) => void;
+  /** 随身大屏状态广播（服务器转发给 24m 内的人）：on 开关 / url 媒体源 / act 0无1播2停 / t 进度秒 */
+  sendScreen: (m: { on: 0 | 1; url?: string; act?: 0 | 1 | 2; t?: number }) => void;
   sendFurnPlace: (kind: number, x: number, y: number, z: number, ry: number) => void;
   sendFurnRemove: (kind: number) => void;
   sendHandInvite: (to: string) => void;
@@ -96,6 +98,8 @@ export async function connectIsland(
   onFlower: (from: string) => void = () => {},
   /** 家具增删：data 为 null 表示删除 */
   onFurn: (key: string, data: { owner: string; kind: number; x: number; y: number; z: number; ry: number } | null) => void = () => {},
+  /** 别人的随身大屏状态（本地镜像渲染） */
+  onScreen: (m: { id: string; on: boolean; url: string; act: 0 | 1 | 2; t: number }) => void = () => {},
   /** 非主动关闭的掉线（网络闪断/服务器重启），主循环据此自动重连 */
   onDrop: () => void = () => {},
   /** 延迟探针：每 2 秒回报一次往返毫秒数与丢包率（%） */
@@ -211,6 +215,12 @@ export async function connectIsland(
     const from = String(m?.id ?? "");
     const data = m?.d;
     if (from && data instanceof Uint8Array) voice.onAudio(from, data);
+  });
+  // 随身大屏：别人的屏幕开关/换片/播放状态（main 层驱动本地镜像屏）
+  room.onMessage("screen", (m: any) => {
+    const id = String(m?.id ?? "");
+    if (!id) return;
+    onScreen({ id, on: !!m?.on, url: typeof m?.url === "string" ? m.url : "", act: (m?.act | 0) as 0 | 1 | 2, t: Math.max(0, Number(m?.t) || 0) });
   });
 
   let selfHue: number | null = null;
@@ -329,6 +339,9 @@ export async function connectIsland(
     sendAudio(pcm) {
       // 服务器只中继给 24 米内的开麦者；80ms 一片 2.5KB，叠加游戏消息也在 60/s 限内
       room.send("voice-audio", pcm);
+    },
+    sendScreen(m) {
+      room.send("screen", m);
     },
     close() {
       closedByUs = true;

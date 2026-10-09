@@ -140,6 +140,8 @@ export class IslandRoom extends Room {
     if (this.voiceActive.delete(client.sessionId)) {
       this.broadcast("voice-presence", { id: client.sessionId, active: false });
     }
+    // 随身大屏随人离岛关闭（观众端收屏）
+    this.broadcast("screen", { id: client.sessionId, on: 0, url: "", act: 0, t: 0 });
     // 背包家具随人离岛收回
       this.state.furniture.delete(`${client.sessionId}:0`);
       this.state.furniture.delete(`${client.sessionId}:1`);
@@ -243,6 +245,30 @@ export class IslandRoom extends Room {
 
     time: (client: Client) => {
       client.send("time", { t: Date.now() });
+    },
+
+    // ---- 随身大屏：主人的播放状态转发给 24m 内的人（视频/网页共同观看） ----
+    // m: { on 0|1, url?, act? 0无|1播放|2暂停, t? 进度秒 }；服务器只校验转发，不解析媒体
+    "screen": (client: Client, m: any) => {
+      const on = m?.on | 0 ? 1 : 0;
+      let url = "";
+      if (on && typeof m?.url === "string") {
+        const raw = m.url.trim();
+        if (/^https:\/\/.+/i.test(raw) && raw.length <= 500 && !/[<>"'\\]/.test(raw)) url = raw;
+        else if (raw.length > 0) return; // 带了非法 URL：整条拒收
+      }
+      const act = [0, 1, 2].includes(m?.act | 0) ? m.act | 0 : 0;
+      const t = Math.max(0, finite(m?.t, 0));
+      const payload = { id: client.sessionId, on, url, act, t };
+      const me = this.state.players.get(client.sessionId);
+      if (!me) return;
+      for (const c of this.clients) {
+        if (c.sessionId === client.sessionId) continue;
+        const p = this.state.players.get(c.sessionId);
+        if (!p) continue;
+        if (Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) > 24) continue;
+        c.send("screen", payload);
+      }
     },
 
     // ---- 语音（信令转发，音频不经过服务器） ----

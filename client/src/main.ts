@@ -15,6 +15,7 @@ import { createMusicFX } from "./world/musicfx";
 import { createVoiceFX } from "./world/voicefx";
 import { createBeacons } from "./world/beacons";
 import { createFurniture } from "./world/furniture";
+import { createScreenSystem, resolveMediaUrl } from "./world/bigscreen";
 import { createToonKit } from "./world/toon";
 import { insideAnyCollider } from "./colliders";
 import { Instruments, INSTRUMENTS } from "./audio/instruments";
@@ -45,12 +46,15 @@ world.addToScene(beacons.group);
 // ---- 背包家具：椅子 & 双人荡秋千（每人每件放一个，1/2 键放收，靠近 E 坐） ----
 const furnKit = createToonKit();
 const furniture = createFurniture(furnKit, world.addToScene, (o) => world.scene.remove(o));
+const screenSys = createScreenSystem(document.getElementById("app")!, world.addToScene, (o) => world.scene.remove(o));
 /** 自己正坐着的座位 */
 let seatedOn: { key: string; seat: number } | null = null;
 /** 驾船状态：只有船主能开（vel 前向速度 / ry 船头朝向）；乘客为 null */
 let boatDrive: { key: string; vel: number; ry: number } | null = null;
 /** 船跟随渲染用的主人上一帧位置（差分估朝向） */
 const boatPrevPos = new Map<string, { x: number; z: number }>();
+/** 大屏镜像：记录每个远端屏当前地址（心跳同 url 不重载） */
+const lastScreenUrl = new Map<string, string>();
 /** 秋千摆动物理（自己的座位） */
 const swingSim = { angle: 0, vel: 0 };
 const SWING_ROPE = 1.64; // 绳长（横杆 2.15 − 座面 0.51）
@@ -424,6 +428,25 @@ async function connectToIsland(name: string, hue: number): Promise<NetHandle | n
         if (seatedOn?.key === key) seatedOn = null;
         furniture.remove(key);
       }
+    },
+    // 别人的随身大屏状态 → 本地镜像（换片只在地址变化时加载，心跳同 url 不重载）
+    (m) => {
+      if (m.id === net?.sessionId) return;
+      if (!m.on) {
+        screenSys.setOpen(m.id, false);
+        return;
+      }
+      screenSys.setOpen(m.id, true);
+      if (m.url && m.url !== lastScreenUrl.get(m.id)) {
+        lastScreenUrl.set(m.id, m.url);
+        const r = resolveMediaUrl(m.url);
+        if (r) {
+          screenSys.setMedia(m.id, r.url, r.kind, false);
+          screenSys.load(m.id, r.url);
+        }
+      }
+      if (m.act === 1) screenSys.setPlay(m.id, true, m.t);
+      else if (m.act === 2) screenSys.setPlay(m.id, false, m.t);
     },
     // 非主动掉线 → 自动重连
     startReconnect,
@@ -835,6 +858,10 @@ window.addEventListener("keydown", (e) => {
     if (k === "escape") setPhotoMode(false);
     return; // 拍照时其余游戏快捷键全部让路
   }
+  if (k === "7") {
+    toggleMyScreen();
+    return;
+  }
   if (k === "v") {
     sendFlowerToNearest();
     return;
@@ -1056,6 +1083,58 @@ document.getElementById("photoTabSelfie")?.addEventListener("click", () => setPh
 document.getElementById("photoTabOrbit")?.addEventListener("click", () => setPhotoSelfie(false));
 document.getElementById("photoShot")?.addEventListener("click", () => { photoShotPending = true; });
 
+// ---------------- 随身大屏（7 键展开/收起；输入网址一起看视频/玩网页） ----------------
+let myScreenOn = false;
+let myScreenUrl = "";
+let myScreenPlaying = false;
+let screenHeartbeatAt = 0;
+
+function toggleMyScreen() {
+  myScreenOn = !myScreenOn;
+  document.getElementById("screenBar")?.classList.toggle("open", myScreenOn);
+  if (myScreenOn) {
+    screenSys.setOpen("self", true);
+    net?.sendScreen({ on: 1 });
+    ui.toast("展开了随身大屏——输入视频或网页地址，24m 内的人一起看", 3000);
+  } else {
+    myScreenUrl = "";
+    myScreenPlaying = false;
+    screenSys.setMedia("self", "", "web", true);
+    screenSys.setOpen("self", false);
+    net?.sendScreen({ on: 0 });
+  }
+}
+
+/** 在自己的屏上打开一个地址（主人权威：换片即广播） */
+function loadOnMyScreen(raw: string) {
+  const r = resolveMediaUrl(raw);
+  if (!r) {
+    ui.toast("只支持 https 网页 / B站 / YouTube 链接 / mp4 视频直链", 3200);
+    return;
+  }
+  myScreenUrl = r.url;
+  myScreenPlaying = true;
+  screenSys.setMedia("self", r.url, r.kind, true);
+  screenSys.load("self", r.url);
+  if (r.kind === "video") screenSys.setPlay("self", true, 0);
+  net?.sendScreen({ on: 1, url: r.url, act: 1, t: 0 });
+}
+
+document.getElementById("screenGo")?.addEventListener("click", () => {
+  const input = document.getElementById("screenUrl") as HTMLInputElement | null;
+  if (input?.value.trim()) loadOnMyScreen(input.value.trim());
+});
+document.getElementById("screenUrl")?.addEventListener("keydown", (e) => {
+  e.stopPropagation(); // 输入网址时不触发游戏快捷键
+  if ((e as KeyboardEvent).key === "Enter") {
+    const input = e.target as HTMLInputElement;
+    if (input.value.trim()) loadOnMyScreen(input.value.trim());
+  }
+});
+document.getElementById("screenClose")?.addEventListener("click", () => {
+  if (myScreenOn) toggleMyScreen();
+});
+
 /** 献花给正在听的人：音乐回应（V 键） */
 let lastFlowerSent = 0;
 function sendFlowerToNearest() {
@@ -1178,6 +1257,30 @@ function tick(dt: number) {
   // 家具摆动：跟随所有坐着的人（自己 + 远端）；顺手标记谁坐在家具上（远端坐姿用）
   const sittersAll = [{ key: "self", pos: controls.state.pos, sit: controls.state.sit }, ...remotes.sitters()];
   furniture.update(sittersAll);
+
+  // ---- 随身大屏：跟随主人 + 播放心跳（5s 对齐进度）+ 观众距离音量 ----
+  {
+    const nowMs = performance.now();
+    if (myScreenOn && myScreenPlaying && myScreenUrl && net && nowMs - screenHeartbeatAt > 5000) {
+      screenHeartbeatAt = nowMs;
+      net.sendScreen({ on: 1, url: myScreenUrl, act: 1, t: screenSys.getTime("self") });
+    }
+    screenSys.update(
+      dt,
+      { pos: controls.state.pos, yaw: controls.state.yaw },
+      (id) => {
+        const pos = remotes.posOf(id);
+        if (!pos) return null;
+        return { pos, yaw: remotes.statsOf(id)?.yaw ?? 0 };
+      },
+      (id) => {
+        const p = id === "self" ? controls.state.pos : remotes.posOf(id);
+        if (!p) return 0;
+        return Math.max(0, Math.min(1, 1 - Math.max(0, p.distanceTo(controls.state.pos) - 3) / 21));
+      }
+    );
+    screenSys.renderOn(world.scene, world.camera);
+  }
 
   // ---- 船：跟着乘船的主人走（其他端的视角），空船慢慢漂回泊位，全程随波轻摇 ----
   {
