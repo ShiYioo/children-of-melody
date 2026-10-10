@@ -55,9 +55,6 @@ let boatDrive: { key: string; vel: number; ry: number } | null = null;
 const boatPrevPos = new Map<string, { x: number; z: number }>();
 /** 大屏镜像：记录每个远端屏当前地址（心跳同 url 不重载） */
 const lastScreenUrl = new Map<string, string>();
-// 入座模式的相机复用临时量
-const _screenVP = new THREE.Vector3();
-const _screenLook = new THREE.Vector3();
 /** 秋千摆动物理（自己的座位） */
 const swingSim = { angle: 0, vel: 0 };
 const SWING_ROPE = 1.64; // 绳长（横杆 2.15 − 座面 0.51）
@@ -1110,6 +1107,7 @@ function setScreenView(on: boolean) {
   screenViewOn = on;
   controls.inputLocked = on; // 入座锁死移动与视角拖动，屏幕即画面
   controls.fovOverride = on ? 38 : null; // 长焦窄视野：屏幕铺满溢出，像坐在巨幕前
+  screenSys.setSeatMode(on); // 相机钉屏逻辑内聚到大屏模块（紧跟 group 更新，无顺序竞争）
   document.getElementById("seatExit")?.classList.toggle("open", on);
   ui.toast(on ? "入座模式——屏幕即全屏，右上角「起身」或按 8 退出" : "起身了", 2200);
 }
@@ -1314,14 +1312,6 @@ function tick(dt: number) {
         return Math.max(0, Math.min(1, 1 - Math.max(0, p.distanceTo(controls.state.pos) - 3) / 21));
       }
     );
-    // 入座模式：相机钉到屏幕正前方 1.7m——长焦视野下巨幕铺满溢出，鼠标直接玩屏里的网页游戏
-    if (screenViewOn && myScreenOn) {
-      const vp = { pos: _screenVP, look: _screenLook };
-      if (screenSys.getViewpoint("self", 1.7, vp)) {
-        world.camera.position.copy(vp.pos);
-        world.camera.lookAt(vp.look);
-      }
-    }
   }
 
   // ---- 船：跟着乘船的主人走（其他端的视角），空船慢慢漂回泊位，全程随波轻摇 ----

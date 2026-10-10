@@ -104,6 +104,8 @@ export function createScreenSystem(
   removeFromScene: (o: THREE.Object3D) => void
 ) {
   const screens = new Map<string, ScreenState>();
+  /** 入座模式：update() 每帧把相机钉到 self 屏幕正前方（在 group 更新之后执行，顺序绝对正确） */
+  let seatMode = false;
 
   const frameMat = () => new THREE.MeshStandardMaterial({ color: new THREE.Color("#232c38"), roughness: 0.55, metalness: 0.35 });
 
@@ -201,6 +203,11 @@ export function createScreenSystem(
       const s = ensure(id);
       s.on = on;
       if (!on) clearMedia(s);
+    },
+
+    /** 入座模式开关：update() 每帧把相机钉到 self 屏幕正前方 */
+    setSeatMode(on: boolean) {
+      seatMode = on;
     },
 
     setMedia,
@@ -314,6 +321,17 @@ export function createScreenSystem(
         s.host.style.transform =
           `matrix3d(${h11},${h21},0,${h31},${h12},${h22},0,${h32},0,0,1,0,${h13},${h23},0,1)`;
         s.host.style.opacity = String(Math.max(0.25, e));
+      }
+      // 入座模式：紧跟 group 更新，把相机钉到 self 屏幕正前方 1.7m（长焦铺满由外部 fovOverride 配合）
+      if (seatMode) {
+        const s = screens.get("self");
+        if (s && s.on && s.group.visible) {
+          s.group.updateMatrixWorld(true);
+          const center = _v.set(0, CY, 0.05).applyMatrix4(s.group.matrixWorld);
+          const n = _normal.set(0, 0, 1).transformDirection(s.group.matrixWorld);
+          camera.position.copy(center).addScaledVector(n, 1.7);
+          camera.lookAt(center);
+        }
       }
     },
 
