@@ -36,6 +36,10 @@ const W = 2.4;
 const H = 1.35;
 /** 屏面中心相对 group 原点的高度 */
 const CY = H / 2 + 0.62;
+/** 媒体的虚拟视口（16:9）：网页/视频按这个尺寸渲染再整体透视缩小贴屏，
+ *  保证桌面网页游戏拿到正常大小的窗口、内容完整不用滚动 */
+const VW = 960;
+const VH = 540;
 
 interface ScreenState {
   group: THREE.Group;
@@ -90,7 +94,7 @@ const _corners = [
   new THREE.Vector3(-W / 2, CY - H / 2, 0.05),
   new THREE.Vector3(W / 2, CY - H / 2, 0.05),
 ];
-const _src = [[0, 0], [240, 0], [240, 135], [0, 135]];
+const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];
 const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
 
 export function createScreenSystem(
@@ -155,8 +159,8 @@ export function createScreenSystem(
     host.style.position = "fixed";
     host.style.left = "0";
     host.style.top = "0";
-    host.style.width = "240px";
-    host.style.height = "135px";
+    host.style.width = `${VW}px`;
+    host.style.height = `${VH}px`;
     host.style.transformOrigin = "0 0";
     host.style.backgroundColor = "#0b111a";
     host.style.overflow = "hidden";
@@ -236,6 +240,17 @@ export function createScreenSystem(
     ) {
       // 相机矩阵保鲜（update 在 WebGL render 之前跑，project 需要本帧矩阵）
       camera.updateMatrixWorld();
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      // 投影矩阵自愈：aspect 曾被 0 尺寸污染成 NaN 时，用当前视口强制重算
+      if (!Number.isFinite(camera.projectionMatrix.elements[0])) {
+        const cw = hostLayer.clientWidth || window.innerWidth;
+        const ch = hostLayer.clientHeight || window.innerHeight;
+        if (cw > 2 && ch > 2) {
+          const pc = camera as THREE.PerspectiveCamera;
+          pc.aspect = cw / ch;
+          pc.updateProjectionMatrix();
+        }
+      }
       for (const [id, s] of screens) {
         const owner = id === "self" ? self : remoteOf(id);
         const show = s.on && !!owner && (s.host !== null || s.media === "none");
@@ -256,13 +271,21 @@ export function createScreenSystem(
         if (s.video) s.video.volume = Math.max(0, Math.min(1, volumeOf(id)));
 
         if (!s.host) continue;
-        // 四角世界 → 视口像素
+        // 四角世界 → 视口像素（手写透视：不依赖 renderer 更新的逆矩阵，
+        // rAF 冻结恢复后也立即正确；w≈0 或结果非有限时整帧隐藏防 NaN 污染）
+        camera.updateMatrixWorld();
+        camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+        const pe = camera.projectionMatrix.elements;
         let behind = false;
         for (let i = 0; i < 4; i++) {
-          _v.copy(_corners[i]).applyMatrix4(s.group.matrixWorld).project(camera);
-          if (_v.z > 1 || _v.z < -1) behind = true;
-          _dst[i][0] = (_v.x * 0.5 + 0.5) * viewportW;
-          _dst[i][1] = (-_v.y * 0.5 + 0.5) * viewportH;
+          _v.copy(_corners[i]).applyMatrix4(s.group.matrixWorld);
+          _v.applyMatrix4(camera.matrixWorldInverse);
+          const cx = pe[0] * _v.x + pe[4] * _v.y + pe[8] * _v.z + pe[12];
+          const cy = pe[1] * _v.x + pe[5] * _v.y + pe[9] * _v.z + pe[13];
+          const cw = pe[3] * _v.x + pe[7] * _v.y + pe[11] * _v.z + pe[15];
+          if (!Number.isFinite(cx) || !Number.isFinite(cy) || Math.abs(cw) < 1e-6 || cw < 0) behind = true;
+          _dst[i][0] = (cx / cw) * 0.5 * viewportW + viewportW / 2;
+          _dst[i][1] = viewportH / 2 - (cy / cw) * 0.5 * viewportH;
         }
         if (behind) {
           s.host.style.display = "none";

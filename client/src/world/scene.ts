@@ -246,6 +246,9 @@ export function createWorld(container: HTMLElement): World {
   const resize = () => {
     const w = container.clientWidth;
     const h = container.clientHeight;
+    // 容器尺寸为 0（面板后台化等）时跳过：aspect=w/0=Infinity 会让
+    // 投影矩阵永久带上 NaN，恢复可见后画面全黑
+    if (w < 2 || h < 2) return;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
