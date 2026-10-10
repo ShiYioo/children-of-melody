@@ -85,6 +85,7 @@ function solveHomography(src: number[][], dst: number[][]): number[] | null {
 
 // 复用临时量
 const _v = new THREE.Vector3();
+const _normal = new THREE.Vector3();
 // 屏面四角（局部坐标），顺序与 host 像素坐标一一对应（左上/右上/右下/左下）。
 // 屏幕总是 lookAt 主人（+z 朝向主人/相机一侧），正面观察时局部 +x 在画面右——
 // 角点顺序以正面视角为准（背面视角下四点环绕反向，解出的单应会镜像病态）
@@ -226,6 +227,18 @@ export function createScreenSystem(
     /** 主人心跳用：自己屏幕上视频的当前进度（秒） */
     getTime(id: string): number {
       return screens.get(id)?.video?.currentTime ?? 0;
+    },
+
+    /** 入座模式用：屏幕正面 dist 米处的观看机位（pos + 注视点） */
+    getViewpoint(id: string, dist: number, out: { pos: THREE.Vector3; look: THREE.Vector3 }): boolean {
+      const s = screens.get(id);
+      if (!s || !s.group.visible) return false;
+      s.group.updateMatrixWorld(true);
+      const center = _v.set(0, CY, 0.05).applyMatrix4(s.group.matrixWorld);
+      const nz = _normal.set(0, 0, 1).transformDirection(s.group.matrixWorld);
+      out.pos.copy(center).addScaledVector(nz, dist);
+      out.look.copy(center);
+      return true;
     },
 
     /** 每帧：屏幕跟随主人 + 展开动画 + 四角投影贴 DOM */

@@ -55,6 +55,9 @@ let boatDrive: { key: string; vel: number; ry: number } | null = null;
 const boatPrevPos = new Map<string, { x: number; z: number }>();
 /** 大屏镜像：记录每个远端屏当前地址（心跳同 url 不重载） */
 const lastScreenUrl = new Map<string, string>();
+// 入座模式的相机复用临时量
+const _screenVP = new THREE.Vector3();
+const _screenLook = new THREE.Vector3();
 /** 秋千摆动物理（自己的座位） */
 const swingSim = { angle: 0, vel: 0 };
 const SWING_ROPE = 1.64; // 绳长（横杆 2.15 − 座面 0.51）
@@ -861,6 +864,14 @@ window.addEventListener("keydown", (e) => {
     toggleMyScreen();
     return;
   }
+  if (k === "8") {
+    setScreenView(!screenViewOn);
+    return;
+  }
+  if (screenViewOn && k === "escape") {
+    setScreenView(false);
+    return;
+  }
   if (k === "v") {
     sendFlowerToNearest();
     return;
@@ -1087,6 +1098,18 @@ let myScreenOn = false;
 let myScreenUrl = "";
 let myScreenPlaying = false;
 let screenHeartbeatAt = 0;
+/** 入座模式：相机钉在屏幕正前方，巨幕铺满画面（8 键切换） */
+let screenViewOn = false;
+
+function setScreenView(on: boolean) {
+  if (on === screenViewOn) return;
+  if (on && !myScreenOn) {
+    ui.toast("先按 7 展开大屏，再按 8 入座", 2400);
+    return;
+  }
+  screenViewOn = on;
+  ui.toast(on ? "入座模式——屏幕即全屏，8 起身" : "起身了", 1800);
+}
 
 function toggleMyScreen() {
   myScreenOn = !myScreenOn;
@@ -1098,8 +1121,9 @@ function toggleMyScreen() {
     controls.camDist = 3.3;
     controls.camPitch = 0.17;
     net?.sendScreen({ on: 1 });
-    ui.toast("展开了随身巨幕——输入视频或网页地址，24m 内的人一起看", 3000);
+    ui.toast("展开了随身巨幕——输入网址一起看；按 8 入座全屏", 3000);
   } else {
+    screenViewOn = false;
     myScreenUrl = "";
     myScreenPlaying = false;
     screenSys.setMedia("self", "", "web", true);
@@ -1284,6 +1308,14 @@ function tick(dt: number) {
         return Math.max(0, Math.min(1, 1 - Math.max(0, p.distanceTo(controls.state.pos) - 3) / 21));
       }
     );
+    // 入座模式：相机钉到屏幕正前方 2.3m——巨幕铺满画面，鼠标直接玩屏里的网页游戏
+    if (screenViewOn && myScreenOn) {
+      const vp = { pos: _screenVP, look: _screenLook };
+      if (screenSys.getViewpoint("self", 2.3, vp)) {
+        world.camera.position.copy(vp.pos);
+        world.camera.lookAt(vp.look);
+      }
+    }
   }
 
   // ---- 船：跟着乘船的主人走（其他端的视角），空船慢慢漂回泊位，全程随波轻摇 ----
