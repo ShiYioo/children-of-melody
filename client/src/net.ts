@@ -168,12 +168,26 @@ export async function connectIsland(
     applyTime(t);
   });
   // 心跳死信检测：TCP 半开连接（拔网线/切 Wi-Fi/服务器被杀）可能永远收不到 close 事件，
-  // 靠应用层探针超时来判定掉线
-  const pingTimer = setInterval(() => {
+  // 靠应用层探针超时来判定掉线。
+  // 定时器跑在 Web Worker 里：后台标签页的 setInterval 会被浏览器深度节流（5 分钟后
+  // 降到分钟级），心跳停摆会被服务器判定超时踢下线——大屏/语音等一切实时功能随之中断。
+  // Worker 的定时器不受标签页节流影响，后台也能精准保活。
+  let workerTimer: Worker | null = null;
+  const stopWorkerTimer = () => {
+    workerTimer?.terminate();
+    workerTimer = null;
+  };
+  const startWorkerTimer = () => {
+    if (workerTimer) return;
+    const blob = new Blob(["setInterval(() => postMessage(0), 2000)"], { type: "application/javascript" });
+    workerTimer = new Worker(URL.createObjectURL(blob));
+    workerTimer.onmessage = () => pingTick();
+  };
+  const pingTick = () => {
     if (performance.now() - lastPongAt > 7000) {
       if (!closedByUs && !dropped) {
         dropped = true;
-        clearInterval(pingTimer);
+        stopWorkerTimer();
         onDrop();
       }
       return;
@@ -189,7 +203,8 @@ export async function connectIsland(
     } catch {
       /* 掉线时发送会抛，忽略 */
     }
-  }, 2000);
+  };
+  startWorkerTimer();
 
   let lastHandWith = "";
   let lastHandLead = false;
@@ -273,7 +288,7 @@ export async function connectIsland(
 
   let closedByUs = false;
   room.onLeave(() => {
-    clearInterval(pingTimer);
+    stopWorkerTimer();
     if (!closedByUs) onDrop();
   });
   room.onError((code: number, msg: string) => console.warn("[net] 房间错误", code, msg));
@@ -345,7 +360,7 @@ export async function connectIsland(
     },
     close() {
       closedByUs = true;
-      clearInterval(pingTimer);
+      stopWorkerTimer();
       room.leave(true);
     },
     get ping() {

@@ -1292,7 +1292,7 @@ function tick(dt: number) {
   // ---- 随身大屏：跟随主人 + 播放心跳（5s 对齐进度）+ 观众距离音量 ----
   {
     const nowMs = performance.now();
-    if (myScreenOn && myScreenPlaying && myScreenUrl && net && nowMs - screenHeartbeatAt > 5000) {
+    if (myScreenOn && myScreenPlaying && myScreenUrl && net && nowMs - screenHeartbeatAt > 2000) {
       screenHeartbeatAt = nowMs;
       net.sendScreen({ on: 1, url: myScreenUrl, act: 1, t: screenSys.getTime("self") });
     }
