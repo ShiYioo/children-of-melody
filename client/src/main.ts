@@ -1109,6 +1109,7 @@ function setScreenView(on: boolean) {
   }
   screenViewOn = on;
   controls.inputLocked = on; // 入座锁死移动与视角拖动，屏幕即画面
+  controls.fovOverride = on ? 38 : null; // 长焦窄视野：屏幕铺满溢出，像坐在巨幕前
   document.getElementById("seatExit")?.classList.toggle("open", on);
   ui.toast(on ? "入座模式——屏幕即全屏，右上角「起身」或按 8 退出" : "起身了", 2200);
 }
@@ -1313,10 +1314,10 @@ function tick(dt: number) {
         return Math.max(0, Math.min(1, 1 - Math.max(0, p.distanceTo(controls.state.pos) - 3) / 21));
       }
     );
-    // 入座模式：相机钉到屏幕正前方 2.3m——巨幕铺满画面，鼠标直接玩屏里的网页游戏
+    // 入座模式：相机钉到屏幕正前方 1.7m——长焦视野下巨幕铺满溢出，鼠标直接玩屏里的网页游戏
     if (screenViewOn && myScreenOn) {
       const vp = { pos: _screenVP, look: _screenLook };
-      if (screenSys.getViewpoint("self", 2.3, vp)) {
+      if (screenSys.getViewpoint("self", 1.7, vp)) {
         world.camera.position.copy(vp.pos);
         world.camera.lookAt(vp.look);
       }

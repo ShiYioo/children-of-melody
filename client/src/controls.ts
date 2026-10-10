@@ -196,6 +196,9 @@ export class PlayerControls {
   /** 拍照模式：锁移动/跳跃，但保留视角环转（构图用） */
   inputLocked = false;
 
+  /** 非空时强制使用该 fov（入座看屏的长焦窄视野）；null = 常规动态 fov */
+  fovOverride: number | null = null;
+
   /** 触屏按钮模拟按键：down=true 走与物理键盘同一套逻辑（E 切坐、空格跳/按住滑翔） */
   virtualKey(key: string, down: boolean) {
     const k = key.toLowerCase();
@@ -369,7 +372,7 @@ export class PlayerControls {
     this.camFocus.copy(focus).addScaledVector(this.camLead, 0.16);
     this.camera.lookAt(this.camFocus);
 
-    const fovTarget = this.baseFov + Math.min(1, speedH / 9.2) * 5 + (s.airborne && glideHeld ? 3 : 0);
+    const fovTarget = this.fovOverride ?? (this.baseFov + Math.min(1, speedH / 9.2) * 5 + (s.airborne && glideHeld ? 3 : 0));
     if (Math.abs(this.camera.fov - fovTarget) > 0.05) {
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, fovTarget, Math.min(1, dt * 4));
       this.camera.updateProjectionMatrix();

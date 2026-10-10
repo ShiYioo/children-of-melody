@@ -37,9 +37,10 @@ const H = 2.14;
 /** 屏面中心相对 group 原点的高度（支架腿加高适配巨幕） */
 const CY = H / 2 + 0.9;
 /** 媒体的虚拟视口（16:9）：网页/视频按这个尺寸渲染再整体透视缩小贴屏，
- *  保证桌面网页游戏拿到正常大小的窗口、内容完整不用滚动 */
-const VW = 960;
-const VH = 540;
+ *  保证桌面网页游戏拿到正常大小的窗口、内容完整不用滚动。
+ *  overscan：媒体画布比物理屏面大 15%，四周裁掉——吃掉网页自带的黑边/留白，内容撑满屏面 */
+const VW = 1104;
+const VH = 621;
 
 interface ScreenState {
   group: THREE.Group;
@@ -95,8 +96,7 @@ const _corners = [
   new THREE.Vector3(W / 2, CY - H / 2, 0.05),
   new THREE.Vector3(-W / 2, CY - H / 2, 0.05),
 ];
-const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];
-const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
+const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
 
 export function createScreenSystem(
   hostLayer: HTMLElement,
