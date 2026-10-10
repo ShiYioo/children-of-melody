@@ -272,6 +272,15 @@
     .songs-empty { grid-column: 1 / -1; padding: 6px 3px 8px; color: var(--ink-faint); font-size: 9px; }
 
     #toasts { position: fixed; top: calc(var(--safe-top) + 56px); left: 50%; z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateX(-50%); pointer-events: none; }
+    /* 入座模式起身钮：z 高于大屏 DOM 层，焦点在 iframe 里也能点 */
+    #seatExit {
+      position: fixed; top: var(--safe-top); right: calc(var(--safe-right) + 100px); z-index: 55;
+      display: none; height: 36px; padding: 0 14px; color: var(--ink); font-size: 12px; white-space: nowrap;
+      background: rgba(25, 37, 49, .62); border: 1px solid var(--line); border-radius: 18px;
+      backdrop-filter: blur(10px); cursor: pointer;
+    }
+    #seatExit.open { display: block; }
+    #seatExit:hover { background: rgba(25, 37, 49, .8); }
     /* 随身大屏控制条 */
     #screenBar {
       position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 12px); transform: translateX(-50%);
@@ -563,6 +572,9 @@
       <span class="vol-pct" id="pct-voice">100%</span>
     </div>
   </div>
+
+  <!-- 入座模式常驻起身钮（焦点在大屏 iframe 里时热键收不到，按钮永远可点） -->
+  <button id="seatExit" title="起身（8）">起身 · 8</button>
 
   <!-- 随身大屏控制条（展开屏幕后显示） -->
   <div id="screenBar">

@@ -1108,8 +1108,12 @@ function setScreenView(on: boolean) {
     return;
   }
   screenViewOn = on;
-  ui.toast(on ? "入座模式——屏幕即全屏，8 起身" : "起身了", 1800);
+  controls.inputLocked = on; // 入座锁死移动与视角拖动，屏幕即画面
+  document.getElementById("seatExit")?.classList.toggle("open", on);
+  ui.toast(on ? "入座模式——屏幕即全屏，右上角「起身」或按 8 退出" : "起身了", 2200);
 }
+
+document.getElementById("seatExit")?.addEventListener("click", () => setScreenView(false));
 
 function toggleMyScreen() {
   myScreenOn = !myScreenOn;
@@ -1124,6 +1128,7 @@ function toggleMyScreen() {
     ui.toast("展开了随身巨幕——输入网址一起看；按 8 入座全屏", 3000);
   } else {
     screenViewOn = false;
+    controls.inputLocked = false;
     myScreenUrl = "";
     myScreenPlaying = false;
     screenSys.setMedia("self", "", "web", true);

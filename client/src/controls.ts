@@ -125,6 +125,7 @@ export class PlayerControls {
   window.addEventListener("blur", () => this.keys.clear());
 
     dom.addEventListener("pointerdown", (e) => {
+      if (this.inputLocked) return; // 入座/拍照等锁定视角的场景：拖动不再转视角
       this.dragging = true;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
@@ -137,6 +138,7 @@ export class PlayerControls {
     // 锁定状态下用 movementX/Y 连续转视角（鼠标右移=视角右转）
     dom.addEventListener("pointermove", (e) => {
       this.lastCamInputAt = performance.now();
+      if (this.inputLocked) return;
       if (document.pointerLockElement === dom) {
         this.camYaw -= e.movementX * 0.0026;
         this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, -0.35, 1.25);
