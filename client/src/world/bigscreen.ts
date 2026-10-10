@@ -100,22 +100,31 @@ const _corners = [
 ];
 const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
 
-/** 全屏覆盖样式：脱离单应投影，fixed 铺满视口；退出时由 update 的投影逻辑接管 */
+/** 全屏覆盖样式：脱离单应投影，四周留 14px 音遇边框（圆角+暖金描边+落影），
+ *  底部水印由 main 层的 #screenWatermark 承担；退出时由 update 的投影逻辑接管 */
 function applyImmersive(s: ScreenState, on: boolean) {
   if (!s.host) return;
   if (on) {
     s.host.style.position = "fixed";
-    s.host.style.left = "0";
-    s.host.style.top = "0";
-    s.host.style.width = "100vw";
-    s.host.style.height = "100vh";
+    s.host.style.left = "14px";
+    s.host.style.top = "14px";
+    s.host.style.width = "calc(100vw - 28px)";
+    s.host.style.height = "calc(100vh - 28px)";
     s.host.style.transform = "none";
     s.host.style.transformOrigin = "50% 50%";
     s.host.style.display = "block";
     s.host.style.zIndex = "50";
+    s.host.style.borderRadius = "16px";
+    s.host.style.border = "1px solid rgba(232, 201, 168, .35)";
+    s.host.style.boxShadow = "0 0 46px rgba(232, 201, 168, .14), 0 18px 60px rgba(0, 0, 0, .55)";
   } else {
     s.host.style.width = `${VW}px`;
     s.host.style.height = `${VH}px`;
+    s.host.style.left = "0";
+    s.host.style.top = "0";
+    s.host.style.borderRadius = "0";
+    s.host.style.border = "0";
+    s.host.style.boxShadow = "none";
     s.host.style.zIndex = "5";
     s.host.style.display = "none"; // 恢复贴屏：下一帧投影会重新显示并写入 transform
   }

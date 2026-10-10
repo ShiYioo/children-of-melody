@@ -272,6 +272,15 @@
     .songs-empty { grid-column: 1 / -1; padding: 6px 3px 8px; color: var(--ink-faint); font-size: 9px; }
 
     #toasts { position: fixed; top: calc(var(--safe-top) + 56px); left: 50%; z-index: 45; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateX(-50%); pointer-events: none; }
+    /* 入座全屏的音遇水印 */
+    #screenWatermark {
+      position: fixed; left: 30px; bottom: calc(var(--safe-bottom) + 22px);
+      z-index: 56; display: none; flex-direction: column; align-items: flex-start; gap: 2px;
+      pointer-events: none; text-shadow: 0 1px 6px rgba(20, 28, 38, .8);
+    }
+    #screenWatermark.open { display: flex; }
+    #screenWatermark .wm-title { color: rgba(255, 240, 214, .92); font-size: 15px; letter-spacing: .35em; text-indent: .35em; font-weight: 600; }
+    #screenWatermark .wm-sub { color: rgba(232, 201, 168, .55); font-size: 10px; letter-spacing: .12em; }
     /* 入座模式起身钮：z 高于大屏 DOM 层，焦点在 iframe 里也能点 */
     #seatExit {
       position: fixed; top: var(--safe-top); right: calc(var(--safe-right) + 100px); z-index: 55;
@@ -571,6 +580,12 @@
       <input id="vol-voice" type="range" min="0" max="150" value="100" />
       <span class="vol-pct" id="pct-voice">100%</span>
     </div>
+  </div>
+
+  <!-- 入座全屏的音遇标识水印 -->
+  <div id="screenWatermark">
+    <span class="wm-title">音遇</span>
+    <span class="wm-sub">Children of the Melody · 随身巨幕</span>
   </div>
 
   <!-- 入座模式常驻起身钮（焦点在大屏 iframe 里时热键收不到，按钮永远可点） -->

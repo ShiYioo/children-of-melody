@@ -1110,6 +1110,7 @@ function setScreenView(on: boolean) {
   screenSys.setSeatMode(on);
   screenSys.setImmersive(on); // 确定性全屏：媒体 DOM 直接铺满视口，不依赖 3D 投影
   document.getElementById("seatExit")?.classList.toggle("open", on);
+  document.getElementById("screenWatermark")?.classList.toggle("open", on);
   ui.toast(on ? "入座模式——屏幕即全屏，右上角「起身」或按 8 退出" : "起身了", 2200);
 }
 
