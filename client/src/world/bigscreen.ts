@@ -86,13 +86,13 @@ function solveHomography(src: number[][], dst: number[][]): number[] | null {
 // 复用临时量
 const _v = new THREE.Vector3();
 // 屏面四角（局部坐标），顺序与 host 像素坐标一一对应（左上/右上/右下/左下）。
-// 注意 group.lookAt(主人) 后 +z 指向观察者，正面视角下局部 +x 出现在画面左侧——
-// 实测结论，别按直觉改成 -x 在左（会左右镜像出病态矩阵）
+// 屏幕总是 lookAt 主人（+z 朝向主人/相机一侧），正面观察时局部 +x 在画面右——
+// 角点顺序以正面视角为准（背面视角下四点环绕反向，解出的单应会镜像病态）
 const _corners = [
-  new THREE.Vector3(W / 2, CY + H / 2, 0.05),
   new THREE.Vector3(-W / 2, CY + H / 2, 0.05),
-  new THREE.Vector3(-W / 2, CY - H / 2, 0.05),
+  new THREE.Vector3(W / 2, CY + H / 2, 0.05),
   new THREE.Vector3(W / 2, CY - H / 2, 0.05),
+  new THREE.Vector3(-W / 2, CY - H / 2, 0.05),
 ];
 const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];
 const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];

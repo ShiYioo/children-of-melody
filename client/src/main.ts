@@ -1093,8 +1093,8 @@ function toggleMyScreen() {
   document.getElementById("screenBar")?.classList.toggle("open", myScreenOn);
   if (myScreenOn) {
     screenSys.setOpen("self", true);
-    // 看屏机位：相机对齐到角色正后方，视线越过肩膀直视屏幕正面（巨幕占满视野）
-    controls.camYaw = controls.state.yaw;
+    // 看屏机位：相机对齐到角色正后方（camYaw = yaw + π），视线越过肩膀直视屏幕正面
+    controls.camYaw = controls.state.yaw + Math.PI;
     controls.camDist = 3.3;
     controls.camPitch = 0.17;
     net?.sendScreen({ on: 1 });
