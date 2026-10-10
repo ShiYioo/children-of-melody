@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { Armchair, Bell, BookOpen, createIcons, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } from "lucide";
+import { Armchair, Bell, BookOpen, Camera, Keyboard, MonitorPlay, createIcons, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } from "lucide";
 import { createWorld } from "./world/scene";
 import { HandLinks } from "./world/handlink";
 import { PlayerControls } from "./controls";
@@ -745,12 +745,19 @@ desktopActions.innerHTML = `
       </div>
     </section>
     <section class="action-section">
-      <div class="action-section-title">家具</div>
+      <div class="action-section-title">放置</div>
       <div class="action-grid">
         <button class="action-item" data-furniture="0"><i data-lucide="armchair"></i><span class="label">椅子</span><kbd>1</kbd></button>
         <button class="action-item" data-furniture="1"><i data-lucide="move-horizontal"></i><span class="label">秋千</span><kbd>2</kbd></button>
         <button class="action-item" data-furniture="2"><i data-lucide="sailboat"></i><span class="label">小船</span><kbd>6</kbd></button>
+      </div>
+    </section>
+    <section class="action-section">
+      <div class="action-section-title">工具</div>
+      <div class="action-grid">
         <button class="action-item" id="photoEntry"><i data-lucide="camera"></i><span class="label">拍照</span><kbd>C</kbd></button>
+        <button class="action-item" id="screenEntry"><i data-lucide="monitor-play"></i><span class="label">大屏</span><kbd>7</kbd></button>
+        <button class="action-item" id="helpEntry"><i data-lucide="keyboard"></i><span class="label">键位</span><kbd>H</kbd></button>
       </div>
     </section>
     <section class="action-section">
@@ -764,7 +771,7 @@ desktopActions.innerHTML = `
   </div>
   <button class="action-trigger" title="旅人操作" aria-label="展开旅人操作" aria-expanded="false"><i data-lucide="menu"></i></button>`;
 document.body.appendChild(desktopActions);
-createIcons({ icons: { Armchair, Bell, BookOpen, Menu, MessageCircle, MoveHorizontal, Music2, Sparkles, Wind } });
+createIcons({ icons: { Armchair, Bell, BookOpen, Camera, Keyboard, Menu, MessageCircle, MonitorPlay, MoveHorizontal, Music2, Sparkles, Wind } });
 desktopActions.querySelectorAll("svg[data-lucide]").forEach((icon) => icon.removeAttribute("data-lucide"));
 
 const actionTrigger = desktopActions.querySelector(".action-trigger") as HTMLButtonElement;
@@ -847,6 +854,10 @@ window.addEventListener("keydown", (e) => {
   }
   if (k === "3" || k === "4" || k === "5") {
     takeOutInstrument(Number(k) - 3);
+    return;
+  }
+  if (k === "h") {
+    showKeymap();
     return;
   }
   if (k === "c") {
@@ -1086,6 +1097,40 @@ for (const em of EMOTES) {
 }
 document.getElementById("photoExit")?.addEventListener("click", () => setPhotoMode(false));
 document.getElementById("photoEntry")?.addEventListener("click", () => setPhotoMode(true));
+document.getElementById("screenEntry")?.addEventListener("click", () => toggleMyScreen());
+
+/** 键位速查（H 键 / 菜单「键位」）：功能多了之后唯一的完整按键地图 */
+function showKeymap() {
+  const row = (keys: string, label: string) => `<tr><td style="padding:2px 10px 2px 0;white-space:nowrap"><kbd>${keys}</kbd></td><td style="color:var(--ink-soft)">${label}</td></tr>`;
+  ui.notice(
+    "键位速查",
+    `<table style="border-collapse:collapse;font-size:13px">
+      <tr><td colspan="2" style="padding:4px 0;color:var(--ink);font-weight:600">移动与互动</td></tr>
+      ${row("WASD", "移动（Shift 疾跑）")}
+      ${row("Space", "跳跃 · 空中扑翼 · 按住滑翔 · 水中跃出")}
+      ${row("E", "坐下 / 起身（靠近椅子·秋千·船可乘坐）")}
+      ${row("Enter", "聊天")}
+      ${row("Tab", "动作轮盘（1-6 选动作）")}
+      <tr><td colspan="2" style="padding:10px 0 4px;color:var(--ink);font-weight:600">社交</td></tr>
+      ${row("G / F", "发起牵手 / 接受或婉拒")}
+      ${row("V", "给正在听歌的人献花")}
+      <tr><td colspan="2" style="padding:10px 0 4px;color:var(--ink);font-weight:600">放置与工具</td></tr>
+      ${row("1 / 2", "椅子 / 双人秋千")}
+      ${row("3 / 4 / 5", "竖琴 / 长笛 / 风铃（Z·X 切八度）")}
+      ${row("6", "双人船（水上放置，WASD 划）")}
+      ${row("7 / 8", "展开随身巨幕 / 入座全屏")}
+      ${row("C", "拍照模式（自拍 / 环绕 / 姿势）")}
+      <tr><td colspan="2" style="padding:10px 0 4px;color:var(--ink);font-weight:600">其他</td></tr>
+      ${row("左上角喇叭", "音乐 / 音效 / 语音 音量")}
+      ${row("Esc", "退出当前模式 / 关闭弹层")}
+    </table>`
+  );
+}
+
+document.getElementById("photoExit")?.addEventListener("click", () => setPhotoMode(false));
+document.getElementById("photoEntry")?.addEventListener("click", () => setPhotoMode(true));
+document.getElementById("screenEntry")?.addEventListener("click", () => toggleMyScreen());
+document.getElementById("helpEntry")?.addEventListener("click", () => showKeymap());
 document.getElementById("photoTabSelfie")?.addEventListener("click", () => setPhotoSelfie(true));
 document.getElementById("photoTabOrbit")?.addEventListener("click", () => setPhotoSelfie(false));
 document.getElementById("photoShot")?.addEventListener("click", () => { photoShotPending = true; });
