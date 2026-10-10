@@ -1093,12 +1093,12 @@ function toggleMyScreen() {
   document.getElementById("screenBar")?.classList.toggle("open", myScreenOn);
   if (myScreenOn) {
     screenSys.setOpen("self", true);
-    // 看屏机位：相机对齐到角色正后方，视线越过肩膀直视屏幕正面
+    // 看屏机位：相机对齐到角色正后方，视线越过肩膀直视屏幕正面（巨幕占满视野）
     controls.camYaw = controls.state.yaw;
-    controls.camDist = 4.6;
-    controls.camPitch = 0.22;
+    controls.camDist = 3.3;
+    controls.camPitch = 0.17;
     net?.sendScreen({ on: 1 });
-    ui.toast("展开了随身大屏——输入视频或网页地址，24m 内的人一起看", 3000);
+    ui.toast("展开了随身巨幕——输入视频或网页地址，24m 内的人一起看", 3000);
   } else {
     myScreenUrl = "";
     myScreenPlaying = false;

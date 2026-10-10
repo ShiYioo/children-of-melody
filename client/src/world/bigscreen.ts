@@ -32,10 +32,10 @@ export function resolveMediaUrl(raw: string): ResolvedMedia | null {
   return { kind: "web", url };
 }
 
-const W = 2.4;
-const H = 1.35;
-/** 屏面中心相对 group 原点的高度 */
-const CY = H / 2 + 0.62;
+const W = 3.8;
+const H = 2.14;
+/** 屏面中心相对 group 原点的高度（支架腿加高适配巨幕） */
+const CY = H / 2 + 0.9;
 /** 媒体的虚拟视口（16:9）：网页/视频按这个尺寸渲染再整体透视缩小贴屏，
  *  保证桌面网页游戏拿到正常大小的窗口、内容完整不用滚动 */
 const VW = 960;
@@ -120,10 +120,10 @@ export function createScreenSystem(
     );
     back.position.set(0, CY, 0.045);
     group.add(back);
-    const legGeo = new THREE.BoxGeometry(0.07, 0.66, 0.07);
+    const legGeo = new THREE.BoxGeometry(0.09, 0.9, 0.09);
     for (const sx of [-1, 1]) {
       const leg = new THREE.Mesh(legGeo, frameMat());
-      leg.position.set(sx * (W / 2 - 0.16), 0.33, 0);
+      leg.position.set(sx * (W / 2 - 0.22), 0.45, 0);
       leg.castShadow = true;
       group.add(leg);
     }
@@ -265,7 +265,7 @@ export function createScreenSystem(
         s.group.scale.setScalar(0.05 + 0.95 * e);
         const fx = Math.sin(owner.yaw);
         const fz = Math.cos(owner.yaw);
-        s.group.position.set(owner.pos.x + fx * 2.2, Math.max(owner.pos.y, 0) + 0.05, owner.pos.z + fz * 2.2);
+        s.group.position.set(owner.pos.x + fx * 2.8, Math.max(owner.pos.y, 0) + 0.05, owner.pos.z + fz * 2.8);
         s.group.lookAt(owner.pos.x, s.group.position.y + 0.8, owner.pos.z);
         s.group.updateMatrixWorld(true);
         if (s.video) s.video.volume = Math.max(0, Math.min(1, volumeOf(id)));
