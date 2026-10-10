@@ -50,6 +50,8 @@ interface ScreenState {
   iframe: HTMLIFrameElement | null;
   open: number; // 展开动画 0→1
   on: boolean;
+  /** 入座全屏：媒体 DOM 脱离 3D 投影，直接 fixed 铺满视口（100% 确定铺满） */
+  immersive: boolean;
 }
 
 /** 解 4 对点的单应矩阵（h33=1，返回 8 个自由元素；奇异时返回 null） */
@@ -98,6 +100,27 @@ const _corners = [
 ];
 const _src = [[0, 0], [VW, 0], [VW, VH], [0, VH]];const _dst: number[][] = [[0, 0], [0, 0], [0, 0], [0, 0]];
 
+/** 全屏覆盖样式：脱离单应投影，fixed 铺满视口；退出时由 update 的投影逻辑接管 */
+function applyImmersive(s: ScreenState, on: boolean) {
+  if (!s.host) return;
+  if (on) {
+    s.host.style.position = "fixed";
+    s.host.style.left = "0";
+    s.host.style.top = "0";
+    s.host.style.width = "100vw";
+    s.host.style.height = "100vh";
+    s.host.style.transform = "none";
+    s.host.style.transformOrigin = "50% 50%";
+    s.host.style.display = "block";
+    s.host.style.zIndex = "50";
+  } else {
+    s.host.style.width = `${VW}px`;
+    s.host.style.height = `${VH}px`;
+    s.host.style.zIndex = "5";
+    s.host.style.display = "none"; // 恢复贴屏：下一帧投影会重新显示并写入 transform
+  }
+}
+
 export function createScreenSystem(
   hostLayer: HTMLElement,
   addToScene: (o: THREE.Object3D) => void,
@@ -132,7 +155,7 @@ export function createScreenSystem(
     }
     group.visible = false;
     addToScene(group);
-    s = { group, host: null, media: "none", video: null, iframe: null, open: 0, on: false };
+    s = { group, host: null, media: "none", video: null, iframe: null, open: 0, on: false, immersive: false };
     screens.set(id, s);
     return s;
   }
@@ -210,6 +233,14 @@ export function createScreenSystem(
       seatMode = on;
     },
 
+    /** 入座全屏：媒体 DOM 脱离 3D 投影，fixed 铺满整个视口（比 3D 贴屏的确定性高一个量级） */
+    setImmersive(on: boolean) {
+      const s = screens.get("self");
+      if (!s) return;
+      s.immersive = on;
+      applyImmersive(s, on);
+    },
+
     setMedia,
 
     /** 播放/暂停 + 对齐进度（观众端镜像主人心跳） */
@@ -274,6 +305,12 @@ export function createScreenSystem(
       for (const [id, s] of screens) {
         const owner = id === "self" ? self : remoteOf(id);
         const show = s.on && !!owner && (s.host !== null || s.media === "none");
+        // 入座全屏：媒体 fixed 铺满视口，不参与 3D 投影（transform 由 applyImmersive 接管）
+        if (s.immersive) {
+          s.group.visible = false;
+          if (s.video) s.video.volume = Math.max(0, Math.min(1, volumeOf(id)));
+          continue;
+        }
         if (!show) {
           s.group.visible = false;
           if (s.host) s.host.style.display = "none";

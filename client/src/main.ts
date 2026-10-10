@@ -1106,8 +1106,9 @@ function setScreenView(on: boolean) {
   }
   screenViewOn = on;
   controls.inputLocked = on; // 入座锁死移动与视角拖动，屏幕即画面
-  controls.fovOverride = on ? 38 : null; // 长焦窄视野：屏幕铺满溢出，像坐在巨幕前
-  screenSys.setSeatMode(on); // 相机钉屏逻辑内聚到大屏模块（紧跟 group 更新，无顺序竞争）
+  controls.fovOverride = on ? 38 : null; // 长焦窄视野（起身恢复广角）
+  screenSys.setSeatMode(on);
+  screenSys.setImmersive(on); // 确定性全屏：媒体 DOM 直接铺满视口，不依赖 3D 投影
   document.getElementById("seatExit")?.classList.toggle("open", on);
   ui.toast(on ? "入座模式——屏幕即全屏，右上角「起身」或按 8 退出" : "起身了", 2200);
 }
