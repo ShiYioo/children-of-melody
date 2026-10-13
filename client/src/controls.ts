@@ -27,6 +27,17 @@ export interface ControlsState {
 
 export { MAX_FLAPS };
 
+/**
+ * 指针是否落在触屏 UI（虚拟摇杆/按钮簇/弹出菜单）上。
+ * 用 closest 而不是坐标范围：UI 尺寸随屏幕/安全区变化，坐标判断会随样式漂移。
+ * 注意选择器要精确到 touch.ts 真正创建的类名，别用 `.touch-root *` 之外的模糊匹配。
+ */
+const TOUCH_UI_SELECTOR = ".touch-joystick, .touch-knob, .touch-btn, .touch-cluster, .touch-row, .touch-small-row, .touch-menu, .touch-menu-item";
+function isTouchUI(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el?.closest?.(TOUCH_UI_SELECTOR);
+}
+
 export class PlayerControls {
   readonly state: ControlsState = {
     pos: new THREE.Vector3(0, 3, 8),
@@ -45,8 +56,18 @@ export class PlayerControls {
   camYaw = Math.PI;
   camPitch = 0.32;
   camDist = 7.5;
-  /** 相机跟随焦点弹簧（只平滑玩家移动的跟随；鼠标转视角是直接操作不走弹簧） */
-  private readonly camSpring = new SpringV3(110, 19);
+  /**
+   * 相机跟随焦点弹簧（只平滑玩家移动的跟随；鼠标转视角是直接操作不走弹簧）
+   *
+   * 取值依据：Spring 的物理量是 k=ω²、c=2ζω。
+   * 旧值 (110, 19)：ω=10.49 rad/s、ζ=0.906 —— 固有周期 0.6s、安定时间 4/(ζω)≈0.42s，
+   * 本质是"紧跟"而非"跟随"，玩家每一次变速都会被镜头几乎立刻复述成一次抖动。
+   * 新值 (46, 13.56)：ω=6.78 rad/s（固有周期 ≈0.93s）、ζ=1.00 临界阻尼，安定 ≈0.59s。
+   * 临界阻尼 = 无超调（不会在急停时把镜头推过头再弹回来），而 ω 降 35% 换来
+   * 大约 0.24s 的跟随延迟——这就是《光遇》"镜头有质量、角色先走镜头再跟"的感觉。
+   * 再低（ω<5）会让走路变得像沼泽；再高（ω>9）抖动感就回来了。
+   */
+  private readonly camSpring = new SpringV3(46, 13.56);
   private readonly _focusRaw = new THREE.Vector3();
   /** 最近一次鼠标操作相机的时刻：跟随航向要避让正在操作镜头的人 */
   private lastCamInputAt = 0;
@@ -126,12 +147,17 @@ export class PlayerControls {
 
     dom.addEventListener("pointerdown", (e) => {
       if (this.inputLocked) return; // 入座/拍照等锁定视角的场景：拖动不再转视角
+      // 触屏的虚拟摇杆/按钮上起手的指针绝不能转镜头——旧代码无差别进 dragging，
+      // 于是移动端推左摇杆走路时镜头跟着一起甩。
+      // 规则：鼠标（含触控笔）任何位置都能转视角；触摸只在非触控 UI 区域能转。
+      if (e.pointerType !== "mouse" && isTouchUI(e.target)) return;
       this.dragging = true;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
       dom.setPointerCapture(e.pointerId);
-      // 光遇端游手感：点击画面即锁定鼠标，移动直接转视角；Esc 释放
-      if (this.enabled && document.pointerLockElement !== dom) {
+      // 光遇端游手感：点击画面即锁定鼠标，移动直接转视角；Esc 释放。
+      // 只有鼠标能锁指针——触屏调用 requestPointerLock 会直接抛错
+      if (e.pointerType === "mouse" && this.enabled && document.pointerLockElement !== dom) {
         (dom.requestPointerLock as () => Promise<void> | void)?.call(dom)?.catch?.(() => {});
       }
     });
@@ -140,6 +166,7 @@ export class PlayerControls {
       this.lastCamInputAt = performance.now();
       if (this.inputLocked) return;
       if (document.pointerLockElement === dom) {
+        if (e.pointerType === "touch") return; // 触屏不该走 movement 通道
         this.camYaw -= e.movementX * 0.0026;
         this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, -0.35, 1.25);
         return;
@@ -152,6 +179,7 @@ export class PlayerControls {
       this.lastY = e.clientY;
     });
     dom.addEventListener("pointerup", () => (this.dragging = false));
+    dom.addEventListener("pointercancel", () => (this.dragging = false));
     // 拖拽转视角期间的浏览器原生行为与下载扩展(IDM/迅雷类"框选下载")全部拦下。
     // 用 document 捕获阶段：页面脚本先于 document_idle 注入的内容脚本注册，
     // 在事件到达扩展监听器之前就 stopImmediatePropagation（指针事件不受影响，转视角照常）
@@ -262,7 +290,9 @@ export class PlayerControls {
       if (this.keys.has("s") || this.keys.has("arrowdown")) iz += 1;
       if (this.keys.has("a") || this.keys.has("arrowleft")) ix -= 1;
       if (this.keys.has("d") || this.keys.has("arrowright")) ix += 1;
-      // 虚拟摇杆覆盖键盘方向（触屏玩家）
+      // 虚拟摇杆覆盖键盘方向（触屏玩家）。
+      // 死区 0.08 是**第二道**保险：touch.ts 那边已经做过 0.14 的死区重映射，
+      // 这里只是拦住「键盘没按 + 摇杆基本回中」的浮点残留。
       const joyLen = Math.hypot(this.touchMove.x, this.touchMove.z);
       if (joyLen > 0.08) {
         ix = this.touchMove.x;
@@ -275,8 +305,12 @@ export class PlayerControls {
     const inputLen = Math.hypot(ix, iz);
     const moving = inputLen > 0.01 && !s.sit;
     if (moving) s.sit = false; // 走动即起立
-    const joyFull = Math.hypot(this.touchMove.x, this.touchMove.z) > 0.88;
-    const running = moving && (this.keys.has("shift") || joyFull);
+    // 走 ↔ 跑：**连续**混合，不再是 `> 0.88` 的硬阈值。
+    // 原来的布尔开关让摇杆在 1% 行程内速度目标跳 +3.2 m/s（详见 physics.ts 里 runBlend 的说明）。
+    // 键盘 Shift 仍然直接给满，保持键盘手感的干脆。
+    const joyRun = THREE.MathUtils.smoothstep(Math.hypot(this.touchMove.x, this.touchMove.z), 0.75, 1.0);
+    const runBlend = Math.max(this.keys.has("shift") ? 1 : 0, joyRun);
+    const running = runBlend > 0.5; // 仅供动画状态码用
     const spaceHeldMs = this.spacePressedAt > 0 && this.keys.has(" ") ? performance.now() - this.spacePressedAt : 0;
     const glideHeld = this.phys.airborne && spaceHeldMs >= 150;
 
@@ -287,7 +321,7 @@ export class PlayerControls {
       {
         moveX: moving ? ix : 0,
         moveZ: moving ? iz : 0,
-        running,
+        runBlend,
         jumpPressed: this.jumpQueued && !this.inputLocked,
         glideHeld,
         camYaw: this.camYaw,
@@ -367,9 +401,18 @@ export class PlayerControls {
     const cy = focus.y + Math.sin(this.camPitch) * this.camDist;
     const camGround = terrainHeight(cx, cz) + 0.8;
     this.camera.position.set(cx, Math.max(cy, camGround), cz);
-    // 速度前瞻：视线先看向要去的地方（光遇的镜头感），落点用平滑速度防抖
-    this.camLead.lerp(this.phys.vel, Math.min(1, dt * 4));
-    this.camFocus.copy(focus).addScaledVector(this.camLead, 0.16);
+    // 速度前瞻（feedforward）：视线先看向要去的地方——相机是有质量的，
+    // 跟随焦点滞后于角色时，用速度前导把注视点提前，快速移动时画面才"跟得住"。
+    // 在弹簧之后应用（不进弹簧），所以前导不会反过来污染跟随的阻尼特性。
+    this.camLead.lerp(this.phys.vel, 1 - Math.exp(-5 * dt)); // 帧率无关的平滑速度
+    // 前导量 = 速度(m/s) × 前导时间(s)：等速时精确提前 leadTime 秒的位移，
+    // 因此它与速度成正比——走路 ≈0.65m、奔跑 ≈1.3m、满速滑翔 ≈2.2m，快慢都合适
+    const leadTime = 0.18;
+    this.camFocus.copy(focus);
+    this.camFocus.x += this.camLead.x * leadTime;
+    this.camFocus.z += this.camLead.z * leadTime;
+    // 垂直方向只取 35%：跳跃的上升/下落不该把注视点一起抬走（会变成画面上下晃）
+    this.camFocus.y += this.camLead.y * leadTime * 0.35;
     this.camera.lookAt(this.camFocus);
 
     const fovTarget = this.fovOverride ?? (this.baseFov + Math.min(1, speedH / 9.2) * 5 + (s.airborne && glideHeld ? 3 : 0));

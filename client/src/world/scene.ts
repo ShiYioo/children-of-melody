@@ -4,12 +4,13 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
 import { createSky, type SkyPalette } from "./sky";
 import { createTerrain } from "./terrain";
 import { createWater } from "./water";
 import { createClouds } from "./clouds";
 import { createProps, type Campfire } from "./props";
-import { createToonKit } from "./toon";
+import { createToonKit, setToonAnisotropy } from "./toon";
 import { createMotes, createFireflies, createEmbers } from "./particles";
 import { createWindLines } from "./windlines";
 import { createBursts } from "./bursts";
@@ -52,6 +53,8 @@ export function createWorld(container: HTMLElement): World {
   renderer.toneMappingExposure = 1.12;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // 笔触贴图接上各向异性过滤：默认 anisotropy=1 时，地面在掠射角会被过度 mip 糊掉
+  setToonAnisotropy(renderer.capabilities.getMaxAnisotropy());
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -229,8 +232,18 @@ export function createWorld(container: HTMLElement): World {
     godPass.uniforms.uIntensity.value = behind ? 0 : godState.base * facing * facing * ex * ey;
   }
 
-  // ---- 后期：体积光 → Bloom → 输出 ----
+  // ---- 后期：体积光 → Bloom → SMAA → 输出 ----
   const composer = new EffectComposer(renderer);
+  // 抗锯齿走 SMAA 后处理，**不要**给 composer 的 RT 开 MSAA。
+  //
+  // 实测结论（这条踩了很久）：composer 的 RT 是 HalfFloatType，在其上设 samples 后，
+  // `EXT_color_buffer_float` 存在、`checkFramebufferStatus` 报 COMPLETE、`gl.getError()`
+  // 也是 NO_ERROR，但 resolve 出来是错的 —— 黄昏相位下整屏被压成一块均匀暗色
+  // （lumaMean 0.27 / regions 0.16,0.16,0.16 / glowPct 0.30），
+  // 而同一相位关掉 MSAA 立刻恢复（0.31 / 0.39,0.19,0.13 / 3.18）。
+  // 失效不抛错、不报 warning、只在特定昼夜相位暴露，属于不能上线的静默错误。
+  //
+  // SMAA 是独立全屏 pass，与 RT 格式无关，且顺带处理着色器锯齿（草叶、披风边缘）。
   composer.addPass(new RenderPass(scene, camera));
   const godPass = new ShaderPass(godRayShader);
   composer.addPass(godPass); // 体积光在 Bloom 之前：光芒先成形再被柔化
@@ -241,6 +254,9 @@ export function createWorld(container: HTMLElement): World {
     0.8 // threshold：抬高，只有真亮源才吃到辉光（旧 0.72 会把大片暖色都点亮）
   );
   composer.addPass(bloom);
+  // 顺序要紧：three 的 SMAAPass 在 linear-srgb 下工作，必须在 OutputPass 之前
+  const smaa = new SMAAPass();
+  composer.addPass(smaa);
   composer.addPass(new OutputPass());
 
   const resize = () => {
@@ -253,6 +269,7 @@ export function createWorld(container: HTMLElement): World {
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     composer.setSize(w, h);
+    smaa.setSize(w, h);
   };
   window.addEventListener("resize", resize);
 
@@ -290,7 +307,15 @@ export function createWorld(container: HTMLElement): World {
     },
     {
       // 夜：星空铺满、月光清冷、萤火虫登场
-      sky: { zenith: C("#0c1230"), mid: C("#1a2248"), rose: C("#2c3560"), horizon: C("#43507e"), sea: C("#26304f"), night: 1, sunEl: 0.5 },
+      //
+      // ⚠ 夜空调色本轮上调过，原因是实测：原来天顶 #0c1230 的线性亮度只有 0.0072，
+      // 是**白昼天顶 0.208 的 1/26**；而地平线 0.089 反而是它的 11 倍。
+      // 上下对比大得离谱，抬头就是一片死黑（整帧 darkPct 99.5%）。
+      // 现在天顶 0.034、地平线 0.132，都约为白昼的 1/6 —— 是「看得清的深蓝夜」。
+      //
+      // 放心改：天穹是 BackSide 的**纯着色网格，不发光**，改它不会照亮场景。
+      // 场景光照由 hemiSky / hemiGround / ambientColor 单独控制，两边互不影响。
+      sky: { zenith: C("#232e6b"), mid: C("#2e3a7d"), rose: C("#414c8c"), horizon: C("#55639b"), sea: C("#333e66"), night: 1, sunEl: 0.5 },
       fogColor: C("#2a3354"), fogDensity: 0.0055,
       hemiSky: C("#4a5a9a"), hemiGround: C("#1c2a4a"), hemiInt: 0.5,
       ambientColor: C("#2c3a6e"), ambientInt: 0.3,
@@ -325,7 +350,35 @@ export function createWorld(container: HTMLElement): World {
     night: 0,
     sunEl: 0.22,
   };
-  const fireflyMat = fireflies.points.material as THREE.PointsMaterial;
+  // 萤火虫/光尘都是 ShaderMaterial：透明度**只能写 uniform**，不能写 `.opacity`
+  // （three 的 WebGLMaterials 对 isShaderMaterial 分支只设 uniformsNeedUpdate=false，
+  //  根本不读 material.opacity → 直接写 .opacity 是 no-op，萤火虫会昼夜满亮）
+  const fireflyUniforms = (fireflies.points.material as THREE.ShaderMaterial).uniforms;
+  const motesUniforms = (motes.points.material as THREE.ShaderMaterial).uniforms;
+
+  // ---- 每帧复用的临时量：setDayPhase 在主循环里每帧调用，
+  //      原来一帧会产生约 8 个堆对象 + 6 次 hex 字符串解析并触发 GC 尖峰 ----
+  const _sunD = new THREE.Vector3();
+  const _moonD = new THREE.Vector3();
+  const _down = new THREE.Vector3(0, -1, 0);
+  const _uTintNight = new THREE.Color("#c9d6ff");
+  const _spec = new THREE.Color();
+  const _silC = new THREE.Color();
+  const _waterPhase = {
+    sunDir: new THREE.Vector3(),
+    fogColor: new THREE.Color(),
+    fogDensity: 0,
+    skyHi: new THREE.Color(),
+    skyLo: new THREE.Color(),
+    specColor: new THREE.Color(),
+    night: 0,
+  };
+  /** 写到 out 里而不新建向量（原来每帧 2~4 个 Vector3） */
+  const arcDir = (t: number, maxEl: number, azBase: number, azSpan: number, out: THREE.Vector3) => {
+    const elv = Math.sin(t * Math.PI) * maxEl;
+    const az = azBase + (t - 0.5) * azSpan;
+    return out.set(Math.sin(az) * Math.cos(elv), Math.sin(elv), Math.cos(az) * Math.cos(elv));
+  };
 
   function setDayPhase(phase: number) {
     const p = ((phase % 1) + 1) % 1;
@@ -341,6 +394,27 @@ export function createWorld(container: HTMLElement): World {
     mixC(a.sky.rose, b.sky.rose, skyPal.rose);
     mixC(a.sky.horizon, b.sky.horizon, skyPal.horizon);
     mixC(a.sky.sea, b.sky.sea, skyPal.sea);
+    // 雾也必须跟着相位走 —— 这一处之前是漏的。
+    // PHASES 表里一直有 fogColor / fogDensity 两组值，但**没有任何代码把它写进 scene.fog**，
+    // 昼夜循环改了天空、太阳、曝光、水面波光、云，唯独没改雾，于是雾恒为黄昏的亮米色
+    // #eecfa4 —— 到深夜整片远景会被一层发亮的奶色霾糊住（近处亮、远处更亮，反物理）。
+    // 密度本来就按相位给得不一样：黄昏 .0046 / 夜 .0055 / 黎明 .0050 / 白昼 .0038。
+    // 云海是每帧读现场 scene.fog 的，所以修好这里它会自动跟着变。
+    const fogNow = scene.fog as THREE.FogExp2;
+    mixC(a.fogColor, b.fogColor, fogNow.color);
+    fogNow.density = THREE.MathUtils.lerp(a.fogDensity, b.fogDensity, u);
+    // 半球光与环境光同样必须跟着相位走 —— 和雾是完全一样的漏法：
+    // PHASES 里一直有 hemiSky / hemiGround / hemiInt / ambientColor / ambientInt 五组值，
+    // 但**没有任何代码把它们写进 hemi / ambient**。
+    // 结果是深夜的半球光还是白昼的 0.82、环境光还是 0.36，草地被照成白昼一样的亮绿，
+    // 只有篝火附近才像夜里 —— 夜景因此完全不像《光遇》。
+    // 这一处修好，"越暗越靠自发光"才真正成为架构性质：环境压下去之后，
+    // 光自然集中在火堆、灯塔、萤火虫和发光道具上。
+    hemi.color.copy(a.hemiSky).lerp(b.hemiSky, u);
+    hemi.groundColor.copy(a.hemiGround).lerp(b.hemiGround, u);
+    hemi.intensity = THREE.MathUtils.lerp(a.hemiInt, b.hemiInt, u);
+    ambient.color.copy(a.ambientColor).lerp(b.ambientColor, u);
+    ambient.intensity = THREE.MathUtils.lerp(a.ambientInt, b.ambientInt, u);
     skyPal.night = THREE.MathUtils.lerp(a.sky.night, b.sky.night, u);
     skyPal.sunEl = THREE.MathUtils.lerp(a.sky.sunEl, b.sky.sunEl, u);
     mixC(a.sunColor, b.sunColor, sun.color);
@@ -351,15 +425,10 @@ export function createWorld(container: HTMLElement): World {
     // 太阳 p∈[0.5,1.0]（黎明相位升起→黄昏相位落下），月亮 p∈[0.12,0.48]（入夜升→黎明前落）
     const sunT = (p - 0.5) / 0.5;
     const moonT = (p - 0.12) / 0.36;
-    const arcDir = (t: number, maxEl: number, azBase: number, azSpan: number) => {
-      const elv = Math.sin(t * Math.PI) * maxEl;
-      const az = azBase + (t - 0.5) * azSpan;
-      return new THREE.Vector3(Math.sin(az) * Math.cos(elv), Math.sin(elv), Math.cos(az) * Math.cos(elv));
-    };
     const sunUp = sunT >= 0 && sunT <= 1;
     const moonUp = moonT >= 0 && moonT <= 1;
-    const sunD = sunUp ? arcDir(sunT, 0.95, -0.35, 2.8) : new THREE.Vector3(0, -1, 0);
-    const moonD = moonUp ? arcDir(moonT, 0.8, 2.6, -2.2) : new THREE.Vector3(0, -1, 0);
+    const sunD = sunUp ? arcDir(sunT, 0.95, -0.35, 2.8, _sunD) : _sunD.copy(_down);
+    const moonD = moonUp ? arcDir(moonT, 0.8, 2.6, -2.2, _moonD) : _moonD.copy(_down);
     const sunElv = sunUp ? Math.sin(sunT * Math.PI) * 0.95 : -1;
     const moonElv = moonUp ? Math.sin(moonT * Math.PI) * 0.8 : -1;
     // 光源 = 主导天体（交叉时段按高度切换）；强度再乘高度因子——初升/将落的光更弱
@@ -381,31 +450,38 @@ export function createWorld(container: HTMLElement): World {
     godState.worldDir.copy(lead);
     (godPass.uniforms.uTint.value as THREE.Color)
       .set("#ffe3b0")
-      .lerp(new THREE.Color("#c9d6ff"), skyPal.night);
+      .lerp(_uTintNight, skyPal.night);
     renderer.toneMappingExposure = THREE.MathUtils.lerp(a.exposure, b.exposure, u);
-    // 萤火虫入夜点亮（白天几乎看不见），白天光尘入夜淡出（萤火虫接管）
-    fireflyMat.opacity = 0.75 * THREE.MathUtils.clamp(skyPal.night * 1.6, 0.04, 1);
-    (motes.points.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 0.5 * (1 - skyPal.night * 0.85);
+    // 萤火虫入夜点亮、光尘入夜淡出（写 uniform，见上面的说明）
+    if (fireflyUniforms.uOpacity) {
+      fireflyUniforms.uOpacity.value = 0.75 * THREE.MathUtils.clamp(skyPal.night * 1.6, 0.04, 1);
+    }
+    if (motesUniforms.uOpacity) {
+      motesUniforms.uOpacity.value = 0.5 * (1 - skyPal.night * 0.85);
+    }
 
-    // 光照状态共享：披风透光/边缘光强度跟着太阳走
+    // 光照状态共享：披风透光/边缘光/所有自发光增益都跟着昼夜走
     lightState.sunDir.copy(sun.position).normalize();
     lightState.night = skyPal.night;
+    // 雾也共享出去：自己写 GLSL 雾的模块（草地/水面）要跟着场景一起变
+    lightState.fogColor.copy((scene.fog as THREE.FogExp2).color);
+    lightState.fogDensity = (scene.fog as THREE.FogExp2).density;
     // 暖色度（黄昏/黎明高、白昼和深夜低）：水面波光与云的染色共用
     const warm = Math.pow(1 - skyPal.night, 2) * (1 - THREE.MathUtils.clamp((skyPal.sunEl - 0.4) / 0.4, 0, 1));
-    const spec = SPEC_DAY.clone().lerp(SPEC_WARM, warm).lerp(SPEC_NIGHT, skyPal.night);
-    water.setPhase({
-      sunDir: sun.position,
-      fogColor: (scene.fog as THREE.FogExp2).color,
-      fogDensity: (scene.fog as THREE.FogExp2).density,
-      skyHi: skyPal.zenith,
-      skyLo: skyPal.horizon,
-      specColor: spec,
-      night: skyPal.night,
-    });
+    _spec.copy(SPEC_DAY).lerp(SPEC_WARM, warm).lerp(SPEC_NIGHT, skyPal.night);
+    const fog = scene.fog as THREE.FogExp2;
+    _waterPhase.sunDir.copy(sun.position);
+    _waterPhase.fogColor.copy(fog.color);
+    _waterPhase.fogDensity = fog.density;
+    _waterPhase.skyHi.copy(skyPal.zenith);
+    _waterPhase.skyLo.copy(skyPal.horizon);
+    _waterPhase.specColor.copy(_spec);
+    _waterPhase.night = skyPal.night;
+    water.setPhase(_waterPhase);
     clouds.setPhase(skyPal.night, warm);
     // 远岛剪影随相位染色：雾色与天空中段的混合再压暗（大气透视的层次）
-    const silC = (scene.fog as THREE.FogExp2).color.clone().lerp(skyPal.mid, 0.5).multiplyScalar(0.8 - skyPal.night * 0.25);
-    for (const m of farIslandMats) m.color.copy(silC);
+    _silC.copy(fog.color).lerp(skyPal.mid, 0.5).multiplyScalar(0.8 - skyPal.night * 0.25);
+    for (const m of farIslandMats) m.color.copy(_silC);
   }
   setDayPhase(0);
 

@@ -7,3 +7,5 @@ dist/
 server/songs/
 .data
 bun.lock
+# 验证截图（53MB，本地留档即可，不进仓库）
+docs/evidence/

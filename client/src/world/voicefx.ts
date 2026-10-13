@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { terrainHeight } from "../heightfield";
+import { lightState } from "./lightstate";
+import { softRingTexture } from "./fxtextures";
 
 interface VoiceEmitter {
   rings: THREE.Mesh[];
@@ -18,7 +20,12 @@ interface VoiceEmitter {
  */
 export function createVoiceFX() {
   const group = new THREE.Group();
-  const ringGeo = new THREE.RingGeometry(0.8, 0.98, 48);
+  // RingGeometry(0.8, 0.98) 是硬边圆环 + 加法混合 = 一圈生硬的亮线。
+  // softRingTexture 的峰在贴图半径 0.72 处，所以半边长取 2/0.72 → 纹理峰值落在
+  // 世界半径 1.0，于是 scale 直接就是"看得见的光环半径"（不必再除 0.89）。
+  const RING_PEAK = 0.72;
+  const ringGeo = new THREE.PlaneGeometry(2 / RING_PEAK, 2 / RING_PEAK);
+  const ringTex = softRingTexture();
   const emitters = new Map<string, VoiceEmitter>();
 
   function hashKey(key: string) {
@@ -34,6 +41,7 @@ export function createVoiceFX() {
       const mesh = new THREE.Mesh(
         ringGeo,
         new THREE.MeshBasicMaterial({
+          map: ringTex,
           transparent: true,
           opacity: 0,
           blending: THREE.AdditiveBlending,
@@ -74,6 +82,10 @@ export function createVoiceFX() {
   }
 
   function update(dt: number, time: number) {
+    // 自发光 HDR 增益：光环的实际贡献 = color × opacity × 贴图 alpha，而 bloom 的
+    // 高通作用在线性、未色调映射的值上、阈值 0.8。`#9bd6b1` 线性亮度 0.576，
+    // 满音量时 0.576 × 0.62 = 0.36 —— 乘上增益才够过阈值，语音光环才会真的发光。
+    const gain = lightState.fxGain();
     for (const [key, emitter] of emitters) {
       if (!emitter.touched) {
         emitter.target = 0;
@@ -91,14 +103,14 @@ export function createVoiceFX() {
       // 弱信号提亮：level^0.65 让轻声说话也有可读的光圈（对齐音乐涟漪的存在感）
       const glow = Math.pow(emitter.level, 0.65);
 
-      // 脚下底环：随音量呼吸的常驻光环
+      // 脚下底环：随音量呼吸的常驻光环（呼吸整体高亮侧，不去扫过亮度阈值）
       const base = emitter.rings[3];
       const baseMat = base.material as THREE.MeshBasicMaterial;
       if (active) {
         const pulse = 0.62 + glow * 0.3 + 0.05 * Math.sin(time * 7 + emitter.phase * 6);
         base.position.set(emitter.pos.x, y, emitter.pos.z);
-        base.scale.setScalar(pulse / 0.89);
-        baseMat.color.copy(emitter.color);
+        base.scale.setScalar(pulse);
+        baseMat.color.copy(emitter.color).multiplyScalar(gain); // 基准色 copy 后乘，绝不原地累乘
         baseMat.opacity = Math.min(1, glow * 0.62);
         base.visible = true;
       } else {
@@ -113,8 +125,8 @@ export function createVoiceFX() {
         const fade = Math.pow(1 - phase, 1.3);
         const opacity = active ? glow * fade * (0.85 + 0.2 * Math.sin(time * 5 + i)) : 0;
         ring.position.set(emitter.pos.x, y, emitter.pos.z);
-        ring.scale.setScalar(radius / 0.89);
-        material.color.copy(emitter.color);
+        ring.scale.setScalar(radius);
+        material.color.copy(emitter.color).multiplyScalar(gain);
         material.opacity = opacity;
         ring.visible = opacity > 0.006;
       }

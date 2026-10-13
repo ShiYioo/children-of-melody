@@ -4,10 +4,15 @@ import { terrainHeight, terrainSlope } from "../heightfield";
 import { addCollider, clearColliders } from "../colliders";
 import type { ToonKit } from "./toon";
 import { lightState } from "./lightstate";
+import { patchRimMaterial } from "./rim";
 
 /**
- * 岛上的陈设：光遇风的圆冠树、薰衣草色岩石、发光小花、
+ * 岛上的陈设：光遇风的圆冠树、青灰岩石、发光小花、
  * 灯塔山丘的灯塔、篝火广场的石圈与木凳。
+ *
+ * 配色注：岩石原来用的是薰衣草紫（`#a79fd0` / `#9a94c4`，H≈253°）。
+ * 那不是光遇的岩石色 —— 光遇的崖壁是**青灰**（H≈200~210°），
+ * 紫岩会让整座岛偏"梦幻糖果"，和苦艾绿的草、暖米的沙三者凑不成一套地貌语言。
  */
 
 /** 几何有机化：沿径向做低频噪声鼓包——破掉完美球体的"程序图元"感，像手捏的 */
@@ -28,6 +33,15 @@ function organic(geo: THREE.BufferGeometry, amount: number, freq: number, seed: 
 }
 
 // ---------- 树（光遇式：高干微倾 + 大而扁的圆冠，像画出来的） ----------
+
+/**
+ * 果实材质做成**模块级单例**。
+ * 原来 makeTree 里每次 `new THREE.MeshBasicMaterial(...)` —— 12 棵树就有 12 个
+ * 参数完全相同、但对象不同的材质。合批是按材质**对象**归组的，
+ * 那样 12 棵树的果实会各归一组，合批也就白做了。
+ */
+const FRUIT_MAT = new THREE.MeshBasicMaterial({ color: "#ffdf8f" });
+
 function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Group {
   const g = new THREE.Group();
   const h = terrainHeight(x, z);
@@ -98,7 +112,7 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
     f.translate(Math.cos(a) * (0.6 + Math.random() * 0.6), 2.7 + Math.random() * 0.7, Math.sin(a) * (0.6 + Math.random() * 0.6));
     fruitGeos.push(f);
   }
-  const fruits = new THREE.Mesh(mergeGeometries(fruitGeos)!, new THREE.MeshBasicMaterial({ color: "#ffdf8f" }));
+  const fruits = new THREE.Mesh(mergeGeometries(fruitGeos)!, FRUIT_MAT);
   g.add(fruits);
 
   return g;
@@ -110,7 +124,7 @@ function makeRock(kit: ToonKit, x: number, z: number, s: number): THREE.Mesh {
   const ry = 0.62 + Math.random() * 0.25;
   geo.scale(1.15, ry, 0.9 + Math.random() * 0.3);
   organic(geo, s * 0.11, 1.6, x * 0.21 + z * 0.15); // 卵石的不规则起伏，不再是完美椭球
-  const m = new THREE.Mesh(geo, kit.mat(Math.random() < 0.5 ? "#a79fd0" : "#9a94c4"));
+  const m = new THREE.Mesh(geo, kit.mat(Math.random() < 0.5 ? "#93a2ab" : "#82909a"));
   const h = terrainHeight(x, z);
   m.position.set(x, h + s * 0.1, z); // 稍稍陷入地面
   m.rotation.y = Math.random() * Math.PI * 2;
@@ -161,28 +175,42 @@ function makeFlowers(): { inst: THREE.InstancedMesh; pos: THREE.Vector3[]; base:
   return { inst, pos, base: base.slice(0, placed * 3) };
 }
 
-// ---------- 草地（簇状草丛：每簇十几片宽弯叶片，像被风吹过的草甸） ----------
+// ---------- 草地（簇状草丛：每簇数片尖细弯叶，铺成草甸） ----------
+//
+// 这里的参数是实机标定过的。改造前草地是全画面最丑的一处——满地巨大的白色纸板，
+// 四个原因叠加：① 片元完全不透明 vec4(col, 1.0) ② DoubleSide ③ 叶尖只收到 65%（不是尖）
+// ④ 缩放 0.75~1.6 → 近 1 米高、近半米宽。
+// 而数值上的根因是：叶尖色 hi 的线性亮度 0.71，而地面渲染后约 0.25 ——
+// **草比地面亮 2.6 倍**，于是整片草甸在画面上读作"白纸"。
+//
+// 现在的取向：草是贴着地面的**细节**，不是独立发光体。叶尖亮度压到与地面同档略高，
+// 靠密度 + 收尖的叶形读作草绒。
 function makeGrass(): THREE.Mesh {
-  const CLUSTERS = 420;
-  const PER_CLUSTER = () => 10 + Math.floor(Math.random() * 6);
+  const CLUSTERS = 1500; // 一簇一簇，不是均匀撒点
+  const PER_CLUSTER = () => 6 + Math.floor(Math.random() * 4);
+  const BLADE_W = 0.09;
+  const BLADE_H = 0.30;
 
-  // 宽弯叶片：顶点沿高度向后弯
-  const blade = new THREE.PlaneGeometry(0.3, 0.62, 1, 4);
-  blade.translate(0, 0.31, 0);
+  // 尖细弯叶：叶尖收成 0（真正的尖），根部略窄 → 叶形轮廓
+  const blade = new THREE.PlaneGeometry(BLADE_W, BLADE_H, 1, 3);
+  blade.translate(0, BLADE_H / 2, 0);
   {
     const pos = blade.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const y = pos.getY(i);
-      const k = y / 0.62;
-      pos.setZ(i, pos.getZ(i) + k * k * 0.2);
-      pos.setX(i, pos.getX(i) * (1 - k * 0.35)); // 叶尖收窄
+      const k = y / BLADE_H;
+      // 叶形宽度：根 0.5 → 25% 高度处最宽 0.75 → 叶尖 0
+      const taper = (1 - k) * (0.5 + 0.5 * Math.min(1, k * 4));
+      pos.setX(i, pos.getX(i) * taper);
+      pos.setZ(i, pos.getZ(i) + k * k * 0.11); // 叶尖向外弯，不是笔直的牌
     }
+    blade.computeVertexNormals();
   }
 
   // 簇心：保持最小间距，让草甸一丛一丛
   const centers: [number, number][] = [];
   let guard = 0;
-  while (centers.length < CLUSTERS && guard++ < 8000) {
+  while (centers.length < CLUSTERS && guard++ < 20000) {
     const a = Math.random() * Math.PI * 2;
     const r = 7.5 + Math.random() * 43;
     const x = Math.cos(a) * r;
@@ -191,12 +219,12 @@ function makeGrass(): THREE.Mesh {
     if (h < 1.5 || terrainSlope(x, z) > 0.55) continue;
     let ok = true;
     for (const [cx, cz] of centers) {
-      if ((cx - x) * (cx - x) + (cz - z) * (cz - z) < 7) { ok = false; break; }
+      if ((cx - x) * (cx - x) + (cz - z) * (cz - z) < 4.2) { ok = false; break; }
     }
     if (ok) centers.push([x, z]);
   }
 
-  const total = centers.reduce((n, c) => n + PER_CLUSTER(), 0);
+  const total = centers.reduce((n) => n + PER_CLUSTER(), 0);
   const geo = new THREE.InstancedBufferGeometry();
   geo.index = blade.index;
   geo.attributes.position = blade.attributes.position;
@@ -205,20 +233,23 @@ function makeGrass(): THREE.Mesh {
   const base = new Float32Array(total * 3);
   const scales = new Float32Array(total);
   const rots = new Float32Array(total);
+  const tilts = new Float32Array(total);
   const tints = new Float32Array(total);
   let placed = 0;
   for (const [cx, cz] of centers) {
     const n = PER_CLUSTER();
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.random()) * 0.75;
+      const rr = Math.sqrt(Math.random()) * 0.55; // 簇内更紧凑，才读得出"一丛"
       const x = cx + Math.cos(a) * rr;
       const z = cz + Math.sin(a) * rr;
       base[placed * 3] = x;
-      base[placed * 3 + 1] = terrainHeight(x, z) - 0.04;
+      // 略微埋进地面：草根不该悬在坡面上
+      base[placed * 3 + 1] = terrainHeight(x, z) - 0.02 - Math.random() * 0.03;
       base[placed * 3 + 2] = z;
-      scales[placed] = 0.75 + Math.random() * 0.85;
-      rots[placed] = Math.random() * Math.PI;
+      scales[placed] = 0.62 + Math.random() * 0.58; // 0.19~0.36m 高
+      rots[placed] = Math.random() * Math.PI * 2;
+      tilts[placed] = Math.random() * 0.5; // 随机倾角：避免"一丛竖直纸片"
       tints[placed] = Math.random(); // 每片微调色
       placed++;
     }
@@ -227,6 +258,7 @@ function makeGrass(): THREE.Mesh {
   geo.setAttribute("aBase", new THREE.InstancedBufferAttribute(base, 3));
   geo.setAttribute("aScale", new THREE.InstancedBufferAttribute(scales, 1));
   geo.setAttribute("aRot", new THREE.InstancedBufferAttribute(rots, 1));
+  geo.setAttribute("aTilt", new THREE.InstancedBufferAttribute(tilts, 1));
   geo.setAttribute("aTint", new THREE.InstancedBufferAttribute(tints, 1));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
 
@@ -235,12 +267,15 @@ function makeGrass(): THREE.Mesh {
     uniforms: {
       uTime: { value: 0 },
       uFogColor: { value: new THREE.Color("#eecfa4") },
+      uFogDensity: { value: 0.0046 },
     },
     vertexShader: /* glsl */ `
       uniform float uTime;
+      uniform float uFogDensity;
       attribute vec3 aBase;
       attribute float aScale;
       attribute float aRot;
+      attribute float aTilt;
       attribute float aTint;
       varying vec2 vUv;
       varying float vTint;
@@ -249,14 +284,19 @@ function makeGrass(): THREE.Mesh {
         vUv = uv;
         vTint = aTint;
         vec3 p = position * aScale;
+        // 先绕自身 x 轴随机倾倒，再绕 y 轴随机朝向——两万个实例才有"草丛"的杂乱感
+        float ct = cos(aTilt), st = sin(aTilt);
+        p = vec3(p.x, ct * p.y - st * p.z, st * p.y + ct * p.z);
         float c = cos(aRot), s = sin(aRot);
         p = vec3(c * p.x - s * p.z, p.y, s * p.x + c * p.z);
-        // 整丛同一方向摆动（簇心相位），风拂过草甸
-        float sway = sin(uTime * 1.6 + aBase.x * 0.35 + aBase.z * 0.3) * 0.16;
-        p.x += sway * pow(uv.y, 1.8);
-        p.z += sway * 0.5 * pow(uv.y, 1.8);
+        // 风拂过草甸：按世界位置取相位，整片有波在走
+        float sway = sin(uTime * 1.6 + aBase.x * 0.35 + aBase.z * 0.3) * 0.055;
+        float bend = pow(uv.y, 1.8);
+        p.x += sway * bend;
+        p.z += sway * 0.5 * bend;
         vec4 mv = viewMatrix * modelMatrix * vec4(p + aBase, 1.0);
-        vFog = 1.0 - exp(-0.0042 * 0.0042 * dot(mv.xyz, mv.xyz));
+        // 雾密度跟随场景（原来写死 0.0042 → 夜里草地不跟随场景雾而浮出亮斑）
+        vFog = 1.0 - exp(-uFogDensity * uFogDensity * dot(mv.xyz, mv.xyz));
         gl_Position = projectionMatrix * mv;
       }
     `,
@@ -266,9 +306,11 @@ function makeGrass(): THREE.Mesh {
       varying float vFog;
       uniform vec3 uFogColor;
       void main() {
-        vec3 lo = vec3(0.19, 0.37, 0.22);
-        vec3 hi = vec3(0.58, 0.78, 0.42);
-        vec3 col = mix(lo, hi, vUv.y * (0.75 + vTint * 0.45));
+        // 线性空间的叶片色。叶尖亮度 ~0.26，与地面同档（原来是 0.71，比地面亮 2.6 倍）
+        vec3 lo = vec3(0.045, 0.105, 0.042);
+        vec3 hi = vec3(0.165, 0.305, 0.115);
+        float v = smoothstep(0.0, 0.85, vUv.y) * (0.72 + vTint * 0.5);
+        vec3 col = mix(lo, hi, clamp(v, 0.0, 1.0));
         col = mix(col, uFogColor, clamp(vFog, 0.0, 1.0));
         gl_FragColor = vec4(col, 1.0);
       }
@@ -420,30 +462,125 @@ export interface Campfire {
   setBoost: (v: number) => void;
 }
 
+/**
+ * 把一组静态实体按材质归组合批成一个 Mesh（每种材质一个）。
+ *
+ * 篝火是场景里唯一「近景常驻」的道具，石圈 8 块 + 柴堆 5 根原本是 **13 个独立 Mesh
+ * = 13 次 draw call**，每帧都在付。合并后只剩 4 个（实测材质数），省 9 次。
+ *
+ * 三个必须做对的地方：
+ *  1. `applyMatrix4(m.matrix)` —— 必须先 `updateMatrix()` 把 position/rotation/scale
+ *     烘进矩阵，否则所有石块会塌到原点堆成一坨。
+ *  2. 按材质分组 —— mergeGeometries 要求同一批几何体的属性集一致，材质不同也不能合。
+ *  3. 合并后**释放**被吃掉的中间几何体，否则这 13 份几何体留在显存里只是不再被画。
+ */
+function batchByMaterial(g: THREE.Group, meshes: THREE.Mesh[]): void {
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  for (const m of meshes) {
+    m.updateMatrix();
+    const geo = m.geometry.clone().applyMatrix4(m.matrix);
+    const arr = groups.get(m.material as THREE.Material);
+    if (arr) arr.push(geo);
+    else groups.set(m.material as THREE.Material, [geo]);
+  }
+  for (const m of meshes) {
+    g.remove(m);
+    m.geometry.dispose();
+  }
+  for (const [mat, geos] of groups) {
+    const merged = geos.length === 1 ? geos[0]! : mergeGeometries(geos)!;
+    if (geos.length > 1) for (const gg of geos) gg.dispose();
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+}
+
+/**
+ * 跨多个 Group 合批：把 meshes 里所有网格按材质归并，合并后的网格挂到 target 下。
+ *
+ * 与 batchByMaterial 的区别：那个只处理「同一个 Group 的直接子节点」，
+ * 这里要处理「12 棵树各自的子节点」。所以变换必须换成**世界矩阵**，
+ * 再乘上 target 世界矩阵的逆 —— 树的 Group 带 position/scale/rotation，
+ * 不换算的话 12 棵树会全部塌到原点、比例也全丢。
+ *
+ * mergeGeometries 还要求同一批几何体的**属性集完全一致**（都带 uv、或者都带 color），
+ * 所以必须按材质分组：树冠那份带顶点色，树干那份不带，混在一起会直接返回 null。
+ */
+function batchInto(target: THREE.Object3D, meshes: THREE.Mesh[]): void {
+  if (meshes.length === 0) return;
+  target.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(target.matrixWorld).invert();
+  const rel = new THREE.Matrix4();
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  for (const m of meshes) {
+    m.updateWorldMatrix(true, false);
+    rel.multiplyMatrices(inv, m.matrixWorld);
+    const geo = m.geometry.clone().applyMatrix4(rel);
+    const arr = groups.get(m.material as THREE.Material);
+    if (arr) arr.push(geo);
+    else groups.set(m.material as THREE.Material, [geo]);
+  }
+  for (const m of meshes) {
+    m.removeFromParent();
+    m.geometry.dispose();
+  }
+  for (const [mat, geos] of groups) {
+    const merged = geos.length === 1 ? geos[0]! : mergeGeometries(geos)!;
+    if (geos.length > 1) for (const gg of geos) gg.dispose();
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    target.add(mesh);
+  }
+}
+
 function makeCampfire(kit: ToonKit): Campfire {
   const g = new THREE.Group();
   g.position.set(0, terrainHeight(0, 0) + 0.05, 0);
+  // 静态实体先攒起来，最后一起合批（见 batchByMaterial）
+  const solids: THREE.Mesh[] = [];
 
-  // 石圈
+  // 石圈：围着火堆的一圈河石。
+  //
+  // 原来用 IcosahedronGeometry(0.3, 0) —— **detail 0** 是最扁的 20 面体，
+  // 再压到 y×0.7，在 toon 的硬边色阶下只剩几块死平的色块；
+  // 颜色 #b8a9c9 是淡薰衣草，跟真实被熏黑的火塘石完全不符。
+  // 这两点合起来就是审查里说的「篝火旁的石头是扁平的淡色多面体，观感偏纸片」。
+  //
+  // 改成和岛上大石（makeRock）同一套做法：细分球 + organic() 起伏 → 圆润的不规则河石；
+  // 颜色换成被熏过的灰褐，并用每块独立的缩放 / 滚转打破「一圈同样的东西」。
   for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    const stone = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 0), kit.mat("#b8a9c9"));
-    stone.position.set(Math.cos(a) * 1.5, 0.08, Math.sin(a) * 1.5);
-    stone.scale.set(1, 0.7, 1);
-    stone.rotation.y = Math.random() * Math.PI;
+    const a = (i / 8) * Math.PI * 2 + 0.21;
+    const rs = 0.235 + Math.random() * 0.13;
+    const sgeo = new THREE.SphereGeometry(rs, 10, 8);
+    sgeo.scale(1.12, 0.76 + Math.random() * 0.18, 0.92 + Math.random() * 0.2);
+    organic(sgeo, rs * 0.17, 2.3, i * 3.7); // 河石的不规则起伏
+    const stone = new THREE.Mesh(sgeo, kit.mat(Math.random() < 0.45 ? "#6b5b56" : "#8f8189"));
+    stone.position.set(Math.cos(a) * 1.5, 0.05 + Math.random() * 0.05, Math.sin(a) * 1.5);
+    stone.rotation.set((Math.random() - 0.5) * 0.6, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.6);
     stone.castShadow = true;
-    g.add(stone);
+    stone.receiveShadow = true;
+    solids.push(stone);
   }
-  // 柴堆：五根带锥度的柴交错架起（外端细内端粗），高低错落
+  // 柴堆：五根带锥度的柴交错架起（外端细内端粗），高低错落。
+  // 加一点 organic() 让柴身不再笔直 —— 7 段的正圆柱在近景里一眼就是「管」。
+  // 颜色也按根区分：架在火心上的两根已经烧成焦炭。
   for (let i = 0; i < 5; i++) {
     const len = 1.05 + (i % 2) * 0.22;
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.09, len, 7), kit.mat("#8a6248"));
+    const lgeo = new THREE.CylinderGeometry(0.055, 0.09, len, 8, 3);
+    organic(lgeo, 0.013, 6.5, i * 2.9);
+    const burnt = i % 2 === 0;
+    const log = new THREE.Mesh(lgeo, kit.mat(burnt ? "#4e3a30" : "#8a6248"));
     log.position.y = 0.14 + (i % 2) * 0.07;
     log.rotation.z = Math.PI / 2 - 0.2 - (i % 2) * 0.12;
     log.rotation.y = (i / 5) * Math.PI * 2 + 0.4;
     log.castShadow = true;
-    g.add(log);
+    log.receiveShadow = true;
+    solids.push(log);
   }
+  batchByMaterial(g, solids);
   // 炭火微光（火堆脚下一层暖光，夜里有余温感）
   const ember = new THREE.Mesh(
     new THREE.CircleGeometry(0.55, 16),
@@ -509,7 +646,7 @@ function makeCampfire(kit: ToonKit): Campfire {
     bench.rotation.y = -a + Math.PI / 2;
     bench.castShadow = true;
     bench.receiveShadow = true;
-    g.add(bench);
+    solids.push(bench); // 与石圈 / 柴堆一起合批（否则 5 条凳 = 5 次 draw call）
   }
 
   return {
@@ -550,20 +687,31 @@ export function createProps(kit: ToonKit): {
     [-14, -34, 1.4], [-21, -30, 1.15], [-7, -39, 1.05], [-19, -41, 1.3],
     [21, 23, 1.25], [15, 29, 1.35], [31, 17, 1.0], [-2, 35, 1.2],
   ];
+  // 12 棵树的网格先攒起来，最后跨树合批（见 batchInto）。
+  // 不合批的话是 12 × 6 = **72 个 Mesh**，而它们的材质其实只有三种
+  // （树干/根裙/枝桠共用 #b98b6f，树冠共用 #ffffff+顶点色，果实共用 FRUIT_MAT），
+  // 合批后只剩 3 个。
+  const treeMeshes: THREE.Mesh[] = [];
   for (const [x, z, s] of treeSpots) {
     if (terrainHeight(x, z) < 1.4) continue;
-    group.add(makeTree(kit, x, z, s));
+    const tg = makeTree(kit, x, z, s);
+    tg.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) treeMeshes.push(m);
+    });
     // 树干碰撞（冠不挡人）
     const h = terrainHeight(x, z);
     addCollider({ x, z, r: 0.32 * s, y0: h - 0.2, y1: h + 2.4 * s });
   }
+  batchInto(group, treeMeshes);
 
   // 岩石（圆润卵石，碰撞体在 makeRock 里注册——顶面随随机形状精确可站）
   const rockSpots: [number, number, number][] = [
     [40, 6, 1.8], [44, -6, 1.4], [-44, -20, 2.0], [-20, 42, 1.5], [10, -48, 1.8],
     [34, 30, 1.2], [-12, -18, 0.8], [48, 14, 2.2], [-6, 48, 1.3], [20, -44, 1.5],
   ];
-  for (const [x, z, s] of rockSpots) group.add(makeRock(kit, x, z, s));
+  // 10 块岩石同理：只有两种颜色，合批后从 10 个 Mesh 降到 2 个
+  batchInto(group, rockSpots.map(([x, z, s]) => makeRock(kit, x, z, s)));
 
   // ---- 发光小花：琴声靠近时随音符明灭（花随琴动） ----
   const flowers = makeFlowers();
@@ -596,7 +744,13 @@ export function createProps(kit: ToonKit): {
 
   const grass = makeGrass();
   group.add(grass);
-  updates.push((t) => (grass.material as THREE.ShaderMaterial).uniforms.uTime.value = t);
+  updates.push((t) => {
+    const u = (grass.material as THREE.ShaderMaterial).uniforms;
+    u.uTime.value = t;
+    // 雾跟随场景：草地自己写 GLSL 雾，必须每帧同步，否则夜里会浮出发亮的奶色斑块
+    (u.uFogColor.value as THREE.Color).copy(lightState.fogColor);
+    u.uFogDensity.value = lightState.fogDensity;
+  });
 
   const lh = makeLighthouse(kit);
   group.add(lh.group);
@@ -632,6 +786,20 @@ export function createProps(kit: ToonKit): {
       }
     }
   }
+
+  // ---- 给所有道具铺上统一的轮廓光 ----
+  // 只对 `MeshToonMaterial` / `MeshStandardMaterial` 生效：草是自定义 ShaderMaterial、
+  // 发光小花与灯塔灯芯是 MeshBasicMaterial，patchRimMaterial 会自动跳过它们 ——
+  // 这是对的，草叶和小花本身就是发光体，再勾一圈边只会变脏。
+  //
+  // 不必担心 program 数量暴涨：three 的 program cache key 用的是
+  // `material.customProgramCacheKey()`，其默认实现返回 `onBeforeCompile.toString()`，
+  // 而这里所有道具用的是**同一个** onBeforeCompile 函数 —— 因此它们共享同一批 program。
+  group.traverse((o) => {
+    const m = (o as THREE.Mesh).material;
+    if (!m) return;
+    for (const mm of Array.isArray(m) ? m : [m]) patchRimMaterial(mm);
+  });
 
   const pulseFlowers = (pos: THREE.Vector3, r = 7, strength = 1) => {
     const r2 = r * r;

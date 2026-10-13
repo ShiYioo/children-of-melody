@@ -9,8 +9,7 @@ import * as THREE from "three";
  *  - 顶行钉在肩上：角色加速→布因惯性滞后甩动；急转→甩向外侧；滑翔→上风气流托起鼓成翼
  *  - 与身体近似碰撞 + 地面碰撞：坐下时披风自然堆叠在地面
  */
-export class CapeSim {
-  readonly mesh: THREE.Mesh;
+export class CapeSim {  readonly mesh: THREE.Mesh;
   readonly cols: number;
   readonly rows: number;
   private pos: Float32Array;
@@ -48,8 +47,17 @@ export class CapeSim {
         if (i < this.rows - 2) addC(idx(i, j), idx(i + 2, j), 0.25); // 弯曲（更弱）
       }
     }
-    // 每行竖向步长（锚距硬约束的量尺）
-    this.rowLen = Math.abs(P(0).y - P((this.rows - 1) * this.cols).y) / Math.max(1, this.rows - 1) || 0.06;
+
+
+    //
+    // 必须取**未变形的标称行距**，不能用实测。原来是从 column 0 的首末顶点量 y 跨度，
+    // 而 shapeCape 恰好要把底边整条抬起来做扇贝下摆 —— 等于拿"已经被裁过的下摆"
+    // 当尺子：量出来只有标称的 73%（0.0412 对 0.0563）。于是下面 maxLen 里那个
+    // 1.45 倍余量实际只剩 1.06 倍，披风在快速移动/强风下会被提前锁直成一块硬板，
+    // 布的拉伸与回弹全被吃掉。
+    const nominalH = (geometry as unknown as { parameters?: { height?: number } }).parameters?.height;
+    const measured = Math.abs(P(0).y - P((this.rows - 1) * this.cols).y);
+    this.rowLen = ((nominalH ?? 0) > 0 ? (nominalH as number) : measured) / Math.max(1, this.rows - 1) || 0.06;
   }
 
   /**
@@ -73,12 +81,29 @@ export class CapeSim {
     const sinP = Math.sin(bodyPitch);
     const cosP = Math.cos(bodyPitch);
     // ---- 碰撞体（与渲染网格同参数 + 布料余量）----
-    // 躯干渲染网格是 (0.345, 0.405, 0.30) 的椭球、中心 y0.62；旧的双球近似
-    // X 向比身体窄（0.312 < 0.345）、下背部完全在球外——披风穿背的结构性根源
-    const T_X = 0.357 * Math.max(1, bodyScaleXZ);
-    const T_Y = 0.412;
-    const T_Z = 0.312 * Math.max(1, bodyScaleXZ);
-    const H_R = 0.376 * Math.max(1, bodyScaleXZ); // 头球（渲染 r0.365 + 余量）
+    // 注意：这里原来写的是「躯干渲染网格是 (0.345, 0.405, 0.30) 的椭球」——
+    // 那句注释**和代码对不上**：avatar.ts 里实际是 torso.scale.set(0.315, 0.345, 0.275)。
+    // 再加上躯干后来改成蛋形（按高度收锥），最大半宽其实是 0.309 而不是 0.345。
+    // 结果就是碰撞体比身体大出约 25%：披风被顶在离背 7.5cm 的地方 ——
+    // 侧视图里「披风与背之间那道缝」的根因。
+    //
+    // 现在按**真实几何**重新取：蛋形躯干的最大半宽
+    //   max over t of 0.315 * eggK(t) * sqrt(1-(2t-1)^2) ≈ 0.309  (x)
+    //   z 同理 ≈ 0.270，头球半径 0.32 * 1.06 = 0.339
+    // 再各加 20mm 布料余量（零厚度布面要真的被挡在身体外侧）。
+    // 旧值 0.387/0.442/0.342/0.406 的余量高达 75~100mm，太大，披风会浮起来。
+    // 余量取 55mm。三档实测（同一姿势、同一帧数）：
+    //   20mm 余量 → 下背捅出**三块**肉色                     ✗ 太松
+    //   45mm 余量 → 侧缝基本合上，但下背还剩**一道细缝**     △
+    //   55mm 余量 → 侧缝仍然贴着背，穿透消失                 ✓ 采用
+    //   75mm 余量（旧值）→ 完全不穿透，但侧视有明显的 5cm 缝 ✗ 太紧
+    // 注意：几何上 20mm 就已经把躯干和四肢全包住了，
+    // 所以穿透不是"包不住"，而是**布料求解器没完全收敛**（iters=5），
+    // 余量实际是在补求解误差，不是在补几何。
+    const T_X = 0.364 * Math.max(1, bodyScaleXZ);
+    const T_Y = 0.400;
+    const T_Z = 0.325 * Math.max(1, bodyScaleXZ);
+    const H_R = 0.394 * Math.max(1, bodyScaleXZ); // 头球（渲染 r0.339 + 55mm 余量）
     const torsoY = 0.62 * cosP + pivotY;
     const torsoZ = 0.62 * sinP;
     const headY = 1.18 * cosP + pivotY;
@@ -92,18 +117,27 @@ export class CapeSim {
       const h = this.dt;
       const n = this.pos.length / 3;
 
-      // Verlet 积分（顶行 pin 除外）
+      // Verlet 积分（顶行 pin 除外）。
+      //
+      // 加速度项写成 a·h²·ACCEL：原来写的是 a·h²·60，而 h 恒等于固定步长 dt = 1/60
+      // （上面的累加器保证了这一点），所以 h²·60 ≡ h —— 真正施加的位移是 a·h 而不是
+      // a·h²，**加速度被放大 60 倍**，只是靠 avatar.ts 里把 gravity 调成 6 来配平。
+      //
+      // 因为步长固定，行为上一直是对的，但这个 60 是隐式的：哪天有人把 dt 调成 1/120
+      // 去提高布料精度，重力和风会一起变成 4 倍，整件披风直接爆炸。这里把它写成
+      // 看得见的常数，并按 h² 正确缩放 —— 在 dt = 1/60 下与原来逐位相同。
+      const ACCEL = 60;
       for (let v = this.cols; v < n; v++) {
         const o = v * 3;
         for (let c = 0; c < 3; c++) {
           const p = this.pos[o + c];
           const pr = this.prev[o + c];
           this.prev[o + c] = p;
-          this.pos[o + c] = p + (p - pr) * damping + windLocal.getComponent(c) * h * h * 60;
+          this.pos[o + c] = p + (p - pr) * damping + windLocal.getComponent(c) * h * h * ACCEL;
         }
       }
       // 重力（局部 y-）
-      for (let v = this.cols; v < n; v++) this.pos[v * 3 + 1] -= gravity * h * h * 60;
+      for (let v = this.cols; v < n; v++) this.pos[v * 3 + 1] -= gravity * h * h * ACCEL;
 
       // 约束松弛
       for (let it = 0; it < iters; it++) {

@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { terrainHeight, WATER_LEVEL } from "../heightfield";
+import { lightState } from "./lightstate";
+import { softDotTexture } from "./fxtextures";
 
 /**
  * 漂浮光尘（岛上处处可见的暖色微光）、
@@ -12,6 +14,18 @@ interface DriftPoints {
 }
 
 const DRY_GROUND_MARGIN = 0.35;
+
+// ---- 屏幕空间点径 ----
+// 原来顶点着色器里写死 `gl_PointSize = uSize * (140.0 / -mv.z)`。140 等于隐式假设
+// 画布高 280px（three 的 PointsMaterial 用的是 height*0.5），一旦视口高度或
+// 设备像素比变了，所有光点的粗细就跟着变、且和别的粒子系统对不上。
+// 这里把 720p 下已经调好的观感固化成参考值，实际按 drawing buffer 高度等比缩放。
+const SIZE_K = 140;
+const SIZE_REF_H = 720;
+function drawingBufferHeight(): number {
+  return window.innerHeight * (window.devicePixelRatio || 1);
+}
+const pointSizeScale = (bufH: number) => SIZE_K * (bufH / SIZE_REF_H);
 
 /** 粒子会在着色器里水平漂移；整段漂移范围都必须留在旱地上。 */
 function driftStaysOnDryGround(x: number, z: number, drift: number): boolean {
@@ -74,11 +88,14 @@ function makeDriftPoints(opts: {
       uSize: { value: size },
       uDrift: { value: drift },
       uOpacity: { value: opacity },
+      uEmissive: { value: lightState.fxGain() },
+      uSizePx: { value: pointSizeScale(drawingBufferHeight()) },
     },
     vertexShader: /* glsl */ `
       uniform float uTime;
       uniform float uSize;
       uniform float uDrift;
+      uniform float uSizePx;
       attribute vec3 aBase;
       attribute float aPhase;
       varying float vTw;
@@ -87,27 +104,44 @@ function makeDriftPoints(opts: {
         p.x += sin(uTime * 0.3 + aPhase) * uDrift;
         p.y += sin(uTime * 0.2 + aPhase * 1.7) * uDrift * 0.6;
         p.z += cos(uTime * 0.26 + aPhase) * uDrift;
-        vTw = 0.55 + 0.45 * sin(uTime * 1.5 + aPhase * 3.0);
+        // 呼吸幅度收窄到 0.4~1.0。原来 0.10~1.00，大部分时间在 bloom 阈值上下反复
+        // 穿越，读起来是"忽明忽灭的斑点"；收窄之后是"一直在发光、只是明暗在变"。
+        vTw = 0.7 + 0.3 * sin(uTime * 1.5 + aPhase * 3.0);
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_PointSize = uSize * (140.0 / -mv.z);
+        gl_PointSize = uSize * uSizePx / -mv.z;
         gl_Position = projectionMatrix * mv;
       }
     `,
     fragmentShader: /* glsl */ `
       uniform vec3 uColor;
       uniform float uOpacity;
+      uniform float uEmissive;
       varying float vTw;
       void main() {
         vec2 d = gl_PointCoord - 0.5;
         float a = smoothstep(0.5, 0.05, length(d));
-        gl_FragColor = vec4(uColor, a * uOpacity * vTw);
+        // 亮度折进**颜色**而不是 alpha：加法混合下实际贡献是 color*a，
+        // 而 bloom 的高通作用在线性、未色调映射的值上、阈值 0.8。
+        // 原来 color 亮度 0.830 × opacity 0.35 × 闪烁，峰值只有 0.29 ——
+        // 这个光点在物理上永远不可能泛光。乘 uEmissive 之后才真的"发光"。
+        gl_FragColor = vec4(uColor * uOpacity * vTw * uEmissive, a);
       }
     `,
   });
 
   const points = new THREE.Points(geo, mat);
   points.frustumCulled = false;
-  return { points, update: (t) => (mat.uniforms.uTime.value = t) };
+  return {
+    points,
+    update: (t) => {
+      mat.uniforms.uTime.value = t;
+      // 自发光增益跟着昼夜走：环境越暗，光点越显眼
+      mat.uniforms.uEmissive.value = lightState.fxGain();
+      // 视口尺寸可能变（窗口缩放/旋转）：点径按 drawing buffer 高度等比跟随
+      const s = pointSizeScale(drawingBufferHeight());
+      if (mat.uniforms.uSizePx.value !== s) mat.uniforms.uSizePx.value = s;
+    },
+  };
 }
 
 /** 全岛漂浮的暖色光尘（落点按地形高度过滤，只出现在旱地上空）。
@@ -119,7 +153,9 @@ export function createMotes(): DriftPoints {
     area: { r: 52, yMin: 0.6, yMax: 13 },
     size: 0.42,
     drift: 1.4,
-    opacity: 0.35,
+    // 0.35 → 0.5：配合 fxGain() 把峰值线性亮度从 0.29 抬到 1.33，才过得了 bloom
+    // 阈值 0.8。亮度不再靠"画一个更亮的圆点"来假装，而是真的进入 HDR 泛光。
+    opacity: 0.5,
   });
 }
 
@@ -156,8 +192,14 @@ export function createEmbers(): DriftPoints & { rise: (dt: number) => void } {
   }
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
 
+  // 余烬：必须给贴图。three 的 points.glsl.js 只在 `#ifdef USE_MAP` 下采样
+  // gl_PointCoord —— 不配 map 的 PointsMaterial 渲染出来是**实心方块**。
+  // 颜色同样要乘 HDR 增益：`#ffc07a` 线性亮度 0.543 × opacity 0.9 = 0.49，
+  // 一直在 bloom 阈值 0.8 以下，火星子从来没有真正发过光。
+  const emberBase = new THREE.Color("#ffc07a");
   const mat = new THREE.PointsMaterial({
-    color: "#ffc07a",
+    color: emberBase.clone().multiplyScalar(lightState.fxGain()),
+    map: softDotTexture(),
     size: 0.11,
     transparent: true,
     opacity: 0.9,
@@ -191,7 +233,10 @@ export function createEmbers(): DriftPoints & { rise: (dt: number) => void } {
 
   return {
     points,
-    update: (t) => void t,
+    update: () => {
+      // 从基准色 copy 再乘，绝不在原地累乘（那是指数爆炸）
+      mat.color.copy(emberBase).multiplyScalar(lightState.fxGain());
+    },
     rise: (dt) => drift(dt, performance.now() / 1000),
   };
 }

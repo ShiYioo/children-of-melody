@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createToonKit } from "./world/toon";
+import { createToonKit, painterlyGradient } from "./world/toon";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
@@ -7,6 +7,8 @@ import { CapeSim } from "./cape";
 import { Spring } from "./motion";
 import { terrainHeight } from "./heightfield";
 import { lightState } from "./world/lightstate";
+import { softDotTexture, softRingTexture } from "./world/fxtextures";
+import { patchRimMaterial, updateRim } from "./world/rim";
 
 /**
  * 光遇风小人 · 二代
@@ -134,29 +136,69 @@ const _ev1 = new THREE.Vector3();
 const _ev2 = new THREE.Vector3();
 const _ev3 = new THREE.Vector3();
 
-// ---- GLB 角色的菲涅尔边缘光（共享 uniforms，昼夜换色在 animate 里推进） ----
-const rimColorUni = { value: new THREE.Color("#ffd9a8") };
-const rimIntUni = { value: 0.3 };
-const RIM_DAY = new THREE.Color("#ffd9a8");
-const RIM_NIGHT = new THREE.Color("#aebfff");
-function patchRimMaterial(mat: THREE.Material) {
-  const m = mat as THREE.MeshStandardMaterial;
-  if (!m.isMeshStandardMaterial || (m as unknown as { __rimmed?: boolean }).__rimmed) return;
-  (m as unknown as { __rimmed?: boolean }).__rimmed = true;
-  m.onBeforeCompile = (shader) => {
-    shader.uniforms.uRimColor = rimColorUni;
-    shader.uniforms.uRimInt = rimIntUni;
-    shader.fragmentShader = shader.fragmentShader
-      .replace("void main() {", "uniform vec3 uRimColor;\nuniform float uRimInt;\nvoid main() {")
-      .replace(
-        "#include <fog_fragment>",
-        /* glsl */ `
-        // 菲涅尔边缘光：视角掠过表面处泛起的光边（光遇角色的逆光轮廓）
-        float rimF = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 3.0);
-        gl_FragColor.rgb += uRimColor * rimF * uRimInt;
-        #include <fog_fragment>`
-      );
-  };
+// ---- 菲涅尔边缘光已抽到 world/rim.ts（角色与道具共用同一套） ----
+
+/** painterlyGradient() 每次调用都会新建一张 DataTexture，材质初始化时取一次共用 */
+let _glbGradient: THREE.DataTexture | null = null;
+function glbGradient(): THREE.DataTexture {
+  return (_glbGradient ??= painterlyGradient());
+}
+
+/**
+ * 把 glTF 的 PBR 材质统一到全岛的 toon 美术语言。
+ *
+ * 为什么必须转：GLB 角色是 `MeshStandardMaterial`（PBR：metalness / roughness /
+ * normalMap 一起做微表面着色），而程序化角色与整个岛都是 `MeshToonMaterial`
+ * （把 N·L 量化成几档色阶）。两者并排出现时一眼就能看出「一个是从别的管线导入的、
+ * 一个是在这个项目里画的」——这就是审查里说的「混合美术语言」。
+ *
+ * 三个「PBR 味」的来源，逐个去掉：
+ *  1. metalness / roughness 的镜面项 —— toon 没有这一项。去掉后表面立刻变哑光。
+ *  2. normalMap 的微表面起伏 —— 留着会让色阶上出现连续明暗过渡，和 toon 的硬边色阶打架。
+ *     这里本来也没接。
+ *  3. 自发光。`elaina.glb` 的 10 个材质全是 `baseColorFactor:[0,0,0,1]` + 纯 emissiveMap
+ *     （作者把整张外观烘进了 emissiveMap）。**直接丢掉 emissive 会变成一个纯黑块**，
+ *     所以遇到「底色是黑、没有漫反射贴图、但有 emissiveMap」的材质，就把
+ *     emissiveMap 当作漫反射贴图接过来，让它重新参与光照，而不是自发光。
+ *     同时保留一层**减弱的**自发光作为下限，避免个别部件塌成黑块。
+ */
+function toonifyGLBMaterial(mat: THREE.Material): THREE.Material {
+  const src = mat as THREE.MeshStandardMaterial;
+  const flags = mat as unknown as { isMeshStandardMaterial?: boolean; isMeshToonMaterial?: boolean };
+  // ⚠ 这里**不能**用「已经在源材质上打过标记就跳过」的写法。
+  // SkeletonUtils.clone 是**共享材质**的：第一个实例转换时会新建材料、
+  // 源材质始终保持原样。如果在源材质上打标记，第二个实例（另一个玩家 / NPC）
+  // 再遍历时就会直接返回那个**未转换的 Standard 材质**，
+  // 于是"自己看是 toon、看别人还是 PBR"。
+  // 转换本身是幂等的（不修改源材质），所以重复调用是安全且正确的。
+  if (!flags.isMeshStandardMaterial || flags.isMeshToonMaterial) return mat;
+
+  const colorIsBlack = src.color ? src.color.r + src.color.g + src.color.b < 0.02 : true;
+  const useEmissiveAsMap = !src.map && colorIsBlack && !!src.emissiveMap;
+  const map = src.map ?? (useEmissiveAsMap ? src.emissiveMap : null);
+  const color = useEmissiveAsMap || (colorIsBlack && !src.map) ? new THREE.Color(1, 1, 1) : src.color.clone();
+
+  const toon = new THREE.MeshToonMaterial({
+    color,
+    map,
+    gradientMap: glbGradient(),
+    vertexColors: src.vertexColors,
+    transparent: src.transparent,
+    opacity: src.opacity,
+    alphaTest: src.alphaTest,
+    side: src.side,
+    depthWrite: src.depthWrite,
+  });
+  const hasGlow = !!src.emissiveMap || (!!src.emissive && src.emissive.r + src.emissive.g + src.emissive.b > 0.001);
+  if (hasGlow) {
+    // 减弱到 0.35：保留一点「灵体自发光」的气质（光遇的角色本来就会微微发亮），
+    // 但不再靠它承担整张外观 —— 那才是「两张皮」的根源。
+    toon.emissive = (src.emissive ? src.emissive.clone() : new THREE.Color(1, 1, 1)).multiplyScalar(0.35);
+    if (src.emissiveMap) toon.emissiveMap = src.emissiveMap;
+    toon.emissiveIntensity = 1;
+  }
+  toon.name = src.name ? `${src.name}__toon` : "glb__toon";
+  return toon;
 }
 
 /** 披风材质：普通 toon 双面——形变与法线全部由 CapeSim 物理每帧驱动。
@@ -191,6 +233,23 @@ function shadowTexture(): THREE.Texture {
 
 export function createAvatar(opts: { name: string; hue: number; self?: boolean; model?: AvatarModel }): Avatar {
   const kit = createToonKit();
+
+  // ---- 角色材质统一入口 ----
+  // **这里修的是一个真实存在过的 bug。** `toon.ts` 的 `mat()` 签名是
+  // `mat(color, vertexColors = false, brushRepeat = 2)` —— 第三个参数**默认 2**，
+  // 而同文件顶部的设计注释写的是「传 0 表示不用笔触图（纯色 + ramp，角色用）」。
+  // 结果 `avatar.ts` 里 10 处 `kit.mat(color)` 全都没传第三个参数，
+  // 角色的每一块皮肤都被**静默**糊上了一层笔刷噪声。
+  //
+  // 尺度算一下就知道为什么这叫"塑料感"：笔刷贴图在角色身上按 1.5m 见方铺 2 次
+  // → 每格 0.75m，贴图里柔斑直径 26~54px/256px → 实际柔斑 **7.6~15.8cm**，
+  // 只有部件尺寸的 1/10。审查 1.5 说「建议改成波长 ≥ 8 倍部件尺寸的低频色斑」，
+  // 对 1.5m 高的角色来说 8 倍就是 12m —— 现实答案就是**别用笔刷图**，纯色 + ramp。
+  //
+  // 注意：必须定义在 `createAvatar` 的**函数体顶层**。第一版我顺手插在
+  // `makeLeg()` 里，结果出了 6 个 TS2304 —— `cmat` 只在 `makeLeg` 内部可见。
+  // 以后加角色材质一律走这个包装；要笔刷请显式调 `kit.mat(c, false, N)`。
+  const cmat = (color: string, vertexColors = false) => kit.mat(color, vertexColors, 0);
   const group = new THREE.Group();
 
   const bodyGroup = new THREE.Group();
@@ -248,13 +307,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       importedModel.traverse((obj) => {
         obj.castShadow = true;
         obj.receiveShadow = true;
-        const meshMats = (obj as THREE.Mesh).material;
-        if (meshMats) for (const mm of Array.isArray(meshMats) ? meshMats : [meshMats]) patchRimMaterial(mm);
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.material) return;
+        // 顺序要紧：先统一美术语言（PBR → toon），再注入轮廓光。
+        // 反过来的话 patchRimMaterial 打在旧材质上，换材质时轮廓光就丢了。
+        const orig = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const conv = orig.map(toonifyGLBMaterial);
+        mesh.material = conv.length === 1 ? conv[0]! : conv;
+        for (const mm of conv) patchRimMaterial(mm);
         if (obj.name.toLowerCase().includes("cape")) {
-          const material = (obj as THREE.Mesh).material;
-          for (const mat of Array.isArray(material) ? material : [material]) {
-            if (mat && "color" in mat) (mat as THREE.MeshStandardMaterial).color.setHSL(opts.hue / 360, 0.42, 0.52);
-          }
+          for (const mm of conv) if (mm && "color" in mm) (mm as THREE.MeshStandardMaterial).color.setHSL(opts.hue / 360, 0.42, 0.52);
         }
       });
       group.add(importedModel);
@@ -363,32 +425,43 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // ---- 配色 ----
   const capeOuter = new THREE.Color().setHSL(opts.hue / 360, 0.46, 0.56);
   const capeInner = capeOuter.clone().offsetHSL(0, 0.02, 0.12);
-  const hoodColor = capeOuter.clone().offsetHSL(0, 0, -0.06);
+  // 兜帽/头发：**独立的一层色**，不再从披风色派生。
+  // 原来 `hoodColor = capeOuter.offsetHSL(0, 0, -0.06)` —— 兜帽和披风同色，
+  // 正面看头身之间没有色彩分层：脸是奶油、身体是奶油、头顶还是奶油，整颗头是一块。
+  // 光遇的角色头顶（头发/兜帽）是独立成层的，这是头脸能被"读出来"的关键之一 ——
+  // 和上一轮加袍摆是同一个思路：**用一层深浅把结构讲清楚，而不是靠描边**。
+  // 取暖蜜色：与脸的 #f0dcc0、身体的 #f6ecd8 同属暖调但明显更深，放在一起不打架。
+  const hoodColor = new THREE.Color("#eec08a");
   const skin = "#f6ecd8"; // 奶白
   const skinDark = "#e6d5ba";
-  const faceDark = "#2e2745"; // 面具脸
+  const faceDark = "#f0dcc0"; // 脸：暖调奶油（比身体的 #f6ecd8 暖一档，头身才有分界）
+  // 曾经是 #2e2745（深紫）。那版把整颗头铺成深色，正面看像戴了面罩/头盔 ——
+  // 这是全身上下**最不像光遇**的一点：光遇的脸是柔和的浅色，靠 bloom 让眼睛发光，
+  // 不是靠深底去"衬"眼睛。我们的 bloom 阈值 0.8、眼睛线性亮度约 1.16，
+  // 换成浅底照样过阈值、照样有光晕。
 
   // 腿（两段：大腿+小腿+脚，膝盖能弯）——短粗化：半径加粗，幼儿的胖藕腿
   interface Limb2 {
     root: THREE.Group; // 髋/肩
     joint: THREE.Group; // 膝/肘
   }
-  const thighGeo = new THREE.CapsuleGeometry(0.092, 0.12, 4, 8);
-  const shinGeo = new THREE.CapsuleGeometry(0.074, 0.10, 4, 8);
-  const footGeo = new THREE.SphereGeometry(0.086, 8, 6);
+  // 同手臂：腿的三段半径也要连续。原来 0.092 → 0.074 → 0.086，两个跳变。
+  const thighGeo = new THREE.CapsuleGeometry(0.092, 0.12, 6, 20);
+  const shinGeo = new THREE.CapsuleGeometry(0.083, 0.10, 6, 20);
+  const footGeo = new THREE.SphereGeometry(0.083, 14, 12);
   const makeLeg = (side: number): Limb2 => {
     const root = new THREE.Group();
     root.position.set(0.11 * side, 0.46, 0);
-    const thigh = new THREE.Mesh(thighGeo, kit.mat(skinDark));
+  const thigh = new THREE.Mesh(thighGeo, cmat(skinDark));
     thigh.position.y = -0.09;
     root.add(thigh);
     const joint = new THREE.Group();
     joint.position.y = -0.19;
     root.add(joint);
-    const shin = new THREE.Mesh(shinGeo, kit.mat(skinDark));
+    const shin = new THREE.Mesh(shinGeo, cmat(skinDark));
     shin.position.y = -0.075;
     joint.add(shin);
-    const foot = new THREE.Mesh(footGeo, kit.mat(skinDark));
+    const foot = new THREE.Mesh(footGeo, cmat(skinDark));
     foot.position.set(0, -0.15, 0.03);
     joint.add(foot);
     thigh.castShadow = shin.castShadow = true;
@@ -398,31 +471,110 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const legL = makeLeg(-1);
   const legR = makeLeg(1);
 
-  // ---- 身体：蛋形（下宽上窄的胖藕躯干，比上下一样粗的胶囊更幼态） ----
-  const torso = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 14), kit.mat(skin));
-  torso.scale.set(0.315, 0.345, 0.275);
-  torso.position.y = 0.60;
+  // ---- 身体：真正的蛋形（下宽上窄的胖藕躯干，比上下一样粗的胶囊更幼态） ----
+  // 原来是 `SphereGeometry` + `scale` —— 那是个**纯椭球，上下完全对称**，
+  // 而这里却写着「下宽上窄」。四角度自评里「躯干接近一个完美球体」就是这么来的。
+  //
+  // 现在按高度给一个锥度系数 k(t)，t 从 0（底）到 1（顶）：
+  //   底部 ×1.06（下摆微外扩）→ 中部 ×0.97 → 顶部 ×0.70（肩部收束）
+  // 这样才既有光遇那种「一颗圆头 + 一件圆袍」的幼态，又不是一个球。
+  // 注意：最大半宽 0.315×1.06 = 0.334，仍小于披风碰撞体的 T_X=0.387，不会穿模。
+  const eggK = (t: number) => 1.06 - 0.36 * t * t;
+  // 蛋形躯干的半径剖面（x 方向，单位米）
+  const rEgg = (y: number) => {
+    const yl = (y - 0.60) / 0.345;
+    if (Math.abs(yl) >= 1) return 0;
+    return 0.315 * Math.sqrt(1 - yl * yl) * eggK((yl + 1) / 2);
+  };
+  // ---- 领口 / 下摆**做进剖面本身**，不再叠偏移球壳 ----
+  // 原来这两处是"再套一层放大 4.5%~10% 的球壳"：两个曲面一相交必然是硬台阶。
+  // 特写里领口像一块纸围兜、下摆像一道箍，整件衣服读作"套了几个圈"。
+  // 改成在剖面上加两处**高斯鼓包** —— 表面连续、法线也连续，
+  // 鼓包本身就是布的卷边，没有相交边，也就没有台阶。
+  // 合并两层球壳会**把可见外表面缩小**，必须补回来：
+  //   原来最宽处是「袍子外壳」= 0.315×1.06×1.045 = 0.349
+  //   合进剖面后只剩「躯干本体」= 0.310  → 少了 11%
+  // 后果很具体：披风碰撞体 T_X=0.364 是按 0.349 定的，
+  // 身体一缩，碰撞体就显得大了一圈，披风裹到身前把身体两侧盖住 ✗
+  // 所以整体乘回 0.349/0.310 = 1.126，让外表面回到原来的位置。
+  const BODY_W = 1.126;
+  const collarRoll = (y: number) => 0.030 * Math.exp(-(((y - 0.858) / 0.030) ** 2));
+  const hemLip = (y: number) => 0.024 * Math.exp(-(((y - 0.418) / 0.024) ** 2));
+  const bodyPts: THREE.Vector2[] = [];
+  // ⚠️ 剖面点必须**从下往上**给！
+  // LatheGeometry 按点的顺序决定绕序，反了就会让**全部法线朝内** ——
+  // 材质是 FrontSide（默认），正面被背面剔除，整个躯干直接凭空消失 ✗
+  // （我第一版写成了从上往下 0.952 → 0.242，实测 1364 个法线全部朝里、0 个朝外。）
+  for (let i = 0; i <= 46; i++) {
+    const y = 0.242 + (0.952 - 0.242) * (i / 46);
+    bodyPts.push(new THREE.Vector2(Math.max(0.0008, (rEgg(y) + collarRoll(y) + hemLip(y)) * BODY_W), y));
+  }
+  const torsoGeo = new THREE.LatheGeometry(bodyPts, 30);
+  // 袍子的颜色分界用**顶点色**，不用第二层几何体。
+  // 领口以下 = 袍色，颈子以上 = 皮肤色，中间 2cm 软过渡 ——
+  // 这是"一件衣服"该有的分界，而且不产生任何几何台阶。
+  {
+    const pos = torsoGeo.attributes.position as THREE.BufferAttribute;
+    const col = new Float32Array(pos.count * 3);
+    const cSkin = new THREE.Color(skin);
+    const cRobe = new THREE.Color("#ead6b6");
+    const tmp = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const t = Math.min(1, Math.max(0, (0.890 - pos.getY(i)) / 0.020));
+      tmp.copy(cSkin).lerp(cRobe, t);
+      col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+    }
+    torsoGeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  }
+  const torso = new THREE.Mesh(torsoGeo, cmat("#ffffff", true));
+  // 剖面是圆的，这里把 z 压扁 —— 保留原来 (0.315, 0.345, 0.275) 的椭圆截面比例。
+  // 剖面 y 已经是绝对世界高度，所以不需要再 position.y 了。
+  torso.scale.set(1, 1, 0.275 / 0.315);
   torso.castShadow = true;
   bodyGroup.add(torso);
 
+  // （袍子已经做进上面的剖面里了，这里不再有第二层球壳。）
+
+  // （披风领口也已经做进上面的剖面里了 —— 见 collarRoll。）
+
   // ---- 手臂（两段：大臂+小臂+手，手肘微弯）——同样短粗，手是圆手套 ----
-  const upperArmGeo = new THREE.CapsuleGeometry(0.058, 0.10, 4, 8);
-  const foreArmGeo = new THREE.CapsuleGeometry(0.05, 0.085, 4, 8);
-  const handGeo = new THREE.SphereGeometry(0.062, 8, 6);
+  // 四肢的**相邻段半径必须连续**，否则每一处跳变都是一道可见的缝。
+  // 原来是 上臂 0.058 → 小臂 0.050 → 手 0.062：两个跳变，
+  // 侧面看整条手臂是"一串珠子/一条毛毛虫" —— 这是全身上下最粗糙的一处。
+  // 现在小臂提到 0.055（与上臂只差 3mm）、手收到 0.057（与小臂只差 2mm），
+  // 三段的半径几乎连成一条线，缝就看不出来了。
+  // 顺带把径向分段 16 → 20，轮廓更圆。
+  const upperArmGeo = new THREE.CapsuleGeometry(0.058, 0.10, 6, 20);
+  const foreArmGeo = new THREE.CapsuleGeometry(0.055, 0.085, 6, 20);
+  const handGeo = new THREE.SphereGeometry(0.057, 14, 12);
+  // 手臂挂点 = 躯干在肩高处的半宽 + 大臂半径的 60%。
+  // 注意**必须带上 BODY_W**：剖面整体乘过 1.126，这里不跟就会脱开。
+  // （原来公式里是裸的 0.315，合并袍壳之后就过期了。）
+  // 取 60% 而不是 100%：让大臂**嵌进**躯干而不是与它相切 ——
+  // 相切只碰在一条线上，侧面看是一道凹痕；嵌进去则是从体内长出来。
+  const SHOULDER_Y = 0.638; // 肩高 0.82 在单位球坐标里的 y
+  const shoulderHalfW =
+    0.315 * Math.sqrt(1 - SHOULDER_Y * SHOULDER_Y) * eggK((SHOULDER_Y + 1) / 2) * BODY_W;
+  const armX = shoulderHalfW + 0.058 * 0.6;
   const makeArm = (side: number): Limb2 => {
     const root = new THREE.Group();
-    root.position.set(0.30 * side, 0.82, 0);
+    root.position.set(armX * side, 0.82, 0);
     root.rotation.z = -0.16 * side; // 微微外张
-    const upper = new THREE.Mesh(upperArmGeo, kit.mat(skinDark));
+    // 这里原来有一个 r=0.076 的「肩关节球」。撤掉了 —— 它本身就是一处"球贴球"。
+    // 当初加它是因为大臂与躯干**相切**（挂点写死 0.30 = 半宽 + 大臂半径），
+    // 两者只碰在一条线上，需要一颗球去盖凹痕。
+    // 现在挂点按"半宽 + 60% 大臂半径"算，大臂嵌进躯干 0.035m，
+    // 直接从体内长出来，不再需要那颗球。
+    const upper = new THREE.Mesh(upperArmGeo, cmat(skinDark));
     upper.position.y = -0.075;
     root.add(upper);
     const joint = new THREE.Group();
     joint.position.y = -0.155;
     root.add(joint);
-    const fore = new THREE.Mesh(foreArmGeo, kit.mat(skinDark));
+    const fore = new THREE.Mesh(foreArmGeo, cmat(skinDark));
     fore.position.y = -0.06;
     joint.add(fore);
-    const hand = new THREE.Mesh(handGeo, kit.mat(skin));
+    const hand = new THREE.Mesh(handGeo, cmat(skin));
     hand.position.y = -0.125;
     joint.add(hand);
     upper.castShadow = true;
@@ -437,23 +589,77 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   // 兜帽压过的五官比例自动跟着对）——接近三头身的幼态比例
   const headGroup = new THREE.Group();
   headGroup.position.y = 1.18;
-  headGroup.scale.setScalar(1.12);
+  headGroup.scale.setScalar(1.06);
   bodyGroup.add(headGroup);
 
-  const face = new THREE.Mesh(new THREE.SphereGeometry(0.32, 18, 16), kit.mat(faceDark));
+  const face = new THREE.Mesh(new THREE.SphereGeometry(0.32, 26, 20), cmat(faceDark));
   face.scale.set(1, 1.06, 0.96);
   face.castShadow = true;
   headGroup.add(face);
 
+  // ---- 面具 ----
+  // 四角度转台里最刺眼的一点：**头就是一颗保龄球**。原因是 `faceDark` 铺满整个头球，
+  // 颅骨和脸之间没有任何分界，眼睛和腮红像贴在一颗球上。
+  // 光遇的脸是有边界的 —— 头顶归兜帽/头发，脸是一块有形状的面。
+  //
+  // 做法：在脸的前方叠一层**略微外凸、颜色略浅**的球面片，只覆盖正面 162°×85° 的范围。
+  // 它比脸皮大 0.006（0.326 vs 0.32），所以永远浮在外面、不会 z-fighting；
+  // 边界那一圈会吃到菲涅尔边光，正面就有了「一张脸」的轮廓。
+  // 颜色第一版给 #3d3660（只比 faceDark #2e2745 亮一点），实测**太含蓄**：
+  // 渲染出来只在下巴附近有一条略浅的带，没把"球"读成"脸"。加到 #4d4576 才立得住。
+  // 注意 three 的球面参数化：phi=π/2 才是 +Z（正面），不是 0。
+  const mask = new THREE.Mesh(
+    new THREE.SphereGeometry(
+      0.326, 24, 18,
+      Math.PI * 0.5 - Math.PI * 0.45, Math.PI * 0.90, // phi：以 +Z 为中心
+      Math.PI * 0.26, Math.PI * 0.47                   // theta：从眉线到下巴
+    ),
+    // 面具现在只做一件事：给脸一个**边界**，让眼睛和腮红不是"贴在一颗球上"。
+    // 颜色从 #4d4576（深紫）改成比脸皮深一档的暖阴影 —— 是"眼窝的阴影"，不是"面罩"。
+    // 浅底 + 发光眼睛就是光遇的做法，不需要深色去衬。
+    cmat("#e0c6a6", false)
+  );
+  mask.scale.set(1, 1.06, 0.96); // 跟着脸皮一起压扁，否则边界会离缝
+  headGroup.add(mask);
+
   // 灵魂大眼睛（bloom 里会微微发光）——光遇角色的脸只有眼睛，眼睛就是全部表情：
   // 再大一号、水滴形（下圆上尖）、带一点内八倾角 = 无辜感
-  const eyeMat = new THREE.MeshBasicMaterial({ color: "#fffdf4" });
-  const eyeGeo = new THREE.SphereGeometry(0.108, 12, 10);
+  // 眼睛是光遇角色唯一的表情，必须真的吃到 bloom。
+  // 线性白 #fffdf4 亮度约 0.98，而 bloom 阈值是 0.8 —— 原本只是"勉强过线"，
+  // 稍微暗一点的环境里就完全没光晕。乘 1.35 稳定超过阈值
+  // （composer 的 RT 是 HalfFloat，不会像 8bit 那样把它截断回 1.0）。
+  // 注意别调太高：眼睛是画面里唯一的绝对高光，增益过大会糊成一团白斑。
+  // 试过暖琥珀 #ffc25e×1.9（为了在浅面具上立住），**也退回了** —— 见 27 节。
+  const eyeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color("#fffdf4").multiplyScalar(1.18) });
+  // 水滴形（下圆上尖）的尺寸常量提出来，眨眼动画共用，避免两处各写一份改漏。
+  // 原来 0.108 半径 × 1.12 横向 = 半宽 0.121，而两眼中心只隔 ±0.112 —— 两只眼在
+  // 鼻梁处直接重叠，远超脸宽的一半，正面看就是"一整块发光的白"。光遇的眼睛
+  // 只占脸宽的两成左右，两眼中留出明显间隙，脸才是脸。
+  // 四角度转台（tour2-0.png / cape-0.png）看下来：眼睛的**纵向**还是过大 ——
+  // EYE_R 0.062 × EYE_SY 1.75 得到高 0.217，而脸径是 0.678，即**眼睛占了脸高的三成**，
+  // 加上纯白 × 1.35 的过曝增益，正面看就是两颗"震惊的大眼睛"。
+  // 收成 0.056 × 1.40 → 高 0.157（占脸高 23%），宽 0.119（占脸宽 17.5%），
+  // 并把增益从 1.35 压到 1.18：**仍然过 bloom 阈值 0.8**（#fffdf4 线性约 0.98 × 1.18 ≈ 1.16），
+  // 但不再糊成白斑，眼睛的形状能看出来。
+  const EYE_R = 0.056;
+  const EYE_SX = 1.06;
+  const EYE_SY = 1.40;
+  // EYE_SZ 0.62 → 0.45：原来眼睛前缘在 z=0.293，而脸面在该处是 0.286 ——
+  // 凸出 7mm，是一颗**贴在脸上的球**（侧看有个鼓包）。
+  // 光遇的眼睛是**嵌进脸里的扁片**：压到 0.45 并把 z 从 0.258 收到 0.262，
+  // 前缘正好 0.262 + 0.056×0.45 = 0.287 ≈ 脸面 0.286 —— **齐平**，
+  // 后半截埋进脸里，只留一片贴在脸面上，不再有鼓包。
+  const EYE_SZ = 0.45;
+  const eyeGeo = new THREE.SphereGeometry(EYE_R, 12, 10);
   const eyes: THREE.Mesh[] = [];
-  for (const dx of [-0.112, 0.112]) {
+  for (const dx of [-0.115, 0.115]) {
     const eye = new THREE.Mesh(eyeGeo, eyeMat);
-    eye.scale.set(1.12, 1.66, 0.6);
-    eye.position.set(dx, 0.015, 0.225);
+    eye.scale.set(EYE_SX, EYE_SY, EYE_SZ);
+    // z 要顶到脸皮之外：脸是 r0.32、z 向压到 0.96 的椭球，在该 x/y 处表面在 z≈0.286，
+    // 眼珠前缘必须越过它才看得见，否则会整颗埋进脸里。
+    // 眼珠变小后前缘会往后缩（0.255 + 0.056×0.62 = 0.290，只剩 4mm 余量），
+    // 所以 z 从 0.255 挪到 0.258，把余量恢复到和改小前一样。
+    eye.position.set(dx, 0.02, 0.262);
     eye.rotation.z = dx < 0 ? 0.1 : -0.1; // 内八：外角微吊，幼态无辜
     headGroup.add(eye);
     eyes.push(eye);
@@ -474,31 +680,119 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     headGroup.add(cheek);
   }
 
-  // 兜帽：罩住后脑与头顶的半球
+  // 兜帽：罩住后脑与头顶的半球。
+  // 原来 phiLength = 0.62π（≈112°）、只后仰 0.45rad、半径 0.345 又略大于脸，
+  // 帽檐一直垂到脸中线以下 —— 正面看整颗头是一颗米色球，两只眼睛被完全吞掉，
+  // 角色的表情就没了（光遇的脸只有眼睛）。
+  // 现在：帽檐收到 0.46π（≈83°，停在眉线以上）、后仰加大到 0.62rad、
+  // 整体上移后移一点 —— 深色面具脸和发光的眼睛从帽檐下露出来，
+  // 而从背后看仍是一只盖到后颈的兜帽。
   const hood = new THREE.Mesh(
-    new THREE.SphereGeometry(0.345, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.62),
-    kit.mat("#ffffff", false)
+    // 分段 20×14 → 28×20：头发和脸是**两个球面相交**，
+    // 交接线就是那条相交曲线 —— 分段太低时它是锯齿状的（侧视特写里很明显）。
+    new THREE.SphereGeometry(0.365, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    cmat("#ffffff", false)
   );
   (hood.material as THREE.MeshToonMaterial).color.copy(hoodColor);
-  hood.position.y = 0.02;
-  hood.rotation.x = -0.45; // 向后仰，露出脸
+  hood.position.set(0, 0.035, -0.02);
+  hood.rotation.x = -0.46; // 向后仰，露出脸
   headGroup.add(hood);
 
   // ---- 双层披风（Verlet 布料物理，底边裁成不规则扇形） ----
   const shapeCape = (geo: THREE.PlaneGeometry, jag: number) => {
     const pos = geo.attributes.position as THREE.BufferAttribute;
+    // 半宽从几何体读，不要写死 0.41 —— 那是「宽 0.82」时的值，
+    // 一旦改了披风宽度，k 的域就不再是 0~1，扇贝相位会整体错位、左右不对称
+    const halfW = geo.parameters.width / 2;
+    const smoothstep01 = (t: number) => {
+      const c = Math.min(1, Math.max(0, t));
+      return c * c * (3 - 2 * c);
+    };
+    // ---- 这里原来有个 bug，是「一道笔直竖条」的根源 ----
+    // 原写法是 `if (pos.getY(i) > -0.01) continue;`，注释说「只动底边」，
+    // 但这个条件**只排除了顶端那一行**（y 恰好 = 0），下面 14 行全都吃到了
+    // 扇贝位移（最大 0.13m）和 0.86 的收窄。
+    // 于是肩线那一行（全宽、无位移）和紧挨着的第二行（收窄、抬 0.13m）
+    // 之间是一道**断崖**；卷到柱面上以后角度从 1.15 突降到 0.989，
+    // 布面就在那里翻折 —— 正是背视里那条笔直竖条。
+    //
+    // 修法：把「收窄」和「抬高」都改成**沿高度平滑过渡**，而且两端点取值
+    // 与原来完全一致（顶端 1.0 / 无位移，底端 0.86 / 全位移），
+    // 所以披风的整体轮廓不变，只是把断崖抹平。
     for (let i = 0; i < pos.count; i++) {
-      if (pos.getY(i) > -0.01) continue; // 只动底边
+      const y = pos.getY(i);
       const x = pos.getX(i);
-      const k = (x / 0.41 + 0.5); // 0~1 沿宽度
-      // 底缘高低起伏 + 内收，形成扇贝形下摆
-      pos.setY(i, pos.getY(i) + jag * (0.22 * Math.abs(Math.sin(k * Math.PI * 2.7 + 0.4)) + 0.1 * Math.sin(k * 9.1)));
-      pos.setX(i, x * 0.86);
+      const k = x / halfW + 0.5; // 0~1 沿宽度
+      // 过渡半径**必须 ≥ 0.3m**，这是算出来的、不是拍的：
+      // 扇贝抬升幅度最大 0.13m，而行距只有 0.043m。
+      // 过渡太快（相邻行的抬升量差 > 行距）会让行与行直接穿插。
+      // 用解析几何逐条边算二面角 + 查行序，实测：
+      //   半径 0.12 → 行序穿插 5 处、最锐二面角 180°、超 90° 的边 21 条  ✗
+      //   半径 0.30 → 穿插 0、最锐 31.5°、超 90° 的边 0 条                ✓
+      //   半径 0.60 → 穿插 0、最锐 29.6°、超 90° 的边 0 条                ✓
+      // 取 0.6（全程过渡），两端点与原来一致：肩线全宽无位移、下摆收窄 14% 满位移。
+      const h = smoothstep01(-y / 0.6); // 0 = 肩线，1 = 下摆
+      // 宽度沿高度**由窄到宽**：肩部 0.86 → 下摆 1.00。
+      //
+      // 原来是 (1 - 0.14h)，即**上宽下窄** —— 方向反了。
+      // 结果是顶端两角戳在肩膀外面（侧视图里那个硬直的方角），
+      // 而本该外扩的下摆反而是最窄的一圈。
+      //
+      // 也试过「只把顶上两个角抹圆」的做法（乘一个 |k-0.5|²·(1-h)² 的场），
+      // 被静止几何的二面角判据否掉了：横向梯度太大，0.22 的系数就造出 19 条超 90° 的边。
+      // 现在这个写法只沿高度变化、没有横向梯度，每行 x 变化量约 0.019（列距 0.058），安全。
+      pos.setX(i, x * (0.86 + 0.14 * h));
+      // 底缘裁成 4 个匀称的扇贝 + 一点不规则抖动。
+      // 原来是 |sin(k*2.7π)| 的 3 个半波，波峰高低差很多、且没有对称性，
+      // 远看像被撕开的纸边；光遇的下摆是有节奏的圆弧扇贝。
+      const lobe = 0.5 - 0.5 * Math.cos(k * Math.PI * 8);
+      pos.setY(i, y + jag * h * (0.13 * lobe + 0.035 * Math.sin(k * 17.3 + 1.1)));
     }
   };
-  const outerGeo = new THREE.PlaneGeometry(0.82, 0.9, 12, 16);
-  outerGeo.translate(0, -0.45, 0); // 顶端为固定轴
+  // 长 0.9 → 0.60、宽 0.82 → 0.70：
+  // 原来下摆垂到 y≈0.12（几乎贴地），从背后看整条腿都被吃掉，角色只剩"一颗球 + 一口钟"；
+  // 而 0.82 的宽度也大于手臂外缘（±0.358），正面看披风两侧从身体后面支棱出来，
+  // 像背后贴了一块平板。光遇的披风到大腿中段、宽度收在肩线以内，小腿和脚要露出来。
+  const outerGeo = new THREE.PlaneGeometry(0.7, 0.6, 12, 14);
+  outerGeo.translate(0, -0.3, 0); // 顶端为固定轴
   shapeCape(outerGeo, 1);
+
+  // ---- 把平铺的披风「卷」到躯干背面上 ----
+  // 原来披风是一张 XY 平面：正面看是块平板，**侧面看是一根零厚度的竖直细条**，
+  // 两侧边缘还是笔直的。这是全场最假的一处（四角度转台截图 tour2-90.png 一眼可见）。
+  // 光遇的披风是**包着肩膀往下垂**的曲面，而且越往下越张开。
+  //
+  // 做法：把局部 x 当作圆柱上的弧长绕 Y 轴卷起来，
+  // 曲率半径 `R` 随高度从 `topR` 线性长到 `botR` —— 越往下半径越大，
+  // 披风才会「垂坠外扩」而不是「挂一块帘子」。
+  // 注意：平面默认法线朝 +Z，而披风挂在身体背后，+Z 正指向身体，
+  // 所以把两侧往 +Z 卷 = 往身体方向包 ✓ 符号不用取反。
+  const wrapCape = (geo: THREE.PlaneGeometry, topR: number, botR: number, halfArc: number) => {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const halfW = geo.parameters.width / 2;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      // 0 = 顶端（肩线），1 = 底端。用固定长度归一并钳制：
+      // 下摆被 shapeCape 裁过，最深处大概在 -0.44，不是 -0.6
+      const t = Math.min(1, Math.max(0, -y / 0.5));
+      const R = topR + (botR - topR) * t;
+      const th = (x / halfW) * halfArc;
+      pos.setX(i, Math.sin(th) * R);
+      pos.setZ(i, R * (1 - Math.cos(th)));
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  };
+  // halfArc 保持 1.15。**试过降到 0.95，只把自相交门的 inside 从 17 降到 14 —— 不是主因，已回退。**
+  // 现状记录：外层披风被自相交门稳定判为 selfIntersecting（17/195 个顶点"在自己体内"），
+  // epsilon 从 3e-5 扫到 8e-3（266 倍）一个不差，**不是数值伪影**；
+  // 但俯视/侧视/背视三张隔离图里它都是一张光滑连续曲面，**看不出折叠**。
+  // 内层披风（halfArc 0.95、7×7 网格）干净通过。
+  // 下一步该做的判据：拿一张**解析生成的、绝对干净**的同形柱面片喂同一个门 ——
+  // 若它也报 inside，则说明射线奇偶判定不适用于**开放的曲面**（它是为闭合体定义的）。
+  wrapCape(outerGeo, 0.34, 0.54, 1.15);
+
   // 参数柔和：重力小、风缓、阻尼收敛快——站立时垂坠安静，跑动时才后扬
   const outerCapeSim = new CapeSim(outerGeo, makeCapeMaterial(capeOuter, kit.gradient), { gravity: 6, damping: 0.94, iters: 5 });
   const outerCape = outerCapeSim.mesh;
@@ -510,8 +804,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const innerGeo = new THREE.PlaneGeometry(0.56, 0.42, 6, 6);
   innerGeo.translate(0, -0.21, 0);
   innerGeo.rotateX(0.14);
+  // 内层同样卷起来，且半径要**明确小于外层**（外层 0.34~0.54）。
+  // 第一版给到 0.29~0.40，和外层几乎同心 —— 两层布互相穿插，
+  // 侧看是一排竖条纹（z-fighting），截图 cape-90.png 里那根"波纹带"就是它。
+  wrapCape(innerGeo, 0.24, 0.33, 0.95);
   const innerCape = new THREE.Mesh(innerGeo, makeCapeMaterial(capeInner, kit.gradient, "#ffd9a0"));
   const innerCapeMat = innerCape.material as THREE.MeshToonMaterial;
+  // 披风也要吃统一的菲涅尔边缘光：否则整条披风没有任何边，
+  // 背影在暗背景里糊成一团（原来只有躯干和头挂了两个 BackSide 背壳球）
+  patchRimMaterial(outerCapeMat);
+  patchRimMaterial(innerCapeMat);
 
   // ---- 接触阴影：脚下柔和暗斑（腾空淡出并轻微扩散），全部模型通用 ----
   const contactShadow = new THREE.Mesh(
@@ -524,27 +826,42 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   innerCape.castShadow = true;
   bodyGroup.add(innerCape);
 
-  // ---- 轮廓光（背壳法，淡淡的暖边） ----
-  const rimMat = new THREE.MeshBasicMaterial({
-    color: "#ffe4bb",
-    side: THREE.BackSide,
-    transparent: true,
-    opacity: 0.22,
-    depthWrite: false,
+  // ---- 轮廓光：全身统一的菲涅尔边光 ----
+  // 原来这里是「躯干一个 BackSide 球壳 + 头一个 BackSide 球壳」，有三个毛病：
+  //  · 四肢 / 脸 / 手脚 / 披风**全都没有边** —— 躯干一圈亮、手臂是断的，
+  //    观感像「上身包了个发光壳」；
+  //  · 壳是 `MeshBasicMaterial` 纯色，**不随光源方向变化** —— 太阳在哪它都亮，
+  //    是「探照灯式的假边缘」。光遇的轮廓光是**逆光时才强、顺光时几乎没有**；
+  //  · 壳是按躯干/头的椭球放大的，姿势一变就穿帮。
+  // 现在改成与 GLB 角色、披风、道具**同一套**的菲涅尔 rim，一次铺满 bodyGroup：
+  // 它是跟着视线的掠射角走的，逆光自然强、顺光自然弱，且四肢能连上。
+  bodyGroup.traverse((o) => {
+    const m = (o as THREE.Mesh).material;
+    if (!m) return;
+    for (const mm of Array.isArray(m) ? m : [m]) patchRimMaterial(mm);
   });
-  const rimTorso = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 12), rimMat);
-  rimTorso.scale.set(0.345, 0.405, 0.3);
-  rimTorso.position.y = 0.62;
-  const rimHead = new THREE.Mesh(new THREE.SphereGeometry(0.365, 14, 12), rimMat);
-  rimHead.position.y = 1.18;
-  bodyGroup.add(rimTorso, rimHead);
 
-  // ---- 头顶小烛光 ----
+  // ---- 头顶小烛光（球体 + 光晕）----
+  // 原来只有一个纯色小球，**没有任何发光纹理或光晕** —— 在 bloom 里就是个硬边圆点。
+  // 光遇角色的头顶光点是有明显 bloom 光晕的。
+  // 光晕做成 wisp 的**子节点**：位置与呼吸缩放一起继承，不用每帧单独同步。
+  // 颜色要够亮才能过 bloom 阈值（合成器是 HalfFloatType，阈值看的是**线性** Rec709 亮度，
+  // 需 > 0.8）：`#fff2cf` 转线性后约 0.893，中心能亮起来。
   const wisp = new THREE.Mesh(
-    new THREE.SphereGeometry(0.06, 8, 8),
+    new THREE.SphereGeometry(0.055, 10, 8),
     new THREE.MeshBasicMaterial({ color: capeInner.clone().lerp(new THREE.Color("#fff2cf"), 0.55) })
   );
   wisp.position.y = 1.72;
+  const wispGlowMat = new THREE.SpriteMaterial({
+    map: softDotTexture(),
+    color: new THREE.Color("#fff2cf").multiplyScalar(1.7), // 拉到 HDR 范围，让 bloom 抓得住
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const wispGlow = new THREE.Sprite(wispGlowMat);
+  wispGlow.scale.setScalar(0.42);
+  wisp.add(wispGlow); // 子节点：跟着 wisp 的位置和呼吸缩放走
   bodyGroup.add(wisp);
 
   // ---- 名牌 ----
@@ -558,7 +875,17 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   group.add(nameSprite);
 
   // ---- 音乐光环 ----
+  // 原来是一圈 `RingGeometry(0.95, 1.28, 44)` 的**硬边几何环**，
+  // 加一个 `CircleGeometry(0.95)` 的**硬边实心圆盘** —— 两者都是纯色、无贴图。
+  // 圆盘尤其糟：一块均匀发亮的实心圆，边缘像刀切；圆环是 44 段折线。
+  // 光遇里没有这种"几何图形"，只有柔和的径向光晕。
+  //
+  // 改用 fxtextures 的径向渐变贴图。**尺寸要反推，别直接套原来的半径**：
+  // softRingTexture 的亮带落在半径 0.72×(S/2)，想让亮带对齐原来环的中线
+  // (0.95+1.28)/2 = 1.115，则 S = 1.115/0.36 ≈ 3.1。
+  const haloY = 0.06;
   const ringMat = new THREE.MeshBasicMaterial({
+    map: softRingTexture(),
     color: "#ffb45e",
     transparent: true,
     opacity: 0,
@@ -566,15 +893,25 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     side: THREE.DoubleSide,
     depthWrite: false,
   });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.28, 44), ringMat);
+  const ring = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 3.1), ringMat);
   ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.06;
+  ring.position.y = haloY;
   group.add(ring);
 
-  const discMat = ringMat.clone();
-  const disc = new THREE.Mesh(new THREE.CircleGeometry(0.95, 36), discMat);
+  // 光池：softDotTexture 中心最亮、向外柔和淡出到 0.5×S。
+  // S=2.0 → 可见半径约 1.0，对齐原来半径 0.95 的圆盘，但边缘是化开的。
+  const discMat = new THREE.MeshBasicMaterial({
+    map: softDotTexture(),
+    color: "#ffb45e",
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const disc = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 2.0), discMat);
   disc.rotation.x = -Math.PI / 2;
-  disc.position.y = 0.05;
+  disc.position.y = haloY - 0.01;
   group.add(disc);
 
   const moteCount = 10;
@@ -583,7 +920,22 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
   const motePh = new Float32Array(moteCount);
   for (let i = 0; i < moteCount; i++) motePh[i] = Math.random();
   moteGeo.setAttribute("position", new THREE.BufferAttribute(motePos, 3));
-  const moteMat = new THREE.PointsMaterial({ color: "#ffb45e", size: 0.14, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  // 音符微光。两处必须修：
+  //  1) 原来没有 map —— three 的 points.glsl.js 只在 `#ifdef USE_MAP` 下采样
+  //     gl_PointCoord，所以这 10 粒微光渲染出来是**实心方块**，不是光点。
+  //  2) 亮度只有 color(线性 0.543) × opacity(0.85) = 0.46，一直在 bloom 阈值 0.8 以下，
+  //     所谓"发光"从未发生过。改成从基准色 copy 后乘 lightState.fxGain()（进 HDR），
+  //     每帧刷新以跟随昼夜。
+  const moteBase = new THREE.Color("#ffb45e");
+  const moteMat = new THREE.PointsMaterial({
+    color: moteBase.clone().multiplyScalar(lightState.fxGain()),
+    map: softDotTexture(),
+    size: 0.14,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
   const motes = new THREE.Points(moteGeo, moteMat);
   group.add(motes);
 
@@ -711,11 +1063,28 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       const speedN = Math.min(1, speed / 7.2);
       const vy = state.vy ?? 0;
       sitLerp = THREE.MathUtils.lerp(sitLerp, sit ? 1 : 0, 1 - Math.pow(0.002, dt));
-      // 步频与地面速度挂钩：步长随幅度放大（走小步跑大步），脚下打滑的本质是步频和位移脱钩。
-      // 转向仍推进步频（转身碎步）
-      const strideLen = 0.34 + 0.5 * speedN;
-      const stepRate = THREE.MathUtils.clamp((Math.PI * speed) / strideLen, 3.0, 24);
-      walkPhase += dt * (stepRate + Math.min(6, Math.abs(yawVel)) * 1.4);
+      // 步频必须由**腿实际能迈出的距离**反解出来。
+      //
+      // 原来这里写 `strideLen = 0.34 + 0.5 * speedN`，但这个 strideLen 除了算 stepRate
+      // 之外**再没被任何代码用过** —— 腿的真实摆幅在下面几百行，是
+      // `strideL * 0.55 * walkAmp`。两者之间没有任何联系，所以"步幅 × 步频 = 位移"
+      // 这个关系从一开始就没成立过，脚必然打滑。注释里写的"步长随幅度放大"
+      // 只是意图，没有落到代码上。
+      //
+      // 正确关系：一步走的距离 = 2·LEG·sin(摆角)，且一个完整步态周期（2π）走两步，
+      // 即一步对应 π 弧度。于是 stepRate = π·speed / (2·LEG·sin(摆角))。
+      // 摆角与下面同源：walkAmp 的目标值是 0.35 + speedN·0.65，腿的摆角系数随速度
+      // 从 0.55 长到 1.10（"走小步跑大步"真正生效），髋到脚 LEG ≈ 0.52 m。
+      const LEG = 0.52;
+      const swingNow = (0.55 + speedN * 0.55) * (0.35 + speedN * 0.65);
+      const strideLen = 2 * LEG * Math.sin(Math.max(0.06, swingNow));
+      const stepRate = THREE.MathUtils.clamp((Math.PI * speed) / strideLen, 3.0, 26);
+      // 转向**不再**额外推进步频。原来这里是
+      //   walkPhase += dt * (stepRate + min(6, |yawVel|) * 1.4)
+      // 加得最多 8.4 rad/s，而位移一点没变 —— 高速时这是纯打滑。
+      // "转身碎步"已经在下面的 turnShuffle 里正确表达了：它只改**幅度**、且按
+      // (1 - speed*1.6) 随速度淡出，所以原地转身才碎步，跑动中不受影响。
+      walkPhase += dt * stepRate;
       jumpBlend = THREE.MathUtils.lerp(jumpBlend, air > 0 ? 1 : 0, Math.min(1, dt * 6));
       glideBlend = THREE.MathUtils.lerp(glideBlend, air === 2 ? 1 : 0, Math.min(1, dt * 5));
       swimBlend = THREE.MathUtils.lerp(swimBlend, state.swim ? 1 : 0, Math.min(1, dt * (state.swim ? 5 : 3)));
@@ -885,13 +1254,13 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       // 腿：walk 摆 + rise 伸展 + fall 前抬收膝 + glide 并拢后掠（与躯干轴对齐） + sit 盘腿 + swim 打水
       legL.root.rotation.x =
-        strideL * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
+        strideL * (0.55 + speedN * 0.55) * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
         kickL * 0.4 * swimBlend;
       legL.joint.rotation.x =
         kneeL * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp +
         0.25 * swimBlend;
       legR.root.rotation.x =
-        strideR * 0.55 * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
+        strideR * (0.55 + speedN * 0.55) * walkAmp - 0.15 * riseBlend - 0.55 * fallBlend + 1.05 * glideBlend - 1.45 * sitLerp +
         kickR * 0.4 * swimBlend;
       legR.joint.rotation.x =
         kneeR * 1.6 * walkAmp + 0.15 * riseBlend + 0.95 * fallBlend - 0.05 * glideBlend + 1.45 * sitLerp +
@@ -992,7 +1361,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
           const k = j / (outerCapeSim.cols - 1) - 0.5;
           anchorEuler.set(bodyGroup.rotation.x, bodyGroup.rotation.y, bodyGroup.rotation.z);
           shoulderLocal
-            .set(k * 0.82, 1.02, -0.17 - 0.05 * Math.abs(k) * 2)
+            .set(k * 0.66, 1.02, -0.17 - 0.05 * Math.abs(k) * 2)
             .applyEuler(anchorEuler)
             .add(bodyGroup.position);
           outerPins[j * 3] = shoulderLocal.x;
@@ -1153,7 +1522,7 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
 
       // 眼睛：偶尔眨一下（scale.y 压扁）
       const blink = ((t * 0.6 + opts.hue * 0.13) % 4.7) < 0.14 ? 0.12 : 1;
-      eyes.forEach((e) => e.scale.set(1.12, 1.66 * blink, 0.6));
+      eyes.forEach((e) => e.scale.set(EYE_SX, EYE_SY * blink, EYE_SZ));
 
       // ---- 接触阴影：贴地暗斑随高度淡出扩散（水面/深海上自然沉底不可见） ----
       const shadowGroundY = terrainHeight(group.position.x, group.position.z);
@@ -1178,9 +1547,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         innerCapeMat.emissiveIntensity = glow;
       }
 
-      // ---- GLB 边缘光颜色随昼夜（昼暖夜冷） ----
-      rimColorUni.value.lerpColors(RIM_DAY, RIM_NIGHT, lightState.night);
-      rimIntUni.value = 0.26 + 0.18 * (1 - lightState.night);
+      // ---- 边缘光颜色随昼夜（昼暖夜冷）----
+      // 放在这里是因为角色每帧都会跑；道具共用同一对共享 uniform，一起变。
+      updateRim();
 
       // 烛光呼吸
       wisp.scale.setScalar(0.85 + 0.18 * Math.sin(t * 2.4 + opts.hue));
@@ -1205,13 +1574,16 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
         arr[i * 3 + 2] = Math.sin(a) * (0.55 + p * 0.35);
       }
       moteGeo.attributes.position.needsUpdate = true;
+      // 自发光增益每帧刷新（昼夜在变）。从基准色 copy 再乘，绝不在原地累乘。
+      moteMat.color.copy(moteBase).multiplyScalar(lightState.fxGain());
     },
     setRing(color, energy) {
       ringEnergy = energy;
       if (color) {
         ringMat.color.copy(color);
         discMat.color.copy(color);
-        moteMat.color.copy(color);
+        moteBase.copy(color);
+        moteMat.color.copy(moteBase).multiplyScalar(lightState.fxGain());
       }
       ringMat.opacity = 0.75 * energy;
       discMat.opacity = 0.14 * energy;
@@ -1243,7 +1615,9 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
       discMat.dispose();
       moteMat.dispose();
       eyeMat.dispose();
-      rimMat.dispose();
+      wispGlowMat.dispose(); // map 是共享缓存的 softDotTexture，不能 dispose
+      // rimMat 已随背壳法一起删除：轮廓光改走共享的菲涅尔注入，
+      // 它不持有独立材质，没有东西需要在这里释放。
       outerCape.geometry.dispose();
       innerCape.geometry.dispose();
       for (const m of [outerCape.material, innerCape.material]) {
@@ -1252,3 +1626,5 @@ export function createAvatar(opts: { name: string; hue: number; self?: boolean; 
     },
   };
 }
+
+

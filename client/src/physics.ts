@@ -34,26 +34,52 @@ export const FEEL = {
   slopeSlide: 0.55, // 坡度超过此值开始滑坡（高度差/米）
   slopeAccel: 6.5, // 滑坡/下坡加速度
   glide: {
-    minSpeed: 2.8,
-    maxSpeed: 17,
+    // 空速标定依据：
+    //  · minSpeed 4.0 = 光遇滑翔的"失速底线"。低于它气流托不住，机头被强制压低
+    //    （stallSpeed 6.0 提前预警）。旧的 2.8 数值下低速也能平飞，画面像"悬停飘着"。
+    //  · maxSpeed 16 与巡航阻力共同决定自然极速：
+    //    稳态速度 = (flapSpeed 的注入 - dragBase) / drag ≈ 9.5 + 2.9 ≈ 12.4 m/s 巡航，
+    //    俯冲时动能换成速度，封顶 16 m/s（≈58 km/h，穿岛一圈的时间感与光遇一致）。
+    minSpeed: 4.0,
+    maxSpeed: 16,
     pitchDown: -0.55,
     pitchUp: 0.45,
     pitchLerp: 2.8,
-    naturalGlide: -0.14, // 无输入的自然下滑角
-    stallSpeed: 5, // 空速不足强制低头
-    trade: 1.15, // 重力↔空速的能量交换系数
+    naturalGlide: -0.2, // 无输入的自然下滑角：满速下滑 ≈ 3.2 m/s 沉率（光遇的缓降感）
+    stallSpeed: 6.0, // 空速不足强制低头
+    trade: 1.15, // 重力↔空速的能量交换系数（俯冲加速 / 拉升减速）
     drag: 0.05, // 与速度成正比的巡航阻力
     dragBase: 0.15,
     engageVy: 1.2, // 上升余势衰减到此值后滑翔接管
     flapSpeed: 9.5, // 拍翅注入的空速
     flapPitch: 0.3, // 拍翅抬头角
+    // ---- 有质量的转向（本次新增）----
+    // 速度矢量不再每帧由 yaw 重建，而是被"气动力"拉着转：a = maxTurnAccel * 输入，
+    // 积分后速度方向自然滞后机身朝向，于是出现侧倾/漂移。
+    maxTurnAccel: 14, // 满舵侧向加速度（m/s²）。12~16 是滑翔机的手感区间：
+    // 低于 10 转弯像在冰上打滑，高于 20 又会变成"瞬间转头"（回到旧 bug 的手感）。
+    // 因为 a 是常量，实际角速度 ω ≈ a / v：巡航 12 m/s → ≈67°/s，高速 16 m/s → ≈50°/s，
+    // 失速 6 m/s → ≈130°/s——速度越快转弯半径越大，正是滑翔该有的样子。
+    bank: 0.85, // 速度矢量相对机头朝向的最大滞后角（弧度，约 49°）——侧倾/漂移的视觉来源
+    bankRecover: 2.6, // 松舵后机头顺速度方向回正的速度（rad/s 上限）
+    diveGain: 0.7, // 俯冲时能量交换的额外增益：机头下压每 1.0 sin 分量多换 70% 空速
+    climbPenalty: 0.3, // 拉升时的额外空速损耗（爬升换高度的代价，防"无限爬升"）
+    vySmooth: 7.0, // 垂直速度向航迹分量收敛的速率（帧率无关），抬头低头不顿挫
   },
 };
 
 export interface PhysicsInput {
   moveX: number; // -1..1 屏幕系（W=-Z 方向等，与 WASD 同约定）
   moveZ: number;
-  running: boolean;
+  /**
+   * 走 ↔ 跑的**连续**混合量 0..1（不是布尔）。
+   *
+   * 原来是布尔 `running`，于是触屏摇杆在 0.875 → 0.885 这 1% 的行程内，
+   * 速度目标从 3.6 直接跳到 7.2 m/s（+3.2），而 `groundAccel = 16` 会在 0.2s 内追到 ——
+   * 走→跑是个硬开关，手上感觉像被踹了一脚。
+   * 改成连续量后，摇杆推到底的过程中速度是**平滑爬升**的。
+   */
+  runBlend: number;
   jumpPressed: boolean; // 本帧按下跳跃（沿）
   glideHeld: boolean; // 空格按住达到滑翔意图（时长阈值已在外层判断）
   camYaw: number; // 输入方向从相机系转世界系用
@@ -76,6 +102,13 @@ function updraftAt(x: number, z: number, y: number): number {
   return u;
 }
 
+/** 角度差归一到 (-π, π]：转向滞后/回正判断用 */
+function wrapPi(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
 export class CharacterPhysics {
   readonly vel = new THREE.Vector3(); // xz 水平 + y 垂直（统一在速度向量里）
   yaw = 0;
@@ -88,6 +121,10 @@ export class CharacterPhysics {
   glidePitch = 0;
   glideSpeed = 0;
   glideEngaged = false;
+  /** 当前侧倾角（机头朝向 - 速度矢量方向，弧度；动画层可用于压肩） */
+  glideBank = 0;
+  /** 本帧滑翔转向输入（-1..1，供动画层做侧倾） */
+  glideTurn = 0;
   private flapRegenT = 0;
   private wasAirborne = false;
 
@@ -105,6 +142,8 @@ export class CharacterPhysics {
     this.glideEngaged = false;
     this.glidePitch = 0;
     this.glideSpeed = 0;
+    this.glideBank = 0;
+    this.glideTurn = 0;
     this.inWater = false;
   }
 
@@ -135,6 +174,8 @@ export class CharacterPhysics {
       this.airborne = false;
       this.gliding = false;
       this.glideEngaged = false;
+      this.glideBank = 0;
+      this.glideTurn = 0;
       this.inWater = true;
       this.vel.y *= 0.25; // 入水阻尼
       events.push({ type: "water", enter: true });
@@ -175,7 +216,14 @@ export class CharacterPhysics {
     const glidingNow = this.glideEngaged;
     if (glidingNow !== this.gliding) {
       this.gliding = glidingNow;
-      if (glidingNow) this.glideSpeed = Math.max(4, this.horizSpeed);
+      if (glidingNow) {
+        // 接管时的空速：取当前水平速度，但不低于失速下限（否则一展翼就"卡"在飘的状态）
+        this.glideSpeed = Math.max(G.glide.minSpeed, this.horizSpeed);
+        this.glideBank = 0;
+      } else {
+        this.glideBank = 0;
+        this.glideTurn = 0;
+      }
       events.push({ type: "glide", open: glidingNow });
     }
 
@@ -212,33 +260,75 @@ export class CharacterPhysics {
       this.integrate(dt);
       // 不贴海底（浮力已把人托在水面）；越过浅滩边界自然退出水中
     } else if (this.glideEngaged) {
-      // ================= GLIDE：能量飞行（俯冲攒速度、拉起换高度） =================
+      // ================= GLIDE：有质量的滑翔（能量飞行 + 惯性转向） =================
+      // 核心区别（修复旧 bug）：速度矢量是积分出来的，不再每帧由 yaw 重建。
+      // 机头（yaw）想转，但侧向气动力有上限（maxTurnAccel），速度矢量被"拉着"慢慢追上去，
+      // 两者之间的夹角就是侧倾/漂移——这就是光遇滑翔的手感来源。
       const GL = G.glide;
+      this.glideTurn = input.moveX;
       // 俯仰目标：前推(moveZ<0)=俯冲机头，后拉=爬升；无输入回中自然下滑角
       let pitchTarget = input.moveZ === 0 ? GL.naturalGlide : THREE.MathUtils.clamp(input.moveZ * 0.5, GL.pitchDown, GL.pitchUp);
       if (this.glideSpeed < GL.stallSpeed) pitchTarget = Math.min(pitchTarget, -0.25); // 失速低头
-      this.glidePitch = THREE.MathUtils.lerp(this.glidePitch, pitchTarget, Math.min(1, dt * GL.pitchLerp));
+      this.glidePitch = THREE.MathUtils.lerp(this.glidePitch, pitchTarget, 1 - Math.exp(-GL.pitchLerp * dt));
       const sinP = Math.sin(this.glidePitch);
       const cosP = Math.cos(this.glidePitch);
-      // 重力沿航向分量：爬升耗空速、俯冲补空速（能量交换）
-      this.glideSpeed += -G.gravity * sinP * GL.trade * dt;
+
+      // ---- 能量交换：俯冲加速 / 拉升减速（重力沿航向分量 + 俯仰增益） ----
+      const effTrade = GL.trade * (sinP < 0 ? 1 + GL.diveGain * -sinP : 1 - GL.climbPenalty * sinP);
+      this.glideSpeed += -G.gravity * sinP * effTrade * dt;
       this.glideSpeed -= (GL.dragBase + this.glideSpeed * GL.drag) * dt; // 巡航阻力
+      // 失速时被重力拽着走（空速下限仍保底，避免瞬间静止的"飘"）
       this.glideSpeed = THREE.MathUtils.clamp(this.glideSpeed, GL.minSpeed, GL.maxSpeed);
-      // 垂直 = 航迹垂直分量 + 暖气流托举
-      this.vel.y = this.glideSpeed * sinP + updraftAt(this.pos.x, this.pos.z, this.pos.y) * 0.85;
-      // 水平沿航向（转弯=转航向）
-      const hs = this.glideSpeed * cosP;
-      this.vel.x = Math.sin(this.yaw) * hs;
-      this.vel.z = Math.cos(this.yaw) * hs;
-      // A/D 倾斜转弯：速度越快转弯率越紧（大速度=大转弯半径）。
-      // 注意符号：相机在角色后方，yaw 增大在画面上是左转——D(右)必须 yaw 减
-      const turnRate = THREE.MathUtils.clamp(2.2 - this.glideSpeed * 0.06, 0.8, 2.2);
+
+      // ---- 机头转向：角速度上限由侧向气动力决定（ω ≈ a/v，快=半径大） ----
+      const hs = this.glideSpeed * cosP; // 目标水平空速
+      const turnRate = THREE.MathUtils.clamp((GL.maxTurnAccel / Math.max(hs, GL.minSpeed)) * 1.15, 0.7, 2.2);
       if (input.moveX !== 0) {
+        // 符号：相机在角色后方，yaw 增大在画面上是左转——D(右)必须 yaw 减
         this.yaw -= input.moveX * turnRate * dt;
-        this.yawVel = THREE.MathUtils.lerp(this.yawVel, -input.moveX * turnRate, Math.min(1, dt * 6));
+        this.yawVel = THREE.MathUtils.lerp(this.yawVel, -input.moveX * turnRate, 1 - Math.exp(-6 * dt));
       } else {
-        this.yawVel = THREE.MathUtils.lerp(this.yawVel, 0, Math.min(1, dt * 4));
+        this.yawVel = THREE.MathUtils.lerp(this.yawVel, 0, 1 - Math.exp(-4 * dt));
       }
+      // 松舵时机头顺速度方向回正（速度矢量反过来把机头带回来，不产生假漂移）
+      if (input.moveX === 0 && this.horizSpeed > 0.5) {
+        const velYaw = Math.atan2(this.vel.x, this.vel.z);
+        const d = wrapPi(velYaw - this.yaw);
+        this.yaw += THREE.MathUtils.clamp(d, -GL.bankRecover * dt, GL.bankRecover * dt);
+      }
+
+      // ---- 速度矢量积分：朝"机头 × 水平空速"加速，横向加速度有上限 ----
+      const dirX = Math.sin(this.yaw);
+      const dirZ = Math.cos(this.yaw);
+      const curSp = Math.hypot(this.vel.x, this.vel.z);
+      if (curSp < 0.05) {
+        // 刚从腾空接管：速度矢量还不存在，直接给初速
+        this.vel.x = dirX * hs;
+        this.vel.z = dirZ * hs;
+      } else {
+        const ax = dirX * hs - this.vel.x;
+        const az = dirZ * hs - this.vel.z;
+        const ad = Math.hypot(ax, az);
+        if (ad > 1e-5) {
+          const step = Math.min(ad, GL.maxTurnAccel * dt);
+          this.vel.x += (ax / ad) * step;
+          this.vel.z += (az / ad) * step;
+        }
+      }
+      // 侧倾限幅：机头最多领先速度方向 bank 弧度。超过就不再加速转向，
+      // 于是满舵时会稳定在一个固定侧倾角上（而不是无限螺旋）
+      if (this.horizSpeed > 0.5) {
+        const velYaw = Math.atan2(this.vel.x, this.vel.z);
+        const lag = wrapPi(this.yaw - velYaw);
+        if (Math.abs(lag) > GL.bank) this.yaw = velYaw + Math.sign(lag) * GL.bank;
+        this.glideBank += (wrapPi(this.yaw - velYaw) - this.glideBank) * (1 - Math.exp(-8 * dt));
+      } else {
+        this.glideBank += (0 - this.glideBank) * (1 - Math.exp(-8 * dt));
+      }
+
+      // ---- 垂直：航迹垂直分量 + 暖气流托举（帧率无关平滑，避免抬头顿挫） ----
+      const targetVy = this.glideSpeed * sinP + updraftAt(this.pos.x, this.pos.z, this.pos.y) * 0.85;
+      this.vel.y += (targetVy - this.vel.y) * (1 - Math.exp(-GL.vySmooth * dt));
       this.integrate(dt);
     } else if (this.airborne) {
       // ================= AIR：自由落体（软重力 + 终端速度） =================
@@ -255,7 +345,7 @@ export class CharacterPhysics {
       this.integrate(dt);
     } else {
       // ================= GROUND：惯性起步/收步 + 坡度 =================
-      const cap = input.running ? G.runSpeed : G.walkSpeed;
+      const cap = G.walkSpeed + (G.runSpeed - G.walkSpeed) * Math.min(1, Math.max(0, input.runBlend));
       const tx = wishX * cap * wishLen;
       const tz = wishZ * cap * wishLen;
       const accel = wishLen > 0.01 ? G.groundAccel : G.groundFriction;
@@ -292,8 +382,12 @@ export class CharacterPhysics {
         this.pos.y = Math.max(this.pos.y - 0.5 * dt, ground); // 沿坡下滑贴合，避免悬空抖动
         if (this.pos.y > ground + 0.5) this.airborne = true;
       } else {
-        // 地面贴合的柔性吸附（下坡不弹跳）
-        this.pos.y = THREE.MathUtils.lerp(this.pos.y, ground, Math.min(1, dt * 14));
+        // 地面贴合的柔性吸附（下坡不弹跳）——
+        // 帧率无关：1-exp(-k·dt) 与 dt 无关地收敛到同一时间常数，
+        // 旧的 min(1, dt*14) 在低帧率下每帧只能补一小段，贴地会滞后并抖动
+        // （30fps 时每帧仅补 47%，60fps 补 23%——同样的 1 秒内收敛量差 1 倍）
+        this.pos.y += (ground - this.pos.y) * (1 - Math.exp(-14 * dt));
+        if (Math.abs(ground - this.pos.y) < 0.01) this.pos.y = ground; // 残差 snap，杜绝可见抖动
       }
     }
 
@@ -318,6 +412,8 @@ export class CharacterPhysics {
         this.vel.y = 0;
         this.glideEngaged = false;
         this.glidePitch = 0;
+        this.glideBank = 0;
+        this.glideTurn = 0;
         if (this.gliding) {
           this.gliding = false;
           events.push({ type: "glide", open: false });

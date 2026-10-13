@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { lightState } from "./lightstate";
 
 /**
  * 声之灯塔：远处玩家的歌在视野尽头化成一根微弱的光柱——
@@ -78,6 +79,10 @@ export function createBeacons(): {
   };
 
   const update = (dt: number, t: number, selfPos: THREE.Vector3, camPos: THREE.Vector3, list: BeaconTarget[]) => {
+    // 自发光 HDR 增益：光柱的线性亮度 = color × opacity × 贴图 alpha，峰值只有
+    // 0.5（base）× 0.85（贴图底部）≈ 0.43，乘上增益之后才够过 bloom 阈值 0.8，
+    // 否则"循声相遇"的那根光柱在画面上就是一条淡色薄片，不是光。
+    const gain = lightState.fxGain();
     const seen = new Set<string>();
     for (const b of list) {
       if (!b.playing) continue;
@@ -90,7 +95,7 @@ export function createBeacons(): {
       const fadeIn = THREE.MathUtils.clamp((dist - 26) / 14, 0, 1);
       const far = THREE.MathUtils.clamp(1 - (dist - 60) / 130, 0.1, 1);
       const base = 0.5 * fadeIn * far;
-      const breathe = 0.75 + 0.25 * Math.sin(t * 1.6 + e.seed);
+      const breathe = 0.85 + 0.15 * Math.sin(t * 1.6 + e.seed);
       const op = base * breathe;
       e.root.position.set(b.pos.x, 0, b.pos.z);
       // 面向相机（绕 Y 的 billboard）
@@ -98,7 +103,8 @@ export function createBeacons(): {
       e.root.rotation.z = Math.sin(t * 0.6 + e.seed) * 0.035; // 微微摇曳
       for (const m of e.mats) {
         m.opacity = op;
-        m.color.copy(b.color);
+        // b.color 就是基准色：copy 后乘增益，不原地累乘
+        m.color.copy(b.color).multiplyScalar(gain);
       }
     }
     for (const [key, e] of pool) {

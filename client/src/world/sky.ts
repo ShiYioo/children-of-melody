@@ -63,6 +63,44 @@ export function createSky(): {
         return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
       }
 
+      /**
+       * 星点场。
+       *
+       * 旧实现是 step(0.9975, hash(floor(d * 220.0))) —— 星点只有**次像素**大，
+       * 而且是硬阶跃：相机一转，floor 出来的 cell 就整块跳变，星星于是闪烁、爬行，
+       * 甚至成片地冒出来又消失。这是程序化星空最典型的假象。
+       *
+       * 改成：每个 cell 里放一颗**有确定位置**的星心，用「到星心的距离」做柔和衰减，
+       * 并对 2×2×2 邻域求和 —— 星点因此是连续的，跨 cell 边界也不会断开。
+       * 星心位置也参与随机，所以星星不会排成规则的格子。
+       */
+      float starField(vec3 d) {
+        vec3 p = d * 110.0;
+        vec3 base = floor(p);
+        float acc = 0.0;
+        // 用三重循环而不是位运算枚举邻域：GLSL ES 1.00 没有 >> 和 &，
+        // three 在 WebGL2 下也未必帮忙升级，能不用就不用。
+        for (int ix = -1; ix <= 0; ix++)
+        for (int iy = -1; iy <= 0; iy++)
+        for (int iz = -1; iz <= 0; iz++) {
+          vec3 c = base + vec3(float(ix), float(iy), float(iz));
+          float seed = hash(c);
+          if (seed < 0.982) continue;                        // 只有约 1.8% 的 cell 有星
+          float bright = hash(c + 3.7);
+          vec3 center = c + vec3(hash(c + 1.3), hash(c + 2.1), hash(c + 5.9));
+          float r = 0.055 + 0.075 * bright;                   // 半径下限，保证跨 1~2 像素
+          float tw = 0.62 + 0.38 * sin(uTime * (0.7 + bright * 2.4) + seed * 40.0);
+          acc += smoothstep(r, 0.0, length(p - center)) * (0.30 + 0.70 * bright) * tw;
+        }
+        return acc;
+      }
+
+      /** 一个高斯形状的霾带：中心 h0，厚度 1/k */
+      float hazeBand(float h, float h0, float k) {
+        float t = (h - h0) * k;
+        return exp(-t * t);
+      }
+
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
@@ -82,12 +120,31 @@ export function createSky(): {
         col += vec3(0.93, 0.96, 1.0) * pow(md, 1800.0) * 1.3 * uMoonVis;
         col += vec3(0.72, 0.8, 1.0) * pow(md, 48.0) * 0.16 * uMoonVis;
 
-        // 星星：入夜后铺满天空，缓慢闪烁
-        float starZone = smoothstep(0.18, 0.5, h);
-        vec3 cell = floor(d * 220.0);
-        float star = step(0.9975, hash(cell));
-        float tw = 0.5 + 0.5 * sin(uTime * (1.0 + hash(cell + 7.0) * 2.0) + hash(cell) * 40.0);
-        col += vec3(0.9, 0.9, 1.0) * star * starZone * tw * mix(0.55, 2.6, uNight);
+        // ---- 地平线霾带 ----
+        // 原来天空是一条干净的三段渐变，地平线附近什么都没有，"远处还有什么"
+        // 完全没有交代，远景因此显得空。这里叠三层不同高度的软雾带，
+        // 并用方位角调制出断续的条理（不然就是三个同心圆环，很假）。
+        float az = atan(d.z, d.x);
+        float streak = 0.62 + 0.38 * sin(az * 3.0 + 1.3) * sin(az * 5.0 - 0.7);
+        // 面向太阳那一侧的霾带更亮（逆光时地平线发白），这是实拍里最明显的特征
+        vec2 dh = normalize(vec2(d.x, d.z) + 1e-4);
+        vec2 sh = normalize(vec2(uSunDir.x, uSunDir.z) + 1e-4);
+        float sunAz = 0.55 + 0.45 * max(0.0, dot(dh, sh));
+        float band = hazeBand(h, 0.015, 15.0)
+                   + 0.55 * hazeBand(h, 0.095, 21.0)
+                   + 0.30 * hazeBand(h, 0.215, 27.0);
+        band = clamp(band * streak * sunAz, 0.0, 1.0);
+        col = mix(col, mix(cHorizon, cRose, 0.32), band * 0.34 * (1.0 - uNight * 0.55));
+
+        // ---- 星点 ----
+        // 整段用 uniform 分支包住：白天（uNight≈0）这 8 次邻域 × 4 次 hash 完全不执行。
+        // 分支在整个 draw 上是一致的（所有像素走同一条路），几乎没有开销。
+        if (uNight > 0.02) {
+          // 星星要一直铺到地平线，只在贴近地平线处被霾带吃掉 ——
+          // 原来只在 h > 0.18 以上才有星，低空是一片死黑。
+          float starZone = smoothstep(-0.03, 0.20, h);
+          col += vec3(0.88, 0.90, 1.0) * starField(d) * starZone * clamp(uNight * 1.6, 0.0, 1.0);
+        }
 
         gl_FragColor = vec4(col, 1.0);
       }

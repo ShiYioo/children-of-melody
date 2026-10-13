@@ -37,6 +37,13 @@ const TERRAIN_GLSL = /* glsl */ `
     float n = 0.8 * sin(p.x * 0.16 + 2.1) * cos(p.y * 0.13 - 1.2)
             + 0.5 * sin(p.x * 0.31) * sin(p.y * 0.27 + 0.8);
     h += n * smoothstep_(7.0, 20.0, r);
+    // 台地化：必须与 heightfield.ts 的 terrace() 逐字一致，
+    // 否则水面与岸线的交界会错位。半带宽偏移、以及「岸边淡出」的理由见那边的注释。
+    float BAND = 1.35;
+    float tb = (h + BAND * 0.5) / BAND;
+    float ti = floor(tb);
+    float ht2 = (ti + smoothstep_(0.55, 1.0, tb - ti)) * BAND - BAND * 0.5;
+    h = mix(h, ht2, smoothstep_(1.55, 2.8, h));
     h = mix(h, 1.25, min(1.0, 1.15 * exp(-r * r / 72.0)));
     return mix(h, -1.6, smoothstep_(0.86, 1.0, rr));
   }
@@ -63,6 +70,10 @@ function makeMaterial(animated: boolean): THREE.ShaderMaterial {
       uSkyHi: { value: new THREE.Color("#3b4a8f") },
       uSkyLo: { value: new THREE.Color("#ffd9a3") },
       uSpecColor: { value: new THREE.Color("#ffe0a0") },
+      // 夜晚度：水体本色必须跟着它走（见片元着色器里的说明）
+      uNight: { value: 0 },
+      // 波光（太阳/月亮在水面的碎闪）的 HDR 增益
+      uGlint: { value: 1.9 },
     },
     vertexShader: /* glsl */ `
       uniform float uTime;
@@ -104,6 +115,9 @@ function makeMaterial(animated: boolean): THREE.ShaderMaterial {
       uniform vec3 uSkyHi;
       uniform vec3 uSkyLo;
       uniform vec3 uSpecColor;
+      uniform float uNight;
+      uniform float uGlint;
+      uniform float uTime; // 片元里的细波也要随时间动（原来只在顶点着色器里声明过）
       varying vec3 vWorld;
       varying vec3 vNormal;
       varying float vRipple;
@@ -115,26 +129,48 @@ function makeMaterial(animated: boolean): THREE.ShaderMaterial {
         if (uClipShore > 0.5 && th >= ${(WATER_LEVEL - 0.02).toFixed(2)}) discard;
 
         float depth = clamp((${WATER_LEVEL.toFixed(2)} - th) / 2.2, 0.0, 1.0);
-        vec3 shallow = vec3(0.35, 0.80, 0.72);
-        vec3 deep = vec3(0.07, 0.27, 0.50);
+        // 水体本色必须跟着昼夜走 —— 这原来是一处和雾、灯光完全同类的漏法：
+        // shallow / deep 是写死的，夜里海面还是白天的亮青绿。
+        // WaterPhase 里一直带着 night 字段，setPhase 却从来没读它。
+        vec3 shallow = mix(vec3(0.35, 0.80, 0.72), vec3(0.045, 0.105, 0.175), uNight);
+        vec3 deep = mix(vec3(0.07, 0.27, 0.50), vec3(0.010, 0.026, 0.070), uNight);
         vec3 col = mix(shallow, deep, smoothstep(0.05, 0.75, depth));
-        // 大面积、低对比度的明暗流动，模拟《光·遇》水彩般的水纹，不做闪烁亮点。
-        col += vec3(0.08, 0.14, 0.16) * vRipple * uMotion;
+        // 大面积、低对比度的明暗流动，模拟《光·遇》水彩般的水纹
+        col += vec3(0.08, 0.14, 0.16) * vRipple * uMotion * (1.0 - uNight * 0.65);
 
         vec3 V = normalize(uCamPos - vWorld);
         vec3 N = normalize(vNormal);
+
+        // ---- 片元级细波法线 ----
+        // 旧版把高光全部押在**顶点着色器**的低频波法线上，而近岸网格远处一格的投影
+        // 尺寸很大 —— 高光会随网格跳变，看起来像频闪灯。所以上一版只能把高光压成
+        // "宽而弱"：峰值亮度 0.771 × 0.22 = 0.17，根本不像波光，也永远过不了 bloom
+        // 阈值 0.8。正确做法是把细波放进片元、每像素算一次法线扰动：高光既细腻又稳定，
+        // 才敢把它做到 HDR 亮度。
+        vec2 wq = vWorld.xz;
+        vec2 grad = vec2(0.0);
+        grad += vec2(0.86, 0.51) * cos(dot(wq, vec2(0.86, 0.51)) * 1.9 + uTime * 1.9) * 1.9 * 0.0110;
+        grad += vec2(-0.45, 0.89) * cos(dot(wq, vec2(-0.45, 0.89)) * 3.3 - uTime * 1.5) * 3.3 * 0.0080;
+        grad += vec2(0.32, -0.95) * cos(dot(wq, vec2(0.32, -0.95)) * 5.7 + uTime * 2.7) * 5.7 * 0.0045;
+        grad += vec2(-0.94, -0.34) * cos(dot(wq, vec2(-0.94, -0.34)) * 9.1 + uTime * 3.7) * 9.1 * 0.0022;
+        N = normalize(N + vec3(-grad.x, 0.0, -grad.y) * uMotion);
+
         float fresnel = pow(1.0 - max(dot(V, N), 0.0), 3.0);
         vec3 skyRef = mix(uSkyLo, uSkyHi, clamp(N.y, 0.0, 1.0));
-        col = mix(col, skyRef, fresnel * 0.42);
+        // 菲涅尔反射在夜里也要收着：否则暗环境里整片海被天光"提亮"成一面镜子
+        col = mix(col, skyRef, fresnel * (0.42 - 0.20 * uNight));
 
         vec3 R = reflect(-V, N);
-        // 宽而弱的波光，避免旧版高指数高光像频闪灯一样跳动。
-        float spec = pow(max(dot(R, uSunDir), 0.0), 18.0);
-        col += uSpecColor * spec * mix(0.10, 0.22, uMotion);
+        float ndl = max(dot(R, uSunDir), 0.0);
+        // 两层：宽而柔的整体光泽（不追求过阈值）＋ 窄而亮的碎闪（进 HDR）。
+        // 阳光在水面上的反光是自然界最亮的东西之一，把它放进 HDR 是物理正确的，
+        // 不是"作弊调亮"。
+        col += uSpecColor * pow(ndl, 16.0) * 0.10 * mix(0.45, 1.0, uMotion);
+        col += uSpecColor * pow(ndl, 240.0) * uGlint * mix(0.35, 1.0, uMotion) * (1.0 - depth * 0.55);
 
-        // 近岸亮边是静态等高线，不再使用随时间脉冲的泡沫。
+        // 近岸亮边是静态等高线，不再使用随时间脉冲的泡沫。夜里压暗（白泡沫在暗海里太扎眼）
         float shore = 1.0 - smoothstep_(0.0, 0.7, abs(th - ${WATER_LEVEL.toFixed(2)}));
-        col = mix(col, vec3(1.0, 0.97, 0.9), shore * 0.34);
+        col = mix(col, vec3(1.0, 0.97, 0.9), shore * (0.34 - 0.24 * uNight));
 
         float dist = length(uCamPos - vWorld);
         float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
@@ -192,6 +228,11 @@ export function createWater(camera: THREE.Camera): {
         material.uniforms.uSkyHi.value.copy(phase.skyHi);
         material.uniforms.uSkyLo.value.copy(phase.skyLo);
         material.uniforms.uSpecColor.value.copy(phase.specColor);
+        // 原来这里**没有**读 phase.night —— 水体本色因此从不随昼夜变化。
+        material.uniforms.uNight.value = phase.night;
+        // 碎闪的 HDR 增益：白天 1.9、深夜 1.4。
+        // 都保证 specColor 线性亮度 0.771 × gain > 0.8，波光才会真的泛光。
+        material.uniforms.uGlint.value = 1.9 - phase.night * 0.5;
       }
     },
   };
