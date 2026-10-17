@@ -30,6 +30,10 @@ import { VoiceChat } from "./voice";
 
 const app = document.getElementById("app")!;
 const world = createWorld(app);
+// dev 调试钩子:控制台/自动化可以直接驱动相机与昼夜相位(生产构建为 no-op)
+if (import.meta.env.DEV) {
+  (window as unknown as { __worldDebug: unknown }).__worldDebug = { world, get controls() { return controls; } };
+}
 const controls = new PlayerControls(world.camera, app);
 const music = new MusicEngine();
 music.onNotice = (msg) => ui && ui.toast(msg, 3600);
@@ -1685,7 +1689,8 @@ function tick(dt: number) {
 
   world.render(dt, t, controls.state.pos); // 光柱跟随玩家
 
-  // 快门：渲染完成后截当前帧（preserveDrawingBuffer 已开）
+  // 快门：紧跟 render() 在同一个 JS 任务里读缓冲（未交还合成器前不清屏，
+  // 无需 preserveDrawingBuffer —— 见 scene.ts 渲染器注释）
   if (photoShotPending) {
     photoShotPending = false;
     try {

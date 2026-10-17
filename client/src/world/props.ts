@@ -439,14 +439,21 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
   g.add(lamp);
 
   // 缓缓旋转的光束
+  // 两个亮度都按「扫过相机/地面时不得过曝成白块」标定（原来玩家报告"老是突然出现
+  // 白色的一块区域然后又突然消失"，就是这个探照灯每 18s 扫一圈造成的）：
+  //  · beam：additive 两层叠在黄昏亮天空(线性 ≈0.78)上时恰好越过 bloom 阈值 0.8,
+  //    正对镜头时DoubleSide 两层面同屏更是一整块白 —— opacity 0.10 → 0.06 压回阈值下。
+  //  · sweep：intensity 240 是 candela，decay 1.4 下 10~30m 照度 = 过曝的 3~10 倍，
+  //    光束扫过哪片地面/海面，那一片就被顶成一整块死白再瞬间恢复 —— 240 → 45，
+  //    15m 处照度 ≈1.2（明显照亮）、25m 处 ≈0.5（余晖可读），白斑变成真实的光感。
   const beam = new THREE.Mesh(
     new THREE.ConeGeometry(3.0, 30, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color: "#ffe9b8", transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false, fog: false })
+    new THREE.MeshBasicMaterial({ color: "#ffe9b8", transparent: true, opacity: 0.06, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false, fog: false })
   );
   beam.rotation.z = Math.PI / 2;
   beam.position.y = 9.0;
   // 真扫光的探照灯：光束锥转到哪个方向，哪片地面/海面就被照亮（不再是只有贴图在转）
-  const sweep = new THREE.SpotLight("#ffd9a0", 260, 90, 0.32, 0.65, 1.4);
+  const sweep = new THREE.SpotLight("#ffd9a0", 45, 90, 0.32, 0.65, 1.4);
   sweep.position.set(0, 9.2, 0);
   sweep.castShadow = false;
   const sweepTarget = new THREE.Object3D();
@@ -471,7 +478,7 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
       beamPivot.rotation.y = t * 0.35;
       lamp.intensity = 26 + Math.sin(t * 2.2) * 4;
       // 灯塔扫过时地面明暗真实流动（SpotLight 照亮沿途地形/海面/角色）
-      sweep.intensity = 240 + Math.sin(t * 2.2) * 30;
+      sweep.intensity = 45 + Math.sin(t * 2.2) * 6;
     },
   };
 }

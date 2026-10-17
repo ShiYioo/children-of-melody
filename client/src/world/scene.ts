@@ -44,8 +44,18 @@ export interface World {
 export function createWorld(container: HTMLElement): World {
   // ---- 渲染器（移动端降载：像素比 1.5 + 半分辨率阴影，保住手机帧率） ----
   const mobile = isTouchDevice();
-  // preserveDrawingBuffer：拍照模式截图（快门时 toDataURL）需要保留帧缓冲
-  const renderer = new THREE.WebGLRenderer({ antialias: !mobile, powerPreference: "high-performance", preserveDrawingBuffer: true });
+  // ⚠ 不开 preserveDrawingBuffer:它是 Windows GPU 驱动上"画面随机闪现一块白色/
+  //    垃圾纹理又瞬间消失"的经典诱因 —— 该选项禁止浏览器用标准 flip 合成,
+  //    部分驱动在 copy 回退路径上有合成竞争。拍照快门(main.ts)在 render() 之后
+  //    同一个 JS 任务里 toDataURL,缓冲在交还合成器前不会被清,不需要这个选项。
+  //
+  // ⚠ antialias 必须关:画面走 EffectComposer(SMAA 后处理负责抗锯齿),默认
+  //   framebuffer 的 MSAA 完全用不上,却让驱动多维护一层 MSAA surface ——
+  //   多一层就多一分"合成 tile 闪白/闪脏"的驱动路径(与 preserveDrawingBuffer
+  //   同类的合成层异常)。高帧率 + 显存压力大的机器上尤其容易暴露。
+  // powerPreference 同理不锁 high-performance:双显卡机器上强制独显会让每帧
+  //   都走跨适配器拷贝,又是一条驱动相关的合成异常路径。
+  const renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -233,15 +243,25 @@ export function createWorld(container: HTMLElement): World {
   }
 
   // ---- 后期：体积光 → Bloom → SMAA → 输出 ----
-  const composer = new EffectComposer(renderer);
+  // 显式使用 8 位颜色缓冲，避开部分 Windows/集显驱动对默认 HalfFloat
+  // 合成目标的偶发 tile resolve 闪屏。Bloom 仍然在合成链中工作，最终输出
+  // 已经过色调映射，不需要把整条后处理链放在半浮点 framebuffer 上。
+  const composerTarget = new THREE.WebGLRenderTarget(
+    container.clientWidth,
+    container.clientHeight,
+    {
+      type: THREE.UnsignedByteType,
+      depthBuffer: true,
+      stencilBuffer: false,
+    }
+  );
+  composerTarget.texture.name = "CrescendoComposerTarget";
+  const composer = new EffectComposer(renderer, composerTarget);
   // 抗锯齿走 SMAA 后处理，**不要**给 composer 的 RT 开 MSAA。
   //
-  // 实测结论（这条踩了很久）：composer 的 RT 是 HalfFloatType，在其上设 samples 后，
-  // `EXT_color_buffer_float` 存在、`checkFramebufferStatus` 报 COMPLETE、`gl.getError()`
-  // 也是 NO_ERROR，但 resolve 出来是错的 —— 黄昏相位下整屏被压成一块均匀暗色
-  // （lumaMean 0.27 / regions 0.16,0.16,0.16 / glowPct 0.30），
-  // 而同一相位关掉 MSAA 立刻恢复（0.31 / 0.39,0.19,0.13 / 3.18）。
-  // 失效不抛错、不报 warning、只在特定昼夜相位暴露，属于不能上线的静默错误。
+  // 兼容性结论：浮点 RT 在部分驱动上即使 framebuffer 检查通过，resolve
+  // 仍可能在特定相位输出错误的整块颜色；上面的 UnsignedByte RT 已经绕开这条路径。
+  // 这里仍然不启用 MSAA，避免重复维护一层驱动相关的 resolve surface。
   //
   // SMAA 是独立全屏 pass，与 RT 格式无关，且顺带处理着色器锯齿（草叶、披风边缘）。
   composer.addPass(new RenderPass(scene, camera));
@@ -259,19 +279,31 @@ export function createWorld(container: HTMLElement): World {
   composer.addPass(smaa);
   composer.addPass(new OutputPass());
 
+  let lastW = 0, lastH = 0;
   const resize = () => {
     const w = container.clientWidth;
     const h = container.clientHeight;
     // 容器尺寸为 0（面板后台化等）时跳过：aspect=w/0=Infinity 会让
     // 投影矩阵永久带上 NaN，恢复可见后画面全黑
     if (w < 2 || h < 2) return;
+    if (w === lastW && h === lastH) return;
+    lastW = w; lastH = h;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    // composer.setSize 内部已经按 pixelRatio 给**所有 pass**（含 SMAA）设过尺寸。
+    // 原来后面又调了一次 smaa.setSize(w, h)（CSS 像素）：在 devicePixelRatio > 1
+    // 的屏幕上，SMAA 的 edge/weight 缓冲会被设成一半分辨率，与颜色缓冲比例错位，
+    // 混出整片异常色块。删掉那次重复调用即可。
     composer.setSize(w, h);
-    smaa.setSize(w, h);
   };
   window.addEventListener("resize", resize);
+  // 容器尺寸变化不一定会触发 window.resize（DevTools 停靠、面板显隐、iframe 宿主
+  // 改尺寸…）。一旦画布/渲染目标尺寸和容器对不上，画面边缘会露出未渲染的条带
+  // （白块/旧帧）。用 ResizeObserver 兜住这一类。
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => resize()).observe(container);
+  }
 
   // ---- 昼夜循环：四阶段关键帧（黄昏→夜→黎明→白昼），平滑插值 ----
   // 色板统一降饱和 15%（光遇的克制感：水彩晕染，不是高饱和卡通）
