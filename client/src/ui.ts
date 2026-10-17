@@ -1,5 +1,6 @@
 import { createIcons, ArrowRight, Mic, MicOff, Music2, Pause, Play, Upload, UserRound, Wifi, WifiOff, X } from "lucide";
 import { TRACKS, trackMeta, CUSTOM_BASE } from "./audio/tracks";
+import { serverUrl } from "./net";
 import type { VoiceMode } from "./voice";
 import type { RemoteInfo } from "./remote";
 import type { AvatarModel } from "./avatar";
@@ -129,7 +130,7 @@ export function createUI(handlers: {
   };
   async function loadSongs() {
     try {
-      const res = await fetch(`/songs/list?owner=${encodeURIComponent(songOwner)}`);
+      const res = await fetch(serverUrl(`/songs/list?owner=${encodeURIComponent(songOwner)}`));
       const songs: { id: string; name: string }[] = await res.json();
       songGrid.innerHTML = "";
       if (songs.length === 0) {
@@ -193,7 +194,7 @@ export function createUI(handlers: {
       }
 
       uploadCard.textContent = `正在上传「${file.name.slice(0, 16)}」…`;
-      const res = await fetch(`/songs/upload?name=${encodeURIComponent(file.name)}&owner=${encodeURIComponent(songOwner)}`, {
+      const res = await fetch(serverUrl(`/songs/upload?name=${encodeURIComponent(file.name)}&owner=${encodeURIComponent(songOwner)}`), {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: file,

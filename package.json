@@ -1,0 +1,11 @@
+{
+  "name": "crescendo-world",
+  "private": true,
+  "type": "module",
+  "description": "音遇 · Children of the Melody —— 根目录只做桥接：真正的工程在 client/（前端）与 server/（实时服务）",
+  "scripts": {
+    "dev": "cd client && npx vite --host",
+    "build": "node scripts/build-publish.mjs",
+    "typecheck": "cd client && npx tsc --noEmit"
+  }
+}

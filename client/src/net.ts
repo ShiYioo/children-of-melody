@@ -82,6 +82,23 @@ export interface NetHandle {
   close: () => void;
 }
 
+// 生产地址三级配置：VITE_SERVER_URL 环境变量（构建时注入，如 https://ws.example.com）
+// > EdgeOne 页面直连服务器 TLS 反代（边缘函数实测不桥接 WebSocket：101 握手后
+//   1ms 即断；同源 /colyseus 反代只留给曲库等普通 HTTP。直连走 nginx 8443，
+//   Let's Encrypt + DNS 验证自动续签，非标端口避开未备案拦截）
+// > 其他同源部署：/colyseus 前缀反代
+// > 开发态按主机名直连 2567
+const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
+
+/**
+ * 跨域部署时的 HTTP 资源地址（曲库等）：构建时注入了 VITE_SERVER_URL
+ * 就直连服务器绝对地址（如编辑器发布页）；否则保持同源相对路径，
+ * EdgeOne / nginx 反代按原样工作，行为不变。
+ */
+export function serverUrl(path: string): string {
+  return envUrl ? envUrl + path : path;
+}
+
 export async function connectIsland(
   name: string,
   remotes: RemotePlayers,
@@ -108,13 +125,7 @@ export async function connectIsland(
 ): Promise<NetHandle | null> {
   // 开发态用「打开页面用的主机名」连实时服务：本机访问是 localhost，
   // 局域网设备访问是宿主机 IP（写死 localhost 会让手机连到它自己）
-  // 生产地址三级配置：VITE_SERVER_URL 环境变量（构建时注入，如 https://ws.example.com）
-  // > EdgeOne 页面直连服务器 TLS 反代（边缘函数实测不桥接 WebSocket：101 握手后
-  //   1ms 即断；同源 /colyseus 反代只留给曲库等普通 HTTP。直连走 nginx 8443，
-  //   Let's Encrypt + DNS 验证自动续签，非标端口避开未备案拦截）
-  // > 其他同源部署：/colyseus 前缀反代
-  // > 开发态按主机名直连 2567
-  const envUrl = import.meta.env.VITE_SERVER_URL as string | undefined;
+  // 生产地址三级配置见文件顶部 envUrl 注释
   const endpoint = envUrl
     ? envUrl
     : import.meta.env.DEV

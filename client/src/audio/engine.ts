@@ -1,4 +1,5 @@
 import { TRACKS, trackById, midiToFreq, isCustomTrack, songIdOf, CUSTOM_BASE, isUrlTrack, type TrackDef } from "./tracks";
+import { serverUrl } from "../net";
 
 /**
  * 音乐引擎：音遇的心脏。
@@ -321,7 +322,7 @@ export class MusicEngine {
       this.bufCache.set(
         key,
         (async () => {
-          const res = await fetch(`/songs/file/${songId}`);
+          const res = await fetch(serverUrl(`/songs/file/${songId}`));
           if (!res.ok) throw new Error(`歌曲 ${songId} 拉取失败`);
           const data = await res.arrayBuffer();
           return await this.ctx!.decodeAudioData(data);

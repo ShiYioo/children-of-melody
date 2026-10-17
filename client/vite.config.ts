@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  base: "./", // 相对路径：构建产物可部署在任意子路径（编辑器发布页）
   build: { chunkSizeWarningLimit: 1500 },
   server: {
     host: true, // 监听所有网卡，局域网设备（手机/别的电脑）能用 宿主机IP:5173 打开
