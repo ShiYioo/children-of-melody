@@ -2,9 +2,10 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { terrainHeight, terrainSlope } from "../heightfield";
 import { addCollider, clearColliders } from "../colliders";
-import type { ToonKit } from "./toon";
-import { lightState } from "./lightstate";
+import { desat, type ToonKit } from "./toon";
+import { fxColor, lightState } from "./lightstate";
 import { patchRimMaterial } from "./rim";
+import { softDotTexture } from "./fxtextures";
 
 /**
  * 岛上的陈设：光遇风的圆冠树、青灰岩石、发光小花、
@@ -39,8 +40,11 @@ function organic(geo: THREE.BufferGeometry, amount: number, freq: number, seed: 
  * 原来 makeTree 里每次 `new THREE.MeshBasicMaterial(...)` —— 12 棵树就有 12 个
  * 参数完全相同、但对象不同的材质。合批是按材质**对象**归组的，
  * 那样 12 棵树的果实会各归一组，合批也就白做了。
+ *
+ * 颜色乘上 HDR 系数（`fxColor`）——线性亮度必须 >0.8 才会被 bloom 采到，
+ * 原来的纯色球刚好卡在阈值下方，夜里根本看不出"果实是灯"。
  */
-const FRUIT_MAT = new THREE.MeshBasicMaterial({ color: "#ffdf8f" });
+const FRUIT_MAT = new THREE.MeshBasicMaterial({ color: fxColor("#ffdf8f", 2.2) });
 
 function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Group {
   const g = new THREE.Group();
@@ -49,14 +53,14 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
   g.scale.setScalar(scale);
   g.rotation.y = Math.random() * Math.PI * 2;
 
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.24, 2.4, 9), kit.mat("#b98b6f"));
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.24, 2.4, 12), kit.mat("#b98b6f"));
   trunk.position.y = 1.2;
   trunk.rotation.z = (Math.random() - 0.5) * 0.12; // 微微歪一点，更自然
   trunk.castShadow = true;
   g.add(trunk);
 
   // 根部张开的短锥裙（树不是插在地上的一根管子）
-  const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.46, 0.55, 9), kit.mat("#b98b6f"));
+  const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.46, 0.55, 12), kit.mat("#b98b6f"));
   flare.position.y = 0.18;
   flare.castShadow = true;
   g.add(flare);
@@ -66,7 +70,7 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
     [0.42, 0.18, -0.75],
     [-0.38, -0.26, 0.7],
   ] as const) {
-    const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.1, 1.35, 7), kit.mat("#b98b6f"));
+    const branch = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.1, 1.35, 10), kit.mat("#b98b6f"));
     branch.position.set(bx * 0.9, 2.25, bz * 0.9);
     branch.rotation.y = Math.atan2(bx, bz);
     branch.rotation.z = tilt;
@@ -83,10 +87,13 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
     [-0.75, 2.9, -0.35, 1.1, 0.9],
     [0.1, 2.5, 0.7, 0.8, 0.85],
   ];
-  const cTop = new THREE.Color("#bfe3ab");
-  const cSide = new THREE.Color("#8cc487");
+  // 树冠两色补上 15% 降饱和：原来树冠走的是**顶点色**，而 `desat` 只作用于
+  // `material.color`（这里是 #ffffff），于是树冠成了全场景最亮的绿、色相也偏——
+  // "色板统一"实际漏掉的正是最大面积的一块。
+  const cTop = desat(new THREE.Color("#bfe3ab"));
+  const cSide = desat(new THREE.Color("#8cc487"));
   puffs.forEach((p, pi) => {
-    const s = new THREE.SphereGeometry(p[3], 16, 13);
+    const s = new THREE.SphereGeometry(p[3], 18, 14);
     s.scale(1, p[4], 1);
     organic(s, p[3] * 0.13, 1.9, pi * 3.7 + x * 0.13 + z * 0.17); // 手捏的不规则鼓包
     s.translate(p[0], p[1], p[2]);
@@ -107,7 +114,7 @@ function makeTree(kit: ToonKit, x: number, z: number, scale: number): THREE.Grou
   // 两粒暖光果（bloom 里像小灯）
   const fruitGeos: THREE.BufferGeometry[] = [];
   for (let i = 0; i < 2; i++) {
-    const f = new THREE.SphereGeometry(0.09, 6, 5);
+    const f = new THREE.SphereGeometry(0.09, 10, 8);
     const a = Math.random() * Math.PI * 2;
     f.translate(Math.cos(a) * (0.6 + Math.random() * 0.6), 2.7 + Math.random() * 0.7, Math.sin(a) * (0.6 + Math.random() * 0.6));
     fruitGeos.push(f);
@@ -400,9 +407,24 @@ function makeLighthouse(kit: ToonKit): { group: THREE.Group; update: (t: number)
     mullion.position.set(Math.cos(a) * 0.52, 9.0, Math.sin(a) * 0.52);
     g.add(mullion);
   }
-  const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.38, 14, 12), new THREE.MeshBasicMaterial({ color: "#ffd98f" }));
+  // 灯芯：HDR 暖色（线性亮度 >0.8 才会被 bloom 采到）+ 一张极柔光晕贴图——
+  // 否则"灯塔"在夜里其实只是一颗不发光的小球。
+  const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), new THREE.MeshBasicMaterial({ color: fxColor("#ffd98f", 2.6) }));
   lantern.position.y = 9.0;
   g.add(lantern);
+  const lanternHalo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: softDotTexture(),
+      color: fxColor("#ffdf9f"),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: false,
+    })
+  );
+  lanternHalo.scale.setScalar(2.6);
+  lanternHalo.position.y = 9.0;
+  g.add(lanternHalo);
 
   const roof = new THREE.Mesh(new THREE.ConeGeometry(0.95, 1.1, 24), kit.mat("#e8aebf"));
   roof.position.y = 10.1;
@@ -580,6 +602,33 @@ function makeCampfire(kit: ToonKit): Campfire {
     log.receiveShadow = true;
     solids.push(log);
   }
+  // 围坐的木凳：圆软的凳面 + 两条圆腿。
+  //
+  // 修一个一直存在的 bug：这段原来写在 `batchByMaterial` **之后**，
+  // 凳子网格只是被 push 进 `solids` 就再也没有被合批、也没有被加进 g ——
+  // 于是 **5 条凳一直是隐形的**，而碰撞体却还在（人坐在空气上）。
+  // 必须在合批之前构造。
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.4;
+    const cx = Math.cos(a) * 3.6;
+    const cz = Math.sin(a) * 3.6;
+    const dirX = Math.sin(a);
+    const dirZ = -Math.cos(a);
+    const seat = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12).scale(0.85, 0.1, 0.28), kit.mat("#caa87e"));
+    seat.position.set(cx, 0.3, cz);
+    seat.rotation.y = -a + Math.PI / 2;
+    seat.castShadow = true;
+    seat.receiveShadow = true;
+    solids.push(seat);
+    // 两条圆腿（原来长凳是浮空的直角 Box，没有腿）
+    for (const k of [-0.52, 0.52]) {
+      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.2, 3, 8), kit.mat("#9c7a58"));
+      leg.position.set(cx + dirX * k, 0.15, cz + dirZ * k);
+      leg.castShadow = true;
+      leg.receiveShadow = true;
+      solids.push(leg);
+    }
+  }
   batchByMaterial(g, solids);
   // 炭火微光（火堆脚下一层暖光，夜里有余温感）
   const ember = new THREE.Mesh(
@@ -637,17 +686,6 @@ function makeCampfire(kit: ToonKit): Campfire {
   const fireLight = new THREE.PointLight("#ffb36b", 16, 20, 1.35);
   fireLight.position.y = 1.0;
   g.add(fireLight);
-
-  // 围坐的木凳
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2 + 0.4;
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.26, 0.55), kit.mat("#caa87e"));
-    bench.position.set(Math.cos(a) * 3.6, 0.22, Math.sin(a) * 3.6);
-    bench.rotation.y = -a + Math.PI / 2;
-    bench.castShadow = true;
-    bench.receiveShadow = true;
-    solids.push(bench); // 与石圈 / 柴堆一起合批（否则 5 条凳 = 5 次 draw call）
-  }
 
   return {
     group: g,
@@ -779,7 +817,7 @@ export function createProps(kit: ToonKit): {
           z: Math.sin(a) * 3.6 + dirZ * k,
           r: 0.3,
           y0: campfire.position.y - 0.5,
-          y1: campfire.position.y + 0.35,
+          y1: campfire.position.y + 0.4,
           stand: true,
           standR: 0.26,
         });

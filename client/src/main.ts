@@ -1318,7 +1318,9 @@ function tick(dt: number) {
         const nx = g.position.x + Math.sin(boatDrive.ry) * boatDrive.vel * dt;
         const nz = g.position.z + Math.cos(boatDrive.ry) * boatDrive.vel * dt;
         if (terrainHeight(nx, nz) < WATER_LEVEL - 0.5) {
-          furniture.setBoatTransform(seatedOn.key, nx, WATER_LEVEL - 0.12, nz, boatDrive.ry);
+          // k=1：位置已按 dt 积分好，直接到位。**不能**再叠一层平滑——
+          // 那会把船速乘成 0.35 倍（原来就是这样，船比走路还慢）
+          furniture.setBoatTransform(seatedOn.key, nx, WATER_LEVEL - 0.12, nz, boatDrive.ry, 1);
         } else {
           boatDrive.vel *= Math.pow(0.02, dt); // 岸边搁浅：船头顶住不动
         }

@@ -2,6 +2,9 @@ import * as THREE from "three";
 import type { ToonKit } from "./toon";
 import { addCollider, removeCollider, type CylinderCollider } from "../colliders";
 import { terrainHeight } from "../heightfield";
+import { patchRimMaterial } from "./rim";
+import { softDotTexture } from "./fxtextures";
+import { fxColor } from "./lightstate";
 
 /**
  * 背包家具：椅子 & 双人荡秋千。
@@ -33,47 +36,76 @@ interface PlayerLike {
 const SEAT_H = 0.46; // 座面离地
 const SWING_TOP = 2.15; // 秋千横杆高度
 
+/**
+ * 柔体块：把一个球压成椭球。
+ *
+ * 光遇的家具造型里找不到硬边——座面、靠背、船板、凳面都是**圆软的体块**。
+ * 原来全部用 `BoxGeometry`，在 toon 的色阶下就是一摞直角板，剪影上全是直线段，
+ * 正是审查里说的"程序图元感"。椭球没有一条直边，且法线连续，
+ * 配合 painterly ramp 才出得来那种水彩晕染的柔和明暗。
+ */
+function soft(w: number, h: number, d: number, ws = 18, hs = 12): THREE.SphereGeometry {
+  return new THREE.SphereGeometry(1, ws, hs).scale(w / 2, h / 2, d / 2);
+}
+
+/** 统一收尾：投影 + 注入菲涅尔轮廓光（家具原来完全没走过 rim，是"有边没边"里没边的那一半） */
+function finishFurniture(g: THREE.Group): void {
+  g.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    if (m.material) patchRimMaterial(m.material as THREE.Material);
+  });
+}
+
 function makeChair(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } {
   const g = new THREE.Group();
   const wood = "#caa87e";
-  const dark = "#8d6f52";
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.09, 0.6), kit.mat(wood));
+  const dark = "#9c7a58";
+  const cloth = "#d8b6a4";
+
+  // 座面：略压扁的圆软板
+  const seat = new THREE.Mesh(soft(0.6, 0.13, 0.58), kit.mat(wood));
   seat.position.y = SEAT_H;
-  const back = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.66, 0.09), kit.mat(wood));
-  back.position.set(0, SEAT_H + 0.36, -0.26);
-  back.rotation.x = -0.1;
-  for (const [x, z] of [[-0.24, -0.22], [0.24, -0.22], [-0.24, 0.22], [0.24, 0.22]]) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, SEAT_H, 6), kit.mat(dark));
-    leg.position.set(x, SEAT_H / 2, z);
+  g.add(seat);
+  // 坐垫：一块暖色软垫叠在座面上——光遇的家具都带着"布"的温度
+  const cushion = new THREE.Mesh(soft(0.47, 0.1, 0.46, 16, 10), kit.mat(cloth));
+  cushion.position.y = SEAT_H + 0.085;
+  g.add(cushion);
+  // 靠背：软枕状的板，微微后仰
+  const back = new THREE.Mesh(soft(0.56, 0.62, 0.13), kit.mat(wood));
+  back.position.set(0, SEAT_H + 0.34, -0.245);
+  back.rotation.x = -0.14;
+  g.add(back);
+  // 四条圆腿：用胶囊（两端圆头）并向外微张——不再是"插在地上的管子"
+  for (const [x, z] of [[-0.24, -0.22], [0.24, -0.22], [-0.24, 0.22], [0.24, 0.22]] as const) {
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, SEAT_H - 0.12, 4, 10), kit.mat(dark));
+    leg.position.set(x * 1.05, SEAT_H / 2 - 0.02, z * 1.05);
+    leg.rotation.set(z > 0 ? -0.05 : 0.05, 0, x > 0 ? 0.05 : -0.05);
     g.add(leg);
   }
-  g.add(seat, back);
-  g.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
+  finishFurniture(g);
   return { group: g, pivots: [] };
 }
 
 function makeSwing(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } {
   const g = new THREE.Group();
   const wood = "#caa87e";
-  const dark = "#8d6f52";
+  const dark = "#9c7a58";
   const rope = "#e8dcc4";
-  // A 字架 ×2（前后各一，摆动平面沿本地 Z）
+  // A 字架 ×2（前后各一，摆动平面沿本地 Z）：圆头胶囊腿，12 段 → 剪影是连续曲线
   for (const zs of [-0.75, 0.75]) {
     for (const xs of [-0.95, 0.95]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 2.5, 6), kit.mat(dark));
+      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 2.3, 4, 12), kit.mat(dark));
       leg.position.set(xs * 0.62, SWING_TOP / 2, zs);
       leg.rotation.z = xs > 0 ? -0.34 : 0.34;
       leg.rotation.x = zs > 0 ? 0.1 : -0.1;
       g.add(leg);
     }
   }
-  // 顶部横杆（摆动轴）
-  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.1, 8), kit.mat(wood));
+  // 顶部横杆（摆动轴）：圆头胶囊
+  const bar = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 1.98, 4, 12), kit.mat(wood));
   bar.rotation.z = Math.PI / 2;
   bar.position.y = SWING_TOP;
   g.add(bar);
@@ -84,13 +116,13 @@ function makeSwing(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } 
     pivot.position.set(sx, SWING_TOP, 0);
     const hang = SEAT_H + 0.05 - SWING_TOP; // 绳长（负值）
     for (const rz of [-0.2, 0.2]) {
-      const rope1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, -hang, 5), kit.mat(rope));
+      const rope1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, -hang, 8), kit.mat(rope));
       rope1.position.set(0, hang / 2, rz);
       pivot.add(rope1);
     }
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.42), kit.mat(wood));
+    const seat = new THREE.Mesh(soft(0.5, 0.11, 0.44, 16, 10), kit.mat(wood));
     seat.position.set(0, hang, 0);
-    const backbar = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.46, 6), kit.mat(dark));
+    const backbar = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.4, 3, 8), kit.mat(dark));
     backbar.rotation.z = Math.PI / 2;
     backbar.position.set(0, hang + 0.52, -0.16);
     pivot.add(seat, backbar);
@@ -98,50 +130,65 @@ function makeSwing(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } 
     pivots.push(pivot);
     g.add(pivot);
   }
-  g.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
+  finishFurniture(g);
   return { group: g, pivots };
 }
 
-/** 双人小木船：前后两块座板，船头一盏暖灯。仅供水面放置与乘坐。 */
+/** 双人小木船：圆软的木壳，前后两块座板，船头一盏暖灯。仅供水面放置与乘坐。 */
 function makeBoat(kit: ToonKit): { group: THREE.Group; pivots: THREE.Group[] } {
   const g = new THREE.Group();
   const wood = "#a8794e";
   const dark = "#7c5636";
   const trim = "#e0c296";
-  const plank = (w: number, h: number, d: number, x: number, y: number, z: number, rx = 0, rz = 0, color = wood) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), kit.mat(color));
-    mesh.position.set(x, y, z);
-    mesh.rotation.set(rx, 0, rz);
-    g.add(mesh);
-    return mesh;
-  };
-  plank(0.98, 0.13, 2.35, 0, 0.1, 0, 0, 0, dark);            // 船底
-  plank(0.09, 0.36, 2.35, -0.53, 0.33, 0, 0, 0.32);          // 左舷（外倾）
-  plank(0.09, 0.36, 2.35, 0.53, 0.33, 0, 0, -0.32);          // 右舷
-  plank(0.98, 0.36, 0.09, 0, 0.36, -1.2, 0.38);              // 船头封板（翘）
-  plank(0.98, 0.3, 0.09, 0, 0.3, 1.2, -0.3);                 // 船尾封板
-  plank(0.92, 0.07, 0.52, 0, 0.46, -0.42, 0, 0, trim);       // 前座板
-  plank(0.92, 0.07, 0.52, 0, 0.46, 0.42, 0, 0, trim);        // 后座板
-  // 船头小灯：夜航时的那一点暖光
+  // 船底：压扁的圆软板（原来是 7 块直角 Box 拼的硬壳）
+  const bottom = new THREE.Mesh(soft(0.98, 0.17, 2.3, 20, 12), kit.mat(dark));
+  bottom.position.y = 0.1;
+  g.add(bottom);
+  // 左右舷：外倾的圆棍，舷缘是圆润的（不再是直角板）
+  for (const s of [-1, 1]) {
+    const gunwale = new THREE.Mesh(soft(0.15, 0.46, 2.26, 14, 14), kit.mat(wood));
+    gunwale.position.set(s * 0.49, 0.34, 0);
+    gunwale.rotation.z = s * -0.3;
+    g.add(gunwale);
+  }
+  // 船头（翘起）/ 船尾：圆软的封板
+  const bow = new THREE.Mesh(soft(0.92, 0.44, 0.5, 16, 12), kit.mat(wood));
+  bow.position.set(0, 0.42, -1.08);
+  bow.rotation.x = 0.34;
+  g.add(bow);
+  const stern = new THREE.Mesh(soft(0.92, 0.38, 0.44, 16, 12), kit.mat(wood));
+  stern.position.set(0, 0.34, 1.08);
+  stern.rotation.x = -0.24;
+  g.add(stern);
+  // 前后座板：圆软的板
+  for (const z of [-0.42, 0.42]) {
+    const seat = new THREE.Mesh(soft(0.86, 0.11, 0.5, 16, 10), kit.mat(trim));
+    seat.position.set(0, 0.47, z);
+    g.add(seat);
+  }
+  // 船头小灯：暖光核心 + 一张极柔光晕贴图的光晕（夜里真的会 bloom）
   const lamp = new THREE.Mesh(
-    new THREE.SphereGeometry(0.09, 12, 10),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color("#ffd98e") })
+    new THREE.SphereGeometry(0.085, 14, 10),
+    new THREE.MeshBasicMaterial({ color: "#fff0c4" })
   );
-  lamp.position.set(0, 0.68, -1.22);
+  lamp.position.set(0, 0.66, -1.24);
   g.add(lamp);
-  const lampShade = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.16, 0.14), kit.mat(dark));
-  lampShade.position.set(0, 0.68, -1.22);
-  lampShade.scale.set(1.15, 0.9, 1.15);
-  g.add(lampShade);
-  g.traverse((o) => {
-    o.castShadow = true;
-    o.receiveShadow = true;
-  });
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: softDotTexture(),
+      color: fxColor("#ffd98e"),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  halo.scale.setScalar(0.62);
+  halo.position.set(0, 0.66, -1.24);
+  g.add(halo);
+  const shade = new THREE.Mesh(soft(0.15, 0.13, 0.15, 12, 8), kit.mat(dark));
+  shade.position.set(0, 0.75, -1.24);
+  g.add(shade);
+  finishFurniture(g);
   return { group: g, pivots: [] };
 }
 
@@ -313,11 +360,17 @@ export function createFurniture(kit: ToonKit, sceneAdd: (o: THREE.Object3D) => v
     }
   }
 
-  /** 驾驶跟随：把船平滑移到目标位（home 不变，下船后自己漂回去）；甲板碰撞柱同步跟随 */
-  function setBoatTransform(key: string, x: number, y: number, z: number, ry: number) {
+  /**
+   * 把船移到目标位（驾驶跟随 / 远端跟随共用）。
+   *
+   * `k` 是平滑系数：远端跟随用默认的一阶追随，抹掉网络抖动；
+   * **本地驾驶必须传 1** —— 驾驶逻辑已经按 dt 把位置积分好了，
+   * 这里再叠一层 lerp 等于把船速直接乘 k（原来写死 0.35，于是船只能跑到
+   * 设定速度的 35%，就是"划不快"）。转向的插值也用同一个 k。
+   */
+  function setBoatTransform(key: string, x: number, y: number, z: number, ry: number, k = 0.35) {
     const e = entries.get(key);
     if (!e || e.kind !== 2) return;
-    const k = 0.35;
     e.group.position.x += (x - e.group.position.x) * k;
     e.group.position.y += (y - e.group.position.y) * k;
     e.group.position.z += (z - e.group.position.z) * k;
