@@ -1,0 +1,31 @@
+# 音遇 · OhMyGame 自动发布
+# push main（前端/构建相关文件变化）→ 构建 dist/ → 更新 OhMyGame 上已发布的游戏（同一链接）
+name: publish-ohmygame
+on:
+  push:
+    branches: [main]
+    paths: ["client/**", "scripts/**", ".github/workflows/publish-ohmygame.yml"]
+  workflow_dispatch: # 允许手动触发
+
+concurrency:
+  group: publish-ohmygame
+  cancel-in-progress: false # 发布不并发，排队执行
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build # scripts/build-publish.mjs → 根目录 dist/
+      - name: 发布到 OhMyGame
+        uses: ShiYioo/ohmygame-publish-action@v1
+        with:
+          game-id: ${{ vars.OHMYGAME_GAME_ID }}
+          email: ${{ secrets.OHMYGAME_EMAIL }}
+          password: ${{ secrets.OHMYGAME_PASSWORD }}
+          site-dir: dist
