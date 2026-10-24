@@ -21,6 +21,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm ci
+        working-directory: client
       - run: npm run build # scripts/build-publish.mjs → 根目录 dist/
       - name: 发布到 OhMyGame
         uses: ShiYioo/ohmygame-publish-action@v1
